@@ -1,0 +1,460 @@
+#+TITLE: Cinderplot — a C plotter with ggplot2-quality PDF output
+# Historical note: prototyped as "plottest"/"cplot" (~/repo/plottest);
+# renamed to Cinderplot and moved to this repo on [2026-07-18]. Older
+# headings below keep the cplot name as a historical record.
+#+DATE: [2026-07-18 Sat]
+#+STARTUP: overview
+
+* Rationale: why build this                                        :rationale:
+Motivation: not wanting to start a whole R session (plus =library(ggplot2)=,
+easily 1–2 s) for a one-off plot. The claim "current command-line plotters
+are not efficient and don't produce high-enough quality figures" was
+verified [2026-07-18] with one nuance:
+
+** The precise gap
+No existing tool is both *fast-starting* and *ggplot-quality*. The
+intersection is empty; tools split into two camps.
+
+** Fast but ugly (the C camp)
+- *gnuplot* :: actually very efficient (C, ms startup, millions of points,
+  active — 6.0.3, June 2025). =pdfcairo= gives real vector PDF with Pango
+  text, but defaults are dated, no layout engine (multiplot cropping bugs,
+  =fontscale= silently 0.5 in pdfcairo), legends/facets/themes decades
+  behind ggplot. Efficiency claim slightly unfair to gnuplot; quality
+  claim holds.
+- *GNU plotutils / libplot* :: effectively dead — last release 2.6,
+  September 2009.
+- *PLplot* :: alive but sleepy; Cairo/Pango drivers render text well, but
+  1990s aesthetic, no layout/legend engine.
+- *GR framework* :: fast C graphics (used as a matplotlib speed backend),
+  but a graphics kernel, not a figure-composition system.
+- *Terminal plotters* (youplot, plotext, =gnuplot dumb=) :: ASCII/sixel,
+  not publication PDF.
+
+** Beautiful but slow (the interpreter camp)
+- *ggplot2* :: requires R startup + package load.
+- *matplotlib / plotnine* :: same startup tax in Python. Closest prior
+  art: p9-cli, a ~250-line CLI over plotnine, unmaintained.
+- Notably: *no C implementation of the grammar of graphics exists*. The
+  niche — =plot data.csv -x hp -y mpg --color cyl -o fig.pdf= returning a
+  ggplot-grade PDF in ~20 ms — is unoccupied.
+
+** Why ggplot output looks good (decomposed build cost)
+1. /Text rendering & metrics/ — R's =cairo_pdf= draws via Cairo/Pango
+   (shaping, kerning, subsetted embedded fonts). Free in C via
+   =cairo_pdf_surface= (+ Pango later). Same stack R uses.
+2. /A measuring layout engine/ — grid positions nothing by guesswork:
+   labels, legends, strips are measured via font metrics and the panel
+   rectangle is computed from what's left. Gnuplot's failures are mostly
+   failures of exactly this.
+3. /Good defaults as algorithms/ — pretty breaks are a published
+   algorithm (extended Wilkinson; Talbot–Lin–Hanrahan 2010), plus scale
+   expansion, hue/viridis palettes, theme defaults.
+4. /The grammar itself/ — scales → geoms → guides → facets. Scope
+   explodes here if allowed; a small grammar (point/line/bar/area/
+   boxplot, color/size, one facet dim) covers most one-off plots.
+
+** Feasibility estimate
+MVP (CSV in, Cairo/Pango PDF out, scatter/line/bar, correct breaks,
+measured legends, one clean theme) ≈ a few thousand lines of C; deps only
+=cairo=, =pango=, =fontconfig=. Single-digit-ms startup, figure < 50 ms —
+~100× latency win over Rscript with visually indistinguishable output.
+Advice: take the Pango dependency; text shaping is the one part not worth
+owning.
+
+** Sources
+- https://www.gnu.org/software/plotutils/ (v2.6, Sept 2009)
+- https://sourceforge.net/p/gnuplot/bugs/2063/ (pdfcairo multiplot crop)
+- https://triclinic.org/2015/04/publication-quality-plots-with-gnuplot/
+- https://plplot.sourceforge.net/docbook-manual/plplot-html-5.15.0/interactive-cairo-driver.html
+- https://gr-framework.org/ and https://gr-framework.org/tutorials/matplotlib.html
+- https://www.lesswrong.com/posts/cs3GK3BJteLETyucu/a-command-line-grammar-of-graphics (p9-cli)
+- https://ggplot2.tidyverse.org/
+
+* Spike: proof-of-concept scatter plot                                :spike:
+Result [2026-07-18]: C/Cairo reproduces ggplot2 =theme_gray= almost
+pixel-for-pixel.
+
+** Artifacts (in =~/repo/plottest/=)
+- =plotpoc.c= :: ~330 lines, deps only cairo + libm.
+  Build: =cc -O2 plotpoc.c -o plotpoc -I/opt/homebrew/include/cairo -L/opt/homebrew/lib -lcairo -lm=
+- =mtcars_c.pdf= :: C output (mtcars, hp vs mpg, colored by cyl).
+- =reference.R= / =mtcars_r.pdf= :: genuine ggplot2 reference, same spec.
+- =render_c.png= / =render_r.png= :: 150 dpi rasters for comparison.
+
+** Fidelity achieved
+- Identical breaks (mpg 10–35 by 5; hp 100/200/300), identical
+  major/minor grid.
+- grey92 panel, white grid at ggplot's exact widths via the
+  =linewidth → lwd (1/96") → pt= conversion (0.5 → 1.07 pt).
+- grey30 axis text 8.8 pt, hue palette #F8766D/#00BA38/#619CFF,
+  measured legend with grey95 keys, panel-aligned 13.2 pt title.
+- Layout fully *measured*: panel rectangle solved from real text
+  extents (grid-style); nothing hardcoded.
+
+** Speed
+- =./plotpoc=: ~20 ms wall (0.01 s user).
+- =Rscript reference.R=: ~1.1 s → ~50× gap.
+- Bonus: R's =cairo_pdf= device is broken on this machine (missing X11
+  =libXrender=) — had to fall back to legacy =pdf()= device. Illustrates
+  the dependency fragility a standalone C binary avoids.
+
+** Algorithm discoveries forced by the spike
+1. Naive "pretty" breaks (round step to 1/2/5/10) are visibly wrong —
+   produced only two y labels. Replaced with the real
+   *Talbot–Lin–Hanrahan extended Wilkinson* algorithm (simplicity /
+   coverage / density / legibility scoring, same as R's
+   =labeling::extended()=) in ~50 lines of C; reproduces ggplot's
+   choices exactly.
+2. ggplot computes breaks on the *expanded* limits (data range + 5%),
+   then drops breaks outside them — that's why hp gets 100/200/300
+   (from candidate {0,100,200,300}) rather than 50-steps. Non-obvious,
+   visually significant.
+
+** Known gaps (deliberately deferred)
+- Cairo "toy" text API instead of Pango — fine for numerals/Latin;
+  Pango needed for markup, superscripts, non-Latin shaping.
+- Legend key spacing eyeballed within ~1 pt.
+- Point-size conversion (size 1.5 → 2.15 pt radius) empirical, not
+  derived from grid's =fontsize = size × .pt + stroke × .stroke/2=.
+- Design note: ggplot's default hue palette replicated for fidelity,
+  but its red/green pair is not colorblind-safe — the real tool should
+  make Okabe-Ito or viridis an easy default.
+
+* Design: interface & layout engine                                 :design:
+Decided [2026-07-18] after the layout-algorithm discussion.
+
+** Interface: mini-DSL + CLI shortcuts
+- One code path: CLI flags are pure sugar, desugared into DSL fragments
+  (=flags → DSL string → parsed spec=). =--dump-spec= prints the
+  desugared DSL for learnability.
+- *DECIDED: verbatim ggplot2 vocabulary* (not a terse dialect):
+  #+begin_example
+  cplot 'data.csv
+    + aes(hp, mpg, colour=factor(cyl))
+    + geom_point()
+    + geom_smooth(method="loess")
+    + scale_y_log10()
+    + facet_wrap(~gear)' -o fig.pdf
+  #+end_example
+  Rationale: R users can near-copy-paste; ggplot docs double as our docs.
+- Parser implications of verbatim names: positional aes args (x, y),
+  =factor()= calls inside aes, formula syntax =~gear=, string args,
+  colour/color aliases. Still recursive descent (~400–600 lines);
+  unsupported ggplot functions error with the supported-subset list.
+- Flags for the 90% case: =-x -y -c -s -m -f -t --log x|y -o=; stdin is
+  the default data source so it pipes.
+
+** Layout engine: gtable, not a constraint solver
+- ggplot2 uses no general solver — the figure is a table (gtable) with
+  two unit kinds per row/col:
+  - /fixed (pt)/: theme absolutes (margins, tick length) or *measured
+    from content* via font metrics (widest y label, title height, legend
+    block).
+  - /null (flexible)/: weighted share of remaining space; only panels
+    are null.
+- Resolution = one arithmetic pass: sum fixed, subtract, split remainder
+  among nulls. ~100 lines.
+- Single-panel column layout:
+  =[margin | y-title | y-labels | ticks | PANEL(null) | gap | legend | margin]=
+- Faceting falls out free: more panel columns/rows; strips are measured
+  rows; weight ≠ 1 gives =space="free"= later.
+- Rendering: micro-grid — grob tagged union (rect/line/text/points/
+  child-table) in viewports (affine transform + clip). Skip grid's
+  nested rotated viewports and unit-arithmetic trees; rotation
+  special-cased (y-title, angled x labels).
+- Theme as data: text elements = {family, size, color, margins,
+  hjust/vjust, angle}; measurer consumes theme structs, so themes are
+  pure data.
+- Legend-taller-than-figure policy deferred (ggplot clips; we could
+  warn or multi-column).
+- *DECIDED: fixed m=5 break target* (ggplot-style), keeping layout
+  single-pass and deterministic; size-adaptive (matplotlib-style) breaks
+  would need a ~2-pass fixed point — architecture permits, not planned.
+
+** Pipeline
+parse DSL → load CSV (typed cols) → facet split → train scales →
+breaks/labels (extended Wilkinson on expanded limits) → MEASURE →
+ASSEMBLE gtable → RESOLVE → RENDER.
+
+* Spike 2: the gtable layout engine                                  :spike:
+Result [2026-07-18]: same mtcars figure now rendered through a real
+layout engine; matches the hand-layout version to 0.019% of pixels
+(sub-pixel AA noise from float rounding), i.e. verified against the
+ggplot pixel truth transitively.
+
+** Artifacts
+- =plotgt.c= :: ~470 lines; same deps (cairo + libm). Output
+  =mtcars_gt.pdf= (+ =render_gt.png=). Runtime unchanged, ~20 ms.
+  Build: =cc -O2 plotgt.c -o plotgt -I/opt/homebrew/include/cairo -L/opt/homebrew/lib -lcairo -lm=
+
+** What the engine consists of
+- =Unit= (fixed pt | null weight), =GTable= (rows/cols of Units +
+  grob list), =gt_resolve()= — the whole resolver is ~30 lines: sum
+  fixed, split remainder among nulls by weight.
+- Grobs: tagged union rect | line | text | points | child-table,
+  positioned in npc (0..1, y-up) within a cell *span*; per-grob clip
+  flag (panel contents clip, tick labels don't).
+- Text anchoring: hjust ∈ [0,1] × valign {top, bottom, ink-center} ×
+  rot90; rotated y-title's /column width/ = the text's /font height/,
+  which the table expresses naturally.
+- Legend = a *nested GTable* placed as a grob (fixed-size child,
+  centered in its cell) — composition works, which is the mechanism
+  facet panels and patchwork-style plot grids will reuse.
+
+** Notable properties confirmed
+- Panel-aligned title falls out for free: the title grob just lives in
+  the panel's column.
+- The figure spec section of main() is now purely declarative: units +
+  grob placements; no coordinate arithmetic outside the engine.
+- Single resolve pass; deterministic; measured cells come from font
+  metrics exactly as in spike 1.
+
+** Next wiring step
+The DSL parser (verbatim ggplot subset) bolts onto the front: parsed
+spec → scale training → measure → this engine. Facets = more null
+panel cells + measured strip rows; axes-on-outer-panels only.
+
+* Milestone: cplot v0 — CSV loader, DSL parser, facets              :spike:
+Result [2026-07-18]: =cplot= is now a real CLI. All three phases done
+and verified against R references.
+
+** Project structure (replaces single-file spikes; spikes kept as record)
+- =cplot.h= :: shared types + theme constants
+- =gtable.c= :: engine + composite G_AXIS_X/G_AXIS_Y grobs (pt-anchored
+  ticks/labels; reused for staircase axes in absent facet cells)
+- =breaks.c= :: extended Wilkinson + uniform-decimal axis formatting
+- =palette.c= :: HCL hue palette (hcl(15+i*360/n, 100, 65), 8-bit
+  quantized) — *bit-identical to ggplot's hex colours* (verified by
+  pixel match)
+- =csv.c= :: DataFrame; quoted-field CSV; type inference NUM vs STR
+  (NA/empty→NaN); factor_make() with R-order levels (numeric asc /
+  lexical)
+- =dsl.c= :: recursive descent for the verbatim subset: aes()
+  positional+named (colour/color), factor(), geom_point(), labs(),
+  facet_wrap(~var); unknown functions error with supported list
+- =render.c= :: spec+df → measured gtable → PDF; facet_wrap layout
+- =cplot.c= :: CLI; flags desugar to DSL (=--dump-spec= shows it);
+  stdin data via "-"; =--size WxH=
+- =Makefile= (pkg-config w/ brew fallback)
+
+** Verification results
+- DSL scatter vs spike-2 output: pixel-identical EXCEPT 154 px = one
+  data point — my hand-recalled mtcars had Volvo 142E hp=121 (that's
+  its disp; real hp=109). CSV-from-R is now the fixture
+  (=mtcars.csv=); renderer itself pixel-exact.
+- facet_wrap(~gear) (1×3) and 5-group staircase (2×3) visually match
+  fresh ggplot2 references (=facet_r.pdf=, =five_r.pdf=) including the
+  staircase x-axis drawn into the absent panel's cell — and including
+  ggplot's own label-collision wart between adjacent panels.
+- Runtime ~15 ms end-to-end (parse+load+render).
+
+** ggplot behaviours discovered & encoded
+- facet_wrap dims = rev(grDevices::n2mfrow(n)), NOT ceil(sqrt(n)):
+  n≤3 → 1 row; n≤6 → 2 rows; n≤12 → 3 rows; else √n. (Asked R
+  directly: ggplot2:::wrap_dims.)
+- Axis labels use UNIFORM decimals per axis: smallest d making every
+  break exact (0.0/2.5/5.0/7.5/10.0), from the break set, not %g.
+
+** Known gaps / deferred
+- Dates: detected as strings, no date scale yet (needs date breaks +
+  labels).
+- Continuous colour, discrete x/y, other geoms, scale_*_log10, themes
+  beyond theme_gray, legend overflow policy — all error clearly.
+- Cairo toy text API still (Pango when non-Latin/markup needed).
+
+* Milestone: cplot v0.2 — geoms line/col/histogram + log10 scales   :spike:
+Result [2026-07-18]. Geom priority (community usage after point):
+line > col/bar > histogram > boxplot > smooth. Implemented the first
+three + scale_x/y_log10; boxplot needs discrete positional scales,
+smooth needs loess — each deserves its own session.
+
+** What was added
+- Layer system: PlotSpec carries an ordered layer list; layers render
+  in spec order. aes fill= accepted (aliases colour for now).
+- geom_line: groups by colour factor, sorts by x, round-join polylines
+  (new G_POLYLINE grob); legend keys adapt (dot / line / both).
+- geom_col: bars anchored at 0 (y scale forced to include 0), width
+  0.9 x min x-resolution, grey35 fill.
+- geom_histogram(bins=30): stat_bin in TRANSFORMED space; ggplot's
+  actual rule (verified via ggplot_build, docs are wrong/stale):
+  width = range/(bins-1), first bin CENTERED on data min, exactly
+  `bins` bins spanning [min-w/2, max+w/2]. Counts match R exactly
+  (diamonds peak 15,710).
+- scale_x_log10/scale_y_log10: all layout/binning/breaks in
+  transformed space; non-positive rows dropped with a message.
+- log breaks follow scales::breaks_log(n=5): integer powers thinned by
+  `by=(ceil-floor)/5+1` (decrement until >=3 in range); labels use R's
+  vector-format width heuristic (scientific 1e-03 iff common fixed
+  format is wider — matches ggplot's 1e-03/1e+01 rendering); {1,5} /
+  {1,2,5} densification inside short ranges; linear-extended fallback.
+  Minor gridlines = transformed-space midpoints (reproduces ggplot's
+  minors at skipped powers).
+- CLI: -m point|line|col|histogram, --log x|y|xy.
+
+** Perf
+- CSV loader had an O(n^2) bug (malloc(strlen(rest)) per field —
+  scanned the whole remaining buffer). Fixed with measure-then-copy:
+  54k-row histogram 2.4s -> 40 ms. Full 54k-point log-log scatter:
+  200 ms, 730KB PDF.
+
+** Verified vs R
+- pressure: point+line+scale_y_log10 matches reference incl. breaks
+  1e-03..1e+03, minors at skipped powers, line over points.
+- diamonds carat histogram: bit-identical bin edges/counts to
+  ggplot_build.
+- mtcars scatter regression: still exactly the 154 known px (Volvo
+  data fix).
+
+** Known gaps (new)
+- geom_col with duplicate x: identity/overplot, not ggplot's stack.
+- Bar half-widths don't join scale training (ggplot widens x range to
+  fit bars; we clip at expansion limits).
+- colour/fill on bars (stacking/dodging) errors cleanly.
+
+* Exploration: heatmap support — port wheatmap semantics            :design:
+Explored [2026-07-18] (~/repo/wheatmap, user's own CRAN package, 3.6k
+lines R). Question: ggplot heatmaps vs ComplexHeatmap vs porting
+wheatmap into cplot, adapted toward ggplot conventions.
+
+** Why ggplot heatmaps underwhelm (user instinct confirmed)
+geom_tile/geom_raster need matrix→long melting, no clustering/
+dendrograms, no annotation-bar composition, panel+facet layout only.
+ComplexHeatmap dominates bioinformatics for this reason but is huge
+(10k+ lines, elaborate splits/annotations) and someone else's API.
+
+** wheatmap model (from source reading)
+- Canvas npc [0,1]^2; every object resolves to a WDim rect
+  {left,bottom,width,height,nr,nc,row.split,column.split}.
+- Placement closures TopOf/Beneath/RightOf/LeftOf(+corners,WPosition):
+  default anchor = last object; size defaults PROPORTIONAL TO DATA
+  (1/nr of the scale reference per row, clamped by min.ratio) — a
+  1-row colorbar above a 40-row heatmap auto-gets 1/40 height.
+  h.aln/v.aln (alignment ref) decoupled from h.scale/v.scale (sizing
+  ref); pad in npc.
+- Named objects, cross-reference by name (ggplot has no equivalent;
+  patchwork is positional, not named).
+- CMPar: brewer/colorspace/custom (jet,bwr) ramps, continuous via
+  colorRamp interpolation, discrete label2color, dmin/dmax, na.color.
+- Clustering: stats::hclust ward.D2 + euclidean; dendrogram drawing
+  adapted from ComplexHeatmap.
+- Auto-margin: print-time gtable wrap measures outward labels →
+  reserves page margins (same idea as cplot's measurement pass).
+
+** Key porting insight
+wheatmap's layout is SIMPLER than our gtable: placements resolve to
+plain npc rectangles. Render primitives = colored rect grids, text,
+polyline dendrograms — all already in cplot's engine (G_RECT sub,
+G_POLYLINE, G_TEXT, measurement). The two engines compose: gtable
+outer (auto-margins), anchor-canvas inner as a child grob.
+
+** Proposed ggplot-flavored surface (harmonization)
+#+begin_example
+cplot 'expr.csv
+  + heatmap(name="main", cluster=both)          # WHeatmap + *.cluster
+  + scale_fill_gradient2(low="blue", mid="white", high="red")
+  + annotation(groups.csv, top_of("main"))      # WColorBarH
+  + legend(right_of("main"))                    # WLegendV
+  + dendrogram(left_of("main"))
+  + labs(title="...")'
+#+end_example
+- CMPar → ggplot scale_fill_* vocabulary (viridis/brewer/gradient/
+  gradient2; keep jet/bwr as legacy names)
+- WCustomize → theme(); placements → snake_case top_of()/beneath()/
+  right_of()/left_of() keeping pad/h.aln/v.scale semantics
+- matrix mode: CSV with rownames in col 1; heatmap() in the spec
+  switches the DSL into matrix mode
+
+** New C pieces needed (effort)
+- matrix CSV reader (small); anchor-placement resolver (trivial —
+  the R closures are ~30-line C functions over rects)
+- continuous colormaps: ramp interpolation + embedded viridis table,
+  key brewer ramps, jet/bwr (moderate)
+- continuous colorbar legend — reuses extended Wilkinson breaks
+- hclust ward.D2 + euclidean + dendrogram layout (biggest piece,
+  ~200-300 lines, O(n^2..3) naive fine for heatmap sizes)
+- raster mode for big matrices: embedded image w/ NEAREST filter
+  (geom_raster equivalent; keeps PDF small)
+
+** Architecture decision: canvas and gtable stay separate layers
+Q [2026-07-18]: does the anchor canvas make gtable messy / should
+wheatmap be compiled INTO gtable rows-cols? Decision: keep two
+assemblers over ONE grob/render layer; do not unify layouts.
+- Anchor mosaics don't share global cut lines (README example is not
+  a lattice); compiling to a table = union-of-cuts lattice with many
+  spanning cells, all fixed fractions — gtable's measured/null unit
+  semantics buys nothing there; WPosition can't be a table at all.
+- Precedent: wheatmap R itself is free canvas inside + gtable wrap
+  outside (auto_margin.R). Same split here: heatmap mode = trivial
+  gtable [measured margins | canvas(null) | measured margins]; the
+  canvas assembler resolves anchors to rects and emits ordinary grobs
+  into that one cell. gtable engine unchanged (maybe +G_IMAGE later).
+- Mutual nesting already mechanically supported: gt_resolve takes any
+  rect (gtable-in-canvas, e.g. legends as child tables); a canvas is
+  just grobs in a cell (canvas-in-gtable).
+- Rule to keep it clean: gtable never learns about anchors; the
+  canvas never learns about units. Legends/theme/text measurement
+  shared. Wrinkle to document: wheatmap pads are npc fractions,
+  chrome stays in pt.
+
+** Suggested spike split
+1. matrix mode + heatmap() + viridis/gradient2 + colorbar legend +
+   placement resolver + annotation bars (no clustering)
+2. hclust + dendrogram + cluster= wiring
+3. auto-margin + discrete annotations legend polish
+
+* Milestone: cplot v0.3 — heatmap mode (wheatmap port) spike 1     :spike:
+Result [2026-07-18]. Matrix mode works end-to-end; the architecture
+decision (two assemblers, one grob/render layer) held — gtable.c
+gained ZERO lines for heatmaps.
+
+** New files/pieces
+- =heatmap.c= :: anchor-canvas assembler + renderer. Loads matrices,
+  resolves placements sequentially to npc rects, normalizes bbox to
+  [0,1], emits G_RECT sub-cells / G_LINE / G_TEXT into ONE null cell
+  of a trivial outer gtable [margin | canvas | legend-slack | margin].
+- =palette.c= additions :: viridis(10-stop), jet(9), bwr(3) ramps;
+  scale_fill_gradient/gradient2 (gradient2 midpoint→t=0.5 like ggplot);
+  parse_color (names + #RRGGBB).
+- =dsl.c= matrix mode :: heatmap(name=,data=,placement),
+  annotation(file, placement), legend(placement),
+  top_of/beneath/right_of/left_of(anchor, pad=,width=,height=),
+  scale_fill_viridis/jet/bwr/gradient/gradient2(low=,mid=,high=,
+  midpoint=). Matrix mode and grammar mode are mutually exclusive
+  (validated).
+
+** wheatmap semantics ported (from dims.R)
+- default anchor = previous object; auto size DATA-PROPORTIONAL
+  (nr/anchor_nr per height, nc/anchor_nc per width), clamped by
+  min.ratio=0.02; pad in npc; v.aln/h.aln = anchor by default.
+- Matrix CSV: string col 0 = rownames; header = colnames.
+- Discrete annotation → hue palette; continuous annotation → viridis.
+- Shared fill scale across all heatmaps (global dmin/dmax).
+
+** Verified vs wheatmap R (installed, v0.2.4)
+- jet colours match wheatmap's jet essentially exactly (same matrix,
+  same 9-stop ramp).
+- Composite (main bwr 20x12 + top col-annot 3 grp + left row-annot
+  10/10 + side heatmap 20x3 right_of + colorbar): side renders at
+  IDENTICAL cell size to main (~47px/col) → 3/12 proportional width
+  resolution is exact; row annotation splits exactly 10/10.
+- Intentional ggplot-ward divergence: colorbar legend runs
+  high-at-top (ggplot convention); wheatmap runs low-at-top.
+
+** Deferred to spikes 2/3 (documented gaps)
+- No clustering/dendrograms yet (spike 2: hclust ward.D2 + dendro).
+- No auto-margin measurement (spike 3): legend chrome uses a fixed
+  30pt slack column + fixed margins; row/col tick labels not drawn.
+- Raster mode not implemented; >200k cells errors out.
+- Horizontal legends (top_of/beneath) error cleanly.
+- Per-object colormaps (each heatmap its own scale) not yet — one
+  shared fill scale for now.
+
+* Next: algorithms discussion agenda                                  :next:
+- Layout constraint solver — what grid's viewport/unit system buys and
+  how much of it is needed.
+- Break labeling for log / date / discrete scales.
+- Scale expansion rules.
+- The mm / pt / lwd unit system.
+- Where the grammar boundary sits for a CLI: flag style
+  (=-m point -x hp -y mpg --color cyl=) vs a mini-DSL.
