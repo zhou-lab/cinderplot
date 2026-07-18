@@ -22,7 +22,6 @@ Cinderplot requires a C11 compiler and Cairo.
 
 ```sh
 make
-make test
 ```
 
 A conda recipe lives in [`conda-recipe/`](conda-recipe/) — see its README for building
@@ -31,21 +30,23 @@ and publishing to the channel.
 ## Examples
 
 ```sh
-./cinderplot examples/data/mtcars.csv -x hp -y mpg -o plot.pdf
+./cinderplot data.csv -x hp -y mpg -o plot.pdf
 
 ./cinderplot \
-  'examples/data/mtcars.csv + aes(hp, mpg, colour=factor(cyl)) + geom_point()' \
+  'data.csv + aes(hp, mpg, colour=factor(cyl)) + geom_point()' \
   -o plot.pdf
 
-./cinderplot 'examples/data/expr.csv + heatmap() + legend()' -o heatmap.pdf
+./cinderplot 'expr.csv + heatmap() + legend()' -o heatmap.pdf
 ```
+
+Ready-to-run datasets, demo figures, and the regression test suite live in a
+separate repo, [cinderplot-examples](https://github.com/zhou-lab/cinderplot-examples)
+(kept out of this repo so it stays small).
 
 ## Layout
 
 - `include/` — public interfaces
 - `src/` — implementation and CLI entry point
-- `examples/data/` — example CSV datasets
-- `tests/` — regression tests
 - `docs/` — design notes and reference material
 
 ## License

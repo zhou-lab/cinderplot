@@ -37,8 +37,8 @@ $(TARGET): $(OBJECTS)
 
 $(OBJECTS): include/cinderplot.h
 
-test: $(TARGET)
-	sh tests/test.sh
+# The regression suite and example data live in the cinderplot-examples repo.
+# Build here, then: CINDERPLOT=$(PWD)/$(TARGET) sh ../cinderplot-examples/tests/test.sh
 
 PREFIX ?= /usr/local
 install: $(TARGET)
@@ -48,4 +48,4 @@ install: $(TARGET)
 clean:
 	rm -f $(TARGET) $(OBJECTS)
 
-.PHONY: clean test install
+.PHONY: clean install
