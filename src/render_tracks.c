@@ -3,9 +3,8 @@
  * x-axis over a single region. A third assembler alongside render.c
  * (grammar) and heatmap.c (matrix); the gtable engine is unchanged.
  *
- * M2.0: scaffold — region parsing, the genomic bp/kb/Mb coordinate axis,
- * and empty stacked track frames with left-margin labels. Data renderers
- * land in M2.1/M2.2. */
+ * Genomic bp/kb/Mb axis; coverage/interval/arc renderers fill each track
+ * row cell. Gene models (BED12/GFF) land in M2.3. */
 #include "cinderplot.h"
 #include <cairo-pdf.h>
 #include <math.h>
@@ -14,6 +13,14 @@
 #include <string.h>
 
 static const Col C_TGRID = {0.898, 0.898, 0.898};   /* faint track gridline */
+static const Col C_COV   = {0.271, 0.459, 0.706};   /* steelblue coverage */
+static const Col C_IVAL  = {0.35, 0.35, 0.35};      /* grey interval box */
+static const Col C_ARC   = {0.5, 0.3, 0.6};         /* purple arc */
+
+static int cmp_iv(const void *a, const void *b) {
+    long d = ((const Interval *)a)->start - ((const Interval *)b)->start;
+    return d < 0 ? -1 : d > 0 ? 1 : 0;
+}
 
 static double text_w(cairo_t *cr, double size, const char *s) {
     cairo_text_extents_t e;
@@ -114,6 +121,74 @@ int render_tracks(const PlotSpec *spec, const char *out,
             g = gt_add(T, G_TEXT, R, 1, R, 1);
             g->str = spec->tobjs[i].name; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
             g->tx = 1; g->ty = 0.5; g->hj = 1; g->va = V_INKCENTER;
+        }
+
+        /* ---- track content ---- */
+        const TrackObj *t = &spec->tobjs[i];
+        if (t->type == TRK_COVERAGE) {
+            int nsb; SigBin *sb = bedgraph_read(t->data, chrom, rstart, rend, &nsb, err);
+            if (!sb) return -1;
+            double ymax = t->max_value > 0 ? t->max_value : 0;
+            if (ymax <= 0) for (int k = 0; k < nsb; k++) if (sb[k].val > ymax) ymax = sb[k].val;
+            if (ymax <= 0) ymax = 1;
+            Col col = t->has_color ? t->color : C_COV;
+            for (int k = 0; k < nsb; k++) {
+                if (sb[k].val <= 0) continue;
+                g = gt_add(T, G_RECT, R, CC, R, CC);
+                g->col = col; g->sub = 1; g->clip = 1;
+                g->x0 = NPCX(sb[k].start); g->x1 = NPCX(sb[k].end);
+                g->y0 = 0; g->y1 = sb[k].val / ymax;
+            }
+            char *rd = malloc(32); snprintf(rd, 32, "[0 - %g]", ymax);   /* readout */
+            g = gt_add(T, G_TEXT, R, CC, R, CC);
+            g->str = rd; g->size = SZ_AXIS_TEXT; g->col = C_AXTXT;
+            g->tx = 0.004; g->ty = 0.98; g->hj = 0; g->va = V_TOP;
+        } else if (t->type == TRK_INTERVAL || t->type == TRK_GENES) {
+            /* interval blocks packed into non-overlapping lanes (gene models
+             * get exon structure in M2.3; here they render as blocks) */
+            int ni; Interval *iv = bed_read(t->data, chrom, rstart, rend, &ni, err);
+            if (!iv) return -1;
+            qsort(iv, ni, sizeof *iv, cmp_iv);
+            long laneend[64]; int nlanes = 0, *lane = malloc(ni * sizeof(int));
+            for (int k = 0; k < ni; k++) {
+                int L = -1;
+                for (int j = 0; j < nlanes; j++) if (laneend[j] <= iv[k].start) { L = j; break; }
+                if (L < 0 && nlanes < 64) { L = nlanes++; }
+                if (L < 0) L = nlanes - 1;               /* cap: pile into last lane */
+                lane[k] = L; laneend[L] = iv[k].end;
+            }
+            Col col = t->has_color ? t->color : C_IVAL;
+            double lh = 1.0 / nlanes;
+            for (int k = 0; k < ni; k++) {
+                double yb = 1 - (lane[k] + 1) * lh;
+                g = gt_add(T, G_RECT, R, CC, R, CC);
+                g->col = col; g->sub = 1; g->clip = 1;
+                g->x0 = NPCX(iv[k].start); g->x1 = NPCX(iv[k].end);
+                g->y0 = yb + 0.18 * lh; g->y1 = yb + 0.82 * lh;
+                if (iv[k].name) {                        /* name to the right */
+                    g = gt_add(T, G_TEXT, R, CC, R, CC);
+                    g->str = iv[k].name; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
+                    g->tx = NPCX(iv[k].end) + 0.004; g->ty = yb + 0.5 * lh;
+                    g->hj = 0; g->va = V_INKCENTER;
+                }
+            }
+        } else if (t->type == TRK_ARCS) {
+            int nl; Link *lk = bedpe_read(t->data, chrom, rstart, rend, &nl, err);
+            if (!lk) return -1;
+            Col col = t->has_color ? t->color : C_ARC;
+            const int NS = 40;
+            for (int k = 0; k < nl; k++) {
+                double xa = NPCX((lk[k].a_start + lk[k].a_end) / 2.0);
+                double xb = NPCX((lk[k].b_start + lk[k].b_end) / 2.0);
+                double h = fmin(0.92, fabs(xb - xa) + 0.08);     /* wider span -> taller */
+                double *px = malloc(NS * sizeof(double)), *py = malloc(NS * sizeof(double));
+                for (int s = 0; s < NS; s++) {
+                    double f = (double)s / (NS - 1);
+                    px[s] = xa + f * (xb - xa); py[s] = h * sin(M_PI * f);
+                }
+                g = gt_add(T, G_POLYLINE, R, CC, R, CC);
+                g->n = NS; g->px = px; g->py = py; g->col = col; g->lw = lw_pt(0.6); g->clip = 1;
+            }
         }
     }
     g = gt_add(T, G_AXIS_X, axisrow, CC, axisrow, CC);
