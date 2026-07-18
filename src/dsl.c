@@ -282,6 +282,7 @@ static int parse_term(P *p, PlotSpec *spec) {
     else if (!strcmp(name, "geom_col")) gt = GEOM_COL;
     else if (!strcmp(name, "geom_histogram")) gt = GEOM_HISTOGRAM;
     else if (!strcmp(name, "geom_boxplot")) gt = GEOM_BOXPLOT;
+    else if (!strcmp(name, "geom_bar")) gt = GEOM_BAR;
     else is_geom = 0;
     if (is_geom) {
         if (spec->nlayers == MAX_LAYERS) return fail(p, "too many layers", "");
@@ -381,7 +382,7 @@ static int parse_term(P *p, PlotSpec *spec) {
         return expect(p, ')');
     }
     return fail(p, "`%s()` is not implemented; supported: aes(), geom_point(), "
-                   "geom_line(), geom_col(), geom_histogram(), geom_boxplot(), labs(), "
+                   "geom_line(), geom_col(), geom_histogram(), geom_boxplot(), geom_bar(), labs(), "
                    "facet_wrap(~var), scale_x_log10(), scale_y_log10(), "
                    "heatmap(), annotation(), legend(), scale_fill_*()", name);
 }
@@ -419,16 +420,16 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
     }
     if (spec->nlayers == 0)
         return fail(&p, "no geom given; add e.g. + geom_point()", "");
-    int nhist = 0;
+    int nstat = 0;   /* count stats (histogram, bar) compute y themselves */
     for (int i = 0; i < spec->nlayers; i++)
-        if (spec->layers[i].type == GEOM_HISTOGRAM) nhist++;
-    if (nhist && nhist != spec->nlayers)
-        return fail(&p, "geom_histogram() cannot be combined with other geoms yet", "");
+        if (spec->layers[i].type == GEOM_HISTOGRAM || spec->layers[i].type == GEOM_BAR) nstat++;
+    if (nstat && nstat != spec->nlayers)
+        return fail(&p, "geom_histogram()/geom_bar() cannot be combined with other geoms yet", "");
     if (!spec->x.col)
         return fail(&p, "aes() must map x", "");
-    if (nhist && spec->y.col)
-        return fail(&p, "geom_histogram() computes y (count); do not map y", "");
-    if (!nhist && !spec->y.col)
+    if (nstat && spec->y.col)
+        return fail(&p, "geom_histogram()/geom_bar() compute y (count); do not map y", "");
+    if (!nstat && !spec->y.col)
         return fail(&p, "aes() must map y", "");
     return 0;
 }

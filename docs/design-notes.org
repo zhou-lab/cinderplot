@@ -751,6 +751,31 @@ coloured-single boxplots byte-identical; scatter unchanged.
 - Discrete y scale; geom_bar (count stat); geom_smooth.
 - New G_RECT `stroke` mode (outline) reusable for future outlined geoms.
 
+* Milestone: geom_bar (stat_count + stacking)                       :spike:
+Result [2026-07-18]. geom_bar tallies rows per discrete x category and
+draws bars of the counts; fill/colour stacks by group.
+
+** Implementation (render.c)
+- stat_count: barcount[panel][x-category][colour-group]; y trained on
+  [0, max stacked total] with the normal 5% expansion (matches ggplot
+  panel range [-0.7, 14.7] for max 14). y-title defaults to "count".
+- Bars width 0.9, anchored at 0, grey35 (C_BAR) when no fill.
+- Stacking: iterate colour groups last->first from the bottom, so the
+  FIRST factor level ends up on top (ggplot position_stack). Verified
+  vs ggplot_build: cyl4 am1 0-8 / am0 8-11, etc. — exact.
+- Requires discrete x; y must not be mapped (dsl guards, shared with
+  histogram as "count stats"). Legend gets filled-square keys.
+- CLI: -m bar wraps x in factor() and needs no -y.
+
+** Verified
+- Simple + stacked bars match ggplot2 (counts, widths, stack order,
+  colours, legend). Continuous scatter byte-identical (0 px); tests
+  pass.
+
+** Deferred
+- Bar dodge (position_dodge for bars) and fill on geom_col; geom_bar on
+  continuous x (count unique values). geom_smooth; discrete y.
+
 * Next: algorithms discussion agenda                                  :next:
 - Layout constraint solver — what grid's viewport/unit system buys and
   how much of it is needed.

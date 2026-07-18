@@ -129,13 +129,14 @@ static void box_stats(const double *s, int n, BoxStat *b) {
 int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 double w_pt, double h_pt, char *err) {
     /* ---- layer summary ---- */
-    int haspoint = 0, hasline = 0, hascol = 0, nhist = 0, hasbox = 0;
+    int haspoint = 0, hasline = 0, hascol = 0, nhist = 0, hasbox = 0, hasbar = 0;
     for (int i = 0; i < spec->nlayers; i++) {
         if (spec->layers[i].type == GEOM_POINT) haspoint = 1;
         if (spec->layers[i].type == GEOM_LINE) hasline = 1;
         if (spec->layers[i].type == GEOM_COL) hascol = 1;
         if (spec->layers[i].type == GEOM_HISTOGRAM) nhist++;
         if (spec->layers[i].type == GEOM_BOXPLOT) hasbox = 1;
+        if (spec->layers[i].type == GEOM_BAR) hasbar = 1;
     }
 
     /* ---- resolve columns ---- */
@@ -155,6 +156,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     }
     if (hasbox && !disc_x) {
         sprintf(err, "geom_boxplot() needs a discrete x; use aes(x=factor(%s), ...)", spec->x.col);
+        return -1;
+    }
+    if (hasbar && !disc_x) {
+        sprintf(err, "geom_bar() needs a discrete x; use aes(x=factor(%s), ...)", spec->x.col);
         return -1;
     }
     const Column *yc = NULL;
@@ -269,6 +274,25 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             if (hs->counts[i] > hs->max) hs->max = hs->counts[i];
     }
 
+    /* ---- stat_count for geom_bar: counts per (panel, x-category, group) ---- */
+    int barng = cf ? cf->nlev : 1;
+    int *barcount = NULL, barmax = 0;
+    if (hasbar) {
+        barcount = calloc((size_t)npan * xf->nlev * barng, sizeof(int));
+        for (int r = 0; r < df->nrow; r++) {
+            if (!use[r]) continue;
+            int p = ff ? ff->idx[r] : 0, grp = cf ? cf->idx[r] : 0;
+            barcount[((size_t)(p * xf->nlev + xf->idx[r])) * barng + grp]++;
+        }
+        for (int p = 0; p < npan; p++)          /* max stacked total per category */
+            for (int cat = 0; cat < xf->nlev; cat++) {
+                int total = 0;
+                for (int g = 0; g < barng; g++)
+                    total += barcount[((size_t)(p * xf->nlev + cat)) * barng + g];
+                if (total > barmax) barmax = total;
+            }
+    }
+
     /* ---- y scale training ---- */
     double tymin = 1e300, tymax = -1e300;
     if (nhist) {
@@ -280,6 +304,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                                           : (double)hist[li].max;
                 if (ymax > tymax) tymax = ymax;
             }
+    } else if (hasbar) {
+        tymin = 0; tymax = spec->log_y ? log10((double)barmax) : (double)barmax;
     } else {
         for (int r = 0; r < df->nrow; r++) {
             if (!use[r]) continue;
@@ -384,7 +410,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     double striph = ff ? labh + 2 * STRIP_PAD : 0;
 
     const char *xtitle = spec->lab_x ? spec->lab_x : spec->x.expr;
-    const char *ytitle = spec->lab_y ? spec->lab_y : (nhist ? "count" : spec->y.expr);
+    const char *ytitle = spec->lab_y ? spec->lab_y : (nhist || hasbar ? "count" : spec->y.expr);
 
     Col *pal = NULL;
     GTable *leg = NULL;
@@ -392,7 +418,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         pal = malloc(cf->nlev * sizeof(Col));
         hue_palette(cf->nlev, pal);
         leg = build_legend(cr, spec->lab_colour ? spec->lab_colour : spec->colour.expr,
-                           cf, pal, haspoint, hasline, hasbox);
+                           cf, pal, haspoint, hasline, hasbox || hasbar);
     }
 
     /* ---- outer table ---- */
@@ -502,6 +528,21 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     g->col = C_BAR; g->sub = 1; g->clip = 1;
                     g->x0 = NPCX(tx - colw / 2); g->x1 = NPCX(tx + colw / 2);
                     g->y0 = fmin(base, NPCY(ty)); g->y1 = fmax(base, NPCY(ty));
+                }
+            } else if (gt == GEOM_BAR) {
+                /* stat_count bars, width 0.9, stacked by colour group with
+                 * the last factor level at the bottom (ggplot position_stack) */
+                for (int cat = 0; cat < xf->nlev; cat++) {
+                    double xi = cat + 1, cum = 0;
+                    for (int grp = barng - 1; grp >= 0; grp--) {
+                        int cnt = barcount[((size_t)(p * xf->nlev + cat)) * barng + grp];
+                        if (!cnt) continue;
+                        g = gt_add(T, G_RECT, R, C, R, C);
+                        g->col = cf ? pal[grp] : C_BAR; g->sub = 1; g->clip = 1;
+                        g->x0 = NPCX(xi - 0.45); g->x1 = NPCX(xi + 0.45);
+                        g->y0 = NPCY(cum); g->y1 = NPCY(cum + cnt);
+                        cum += cnt;
+                    }
                 }
             } else if (gt == GEOM_POINT) {
                 int np = 0;
