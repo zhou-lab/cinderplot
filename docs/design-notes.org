@@ -670,6 +670,32 @@ flat. Replaces the old hard error at >200k cells.
 - Raster uses one pixel per cell (nearest-scaled); no anti-aliased
   downsampling for matrices far larger than the panel in pixels.
 
+* Milestone: sibling-shift for same-side labels + v0.2.0            :spike:
+Result [2026-07-18]. Removes the last legend limitation: a legend on
+the same side as row/col name labels now clears them instead of
+overlapping (wheatmap's sibling-shift). Released as v0.2.0.
+
+** How
+- Margin measurement split into two passes: (A) compute how far
+  row/col name labels stick out per side (shiftL/R/T/B, pt); (B)
+  reserve each legend's footprint OUTSIDE that shift
+  (marSide = MARGIN + shift + HALF_LINE + across).
+- draw_one_legend() gains a `shift` arg: the legend's base position is
+  offset outward by (HALF_LINE + shift), so the bar/keys sit past the
+  labels. Stacking driver passes shiftR/shiftL; horizontal loop passes
+  shiftB/shiftT.
+- shift is 0 when there are no same-side labels, so legend-only and
+  no-legend outputs are unchanged (verified: no-legend 0 px).
+
+** Verified
+- rownames=right + legend(right_of): labels sit against the heatmap,
+  colorbar pushed out past them, no overlap (previously overlapped).
+- Different sides (rownames right + legend beneath) and legend-only
+  unaffected. Test suite passes.
+
+** Now resolved (was deferred in the legends milestone)
+- "rownames + legend on the same side would overlap" — fixed here.
+
 * Next: algorithms discussion agenda                                  :next:
 - Layout constraint solver — what grid's viewport/unit system buys and
   how much of it is needed.

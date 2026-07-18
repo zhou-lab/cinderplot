@@ -218,16 +218,19 @@ static double legend_block_h(const RObj *r, const RObj *tg, const char *title,
 
 /* draw one legend. Vertical legends (right/left) are drawn from `blockTop`
  * (npc y of the block's top) downward, so a caller can stack them.
- * Horizontal legends (top/beneath) centre themselves on the target. */
+ * Horizontal legends (top/beneath) centre themselves on the target. `shift`
+ * (pt) pushes the whole legend outward past same-side row/col labels. */
 static void draw_one_legend(GTable *T, const RObj *r, const RObj *tg,
                             const PlotSpec *spec, double dmin, double dmax,
                             const char *title, double baseH,
-                            double cw_pt, double ch_pt, double blockTop) {
+                            double cw_pt, double ch_pt, double blockTop,
+                            double shift) {
 #define LPTX(pt) ((pt) / cw_pt)
 #define LPTY(pt) ((pt) / ch_pt)
     Grob *g;
     PlaceKind pk = r->o->place.kind;
     int vert = pk == PL_RIGHT_OF || pk == PL_LEFT_OF;
+    double gapx = HALF_LINE + shift;                /* gap from canvas edge, incl. label shift */
     double titleSpace = title ? LPTY(baseH + TXT_GAP) : 0;
     double topY, leftX;
 
@@ -235,7 +238,7 @@ static void draw_one_legend(GTable *T, const RObj *r, const RObj *tg,
         Factor *f = tg->ann_f; Col *pal = tg->ann_pal;
         double gw = LPTX(LEG_GRID), gh = LPTY(LEG_GRID), gap = LPTY(LEG_GAP);
         double topEdge = blockTop - titleSpace;
-        double sx = pk == PL_RIGHT_OF ? 1 + LPTX(HALF_LINE) : 0 - LPTX(HALF_LINE) - gw;
+        double sx = pk == PL_RIGHT_OF ? 1 + LPTX(gapx) : 0 - LPTX(gapx) - gw;
         for (int k = 0; k < f->nlev; k++) {
             double y1 = topEdge - k * (gh + gap);
             g = gt_add(T, G_RECT, T->nrow - 2, 1, T->nrow - 2, 1);
@@ -255,13 +258,13 @@ static void draw_one_legend(GTable *T, const RObj *r, const RObj *tg,
         double bx0, by0;
         if (vert) {
             by0 = blockTop - titleSpace - barL;
-            bx0 = pk == PL_RIGHT_OF ? 1 + LPTX(HALF_LINE) : 0 - LPTX(HALF_LINE) - barT;
+            bx0 = pk == PL_RIGHT_OF ? 1 + LPTX(gapx) : 0 - LPTX(gapx) - barT;
         } else {
             double xc = tg->l + tg->w / 2;
             double hts = title ? LPTY(baseH + TXT_GAP) : 0;
             bx0 = xc - barL / 2;
-            by0 = pk == PL_BENEATH ? 0 - LPTY(HALF_LINE) - hts - barT
-                                   : 1 + LPTY(HALF_LINE) + hts;
+            by0 = pk == PL_BENEATH ? 0 - LPTY(gapx) - hts - barT
+                                   : 1 + LPTY(gapx) + hts;
         }
         for (int k = 0; k < NSTEP; k++) {
             g = gt_add(T, G_RECT, RR, CCc, RR, CCc);
@@ -531,74 +534,85 @@ int render_heatmap(const PlotSpec *spec, const char *out,
     double titleh = spec->lab_title ? fe.ascent + fe.descent : 0;
 
     double marL = MARGIN, marR = MARGIN, marT = MARGIN, marB = MARGIN;
+    /* how far row/col name labels stick out on each side (pt). Legends on the
+     * same side are then shifted OUTWARD past them (wheatmap's sibling-shift)
+     * so a legend beside labelled rows clears the labels instead of overlapping. */
+    double shiftL = 0, shiftR = 0, shiftT = 0, shiftB = 0;
     const double EPS = 1e-6;
+
+    /* pass A: row/col name label extents (they sit against the heatmap edge) */
     for (int i = 0; i < n; i++) {
         RObj *r = &ro[i];
-        if (r->o->type == HM_HEATMAP) {
-            Matrix *m = r->m;
-            if (r->o->rownames && m->rn) {
-                double wmax = 0;
-                for (int k = 0; k < m->nr; k++) {
-                    double tw = text_w(cr, SZ_AXIS_TEXT, m->rn[k]);
-                    if (tw > wmax) wmax = tw;
-                }
-                double ext = MARGIN + TXT_GAP + wmax;
-                if (r->o->rownames == SIDE_RIGHT && fabs(r->l + r->w - 1) < EPS)
-                    marR = fmax(marR, ext);
-                if (r->o->rownames == SIDE_LEFT && fabs(r->l) < EPS)
-                    marL = fmax(marL, ext);
+        if (r->o->type != HM_HEATMAP) continue;
+        Matrix *m = r->m;
+        if (r->o->rownames && m->rn) {
+            double wmax = 0;
+            for (int k = 0; k < m->nr; k++) {
+                double tw = text_w(cr, SZ_AXIS_TEXT, m->rn[k]);
+                if (tw > wmax) wmax = tw;
             }
-            if (r->o->colnames && m->cn) {
-                double wmax = 0;
-                for (int k = 0; k < m->nc; k++) {
-                    double tw = text_w(cr, SZ_AXIS_TEXT, m->cn[k]);
-                    if (tw > wmax) wmax = tw;
-                }
-                double ext = MARGIN + TXT_GAP + wmax;   /* rotated 90 -> width along axis */
-                if (r->o->colnames == SIDE_BOTTOM && fabs(r->b) < EPS)
-                    marB = fmax(marB, ext);
-                if (r->o->colnames == SIDE_TOP && fabs(r->b + r->h - 1) < EPS)
-                    marT = fmax(marT, ext);
-            }
-        } else if (r->o->type == HM_LEGEND) {
-            /* rigid footprint reserved on the placement side, incl. title */
-            PlaceKind pk = r->o->place.kind;
-            const char *title = legend_title(spec, r, &ro[r->target]);
-            double titleW = title ? text_w(cr, SZ_BASE, title) : 0;
-            double across;                       /* extent perpendicular to bar */
-            if (r->leg_discrete) {
-                double wmax = 0;
-                Factor *f = ro[r->target].ann_f;
-                for (int k = 0; k < f->nlev; k++) {
-                    double tw = text_w(cr, SZ_AXIS_TEXT, f->levels[k]);
-                    if (tw > wmax) wmax = tw;
-                }
-                across = fmax(LEG_GRID + TXT_GAP + wmax, titleW);
-            } else {
-                double lo, hi; const FillScale *fs;
-                legend_scale(&ro[r->target], spec, dmin, dmax, &lo, &hi, &fs);
-                double br[16];
-                int nb = extended_breaks(lo, hi, 5, br, 16), nf = 0;
-                for (int k = 0; k < nb; k++) if (br[k] >= lo && br[k] <= hi) br[nf++] = br[k];
-                int dec = axis_decimals(br, nf);
-                double wmax = 0;
-                for (int k = 0; k < nf; k++) {
-                    char b[32]; fmt_break(br[k], dec, b);
-                    double tw = text_w(cr, SZ_AXIS_TEXT, b);
-                    if (tw > wmax) wmax = tw;
-                }
-                double barW = LEG_BAR + TICK_LEN + TXT_GAP + wmax;
-                across = (pk == PL_BENEATH || pk == PL_TOP_OF)
-                       ? LEG_BAR + TICK_LEN + TXT_GAP + axH
-                         + (title ? baseH + TXT_GAP : 0)                          /* height */
-                       : fmax(barW, titleW);
-            }
-            double ext = MARGIN + HALF_LINE + across;
-            if (pk == PL_RIGHT_OF) marR = fmax(marR, ext);
-            else if (pk == PL_LEFT_OF) marL = fmax(marL, ext);
-            else if (pk == PL_BENEATH) marB = fmax(marB, ext);
-            else marT = fmax(marT, ext);
+            double e = TXT_GAP + wmax;
+            if (r->o->rownames == SIDE_RIGHT && fabs(r->l + r->w - 1) < EPS) shiftR = fmax(shiftR, e);
+            if (r->o->rownames == SIDE_LEFT  && fabs(r->l) < EPS)            shiftL = fmax(shiftL, e);
         }
+        if (r->o->colnames && m->cn) {
+            double wmax = 0;
+            for (int k = 0; k < m->nc; k++) {
+                double tw = text_w(cr, SZ_AXIS_TEXT, m->cn[k]);
+                if (tw > wmax) wmax = tw;
+            }
+            double e = TXT_GAP + wmax;   /* rotated 90 -> text width along the axis */
+            if (r->o->colnames == SIDE_BOTTOM && fabs(r->b) < EPS)             shiftB = fmax(shiftB, e);
+            if (r->o->colnames == SIDE_TOP    && fabs(r->b + r->h - 1) < EPS)  shiftT = fmax(shiftT, e);
+        }
+    }
+    marL = fmax(marL, MARGIN + shiftL);
+    marR = fmax(marR, MARGIN + shiftR);
+    marT = fmax(marT, MARGIN + shiftT);
+    marB = fmax(marB, MARGIN + shiftB);
+
+    /* pass B: legend footprints, reserved OUTSIDE any labels on the same side */
+    for (int i = 0; i < n; i++) {
+        RObj *r = &ro[i];
+        if (r->o->type != HM_LEGEND) continue;
+        PlaceKind pk = r->o->place.kind;
+        const char *title = legend_title(spec, r, &ro[r->target]);
+        double titleW = title ? text_w(cr, SZ_BASE, title) : 0;
+        double across;                       /* extent perpendicular to bar */
+        if (r->leg_discrete) {
+            double wmax = 0;
+            Factor *f = ro[r->target].ann_f;
+            for (int k = 0; k < f->nlev; k++) {
+                double tw = text_w(cr, SZ_AXIS_TEXT, f->levels[k]);
+                if (tw > wmax) wmax = tw;
+            }
+            across = fmax(LEG_GRID + TXT_GAP + wmax, titleW);
+        } else {
+            double lo, hi; const FillScale *fs;
+            legend_scale(&ro[r->target], spec, dmin, dmax, &lo, &hi, &fs);
+            double br[16];
+            int nb = extended_breaks(lo, hi, 5, br, 16), nf = 0;
+            for (int k = 0; k < nb; k++) if (br[k] >= lo && br[k] <= hi) br[nf++] = br[k];
+            int dec = axis_decimals(br, nf);
+            double wmax = 0;
+            for (int k = 0; k < nf; k++) {
+                char b[32]; fmt_break(br[k], dec, b);
+                double tw = text_w(cr, SZ_AXIS_TEXT, b);
+                if (tw > wmax) wmax = tw;
+            }
+            double barW = LEG_BAR + TICK_LEN + TXT_GAP + wmax;
+            across = (pk == PL_BENEATH || pk == PL_TOP_OF)
+                   ? LEG_BAR + TICK_LEN + TXT_GAP + axH
+                     + (title ? baseH + TXT_GAP : 0)                          /* height */
+                   : fmax(barW, titleW);
+        }
+        double shift = pk == PL_RIGHT_OF ? shiftR : pk == PL_LEFT_OF ? shiftL
+                     : pk == PL_BENEATH ? shiftB : shiftT;
+        double ext = MARGIN + shift + HALF_LINE + across;
+        if (pk == PL_RIGHT_OF) marR = fmax(marR, ext);
+        else if (pk == PL_LEFT_OF) marL = fmax(marL, ext);
+        else if (pk == PL_BENEATH) marB = fmax(marB, ext);
+        else marT = fmax(marT, ext);
     }
 
     double titlegap = titleh ? HALF_LINE : 0;
@@ -688,6 +702,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
      * the target (ComplexHeatmap-style legend packing) ---- */
     for (int pass = 0; pass < 2; pass++) {          /* right side, then left */
         PlaceKind want = pass == 0 ? PL_RIGHT_OF : PL_LEFT_OF;
+        double shift = pass == 0 ? shiftR : shiftL;
         int idx[MAX_HMOBJS], ni = 0;
         for (int i = 0; i < n; i++)
             if (ro[i].o->type == HM_LEGEND && ro[i].o->place.kind == want) idx[ni++] = i;
@@ -705,7 +720,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             RObj *r = &ro[idx[j]];
             const char *title = legend_title(spec, r, &ro[r->target]);
             draw_one_legend(T, r, &ro[r->target], spec, dmin, dmax, title,
-                            baseH, cw_pt, ch_pt, top);
+                            baseH, cw_pt, ch_pt, top, shift);
             top -= heights[j] + inter;
         }
     }
@@ -716,7 +731,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
         if (pk != PL_BENEATH && pk != PL_TOP_OF) continue;
         const char *title = legend_title(spec, r, &ro[r->target]);
         draw_one_legend(T, r, &ro[r->target], spec, dmin, dmax, title,
-                        baseH, cw_pt, ch_pt, 0);
+                        baseH, cw_pt, ch_pt, 0, pk == PL_BENEATH ? shiftB : shiftT);
     }
 
     /* ---- row/col name labels (into the reserved margins) ---- */
