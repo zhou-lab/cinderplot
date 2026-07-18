@@ -6,11 +6,9 @@ package:
   version: {{ version }}
 
 source:
-  # Build the tagged release straight from GitHub. For a local build
-  # (e.g. testing an unreleased change) replace these two lines with:
-  #   path: ..
-  git_url: https://github.com/zhou-lab/cinderplot.git
-  git_rev: v{{ version }}
+  # In-repo recipe: build the checked-out tree. CI builds the pushed
+  # commit; a release build = check out the vX.Y.Z tag, then conda build.
+  path: ..
 
 build:
   number: 0
