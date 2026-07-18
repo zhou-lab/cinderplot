@@ -81,6 +81,59 @@ static GTable *build_legend(cairo_t *cr, const char *title, const Factor *f,
     return t;
 }
 
+/* continuous-colour legend: a vertical colorbar with tick labels */
+static GTable *build_colorbar_legend(cairo_t *cr, const char *title,
+                                     const FillScale *fs, double lo, double hi) {
+    const double BARW = 12, BARH = 80;      /* colorbar pt dimensions */
+    double br[16];
+    int nb = extended_breaks(lo, hi, 5, br, 16), nf = 0;
+    for (int i = 0; i < nb; i++) if (br[i] >= lo && br[i] <= hi) br[nf++] = br[i];
+    int dec = axis_decimals(br, nf);
+    double labw = 0;
+    for (int i = 0; i < nf; i++) {
+        char b[32]; fmt_break(br[i], dec, b);
+        double w = text_w(cr, SZ_AXIS_TEXT, b);
+        if (w > labw) labw = w;
+    }
+    double barcol = BARW + TICK_LEN + TXT_GAP + labw;
+    double titlew = title ? text_w(cr, SZ_BASE, title) : 0;
+    double w = fmax(barcol, titlew);
+
+    GTable *t = calloc(1, sizeof(GTable));
+    t->ncol = 1; t->colw[0] = upt(w);
+    t->nrow = 3;
+    t->rowh[0] = upt(title ? font_h(cr, SZ_BASE) : 0);
+    t->rowh[1] = upt(title ? HALF_LINE : 0);
+    t->rowh[2] = upt(BARH);
+
+    Grob *g;
+    if (title) {
+        g = gt_add(t, G_TEXT, 0, 0, 0, 0);
+        g->str = title; g->size = SZ_BASE; g->col = C_BLACK;
+        g->tx = 0; g->ty = 1; g->hj = 0; g->va = V_TOP;
+    }
+    const int NSTEP = 64;
+    double barw_npc = BARW / w;
+    for (int k = 0; k < NSTEP; k++) {       /* colorbar strips (value-correct) */
+        double v = lo + (k + 0.5) / NSTEP * (hi - lo);
+        g = gt_add(t, G_RECT, 2, 0, 2, 0);
+        g->sub = 1; g->col = fill_map_value(fs, v, lo, hi);
+        g->x0 = 0; g->x1 = barw_npc;
+        g->y0 = (double)k / NSTEP; g->y1 = (double)(k + 1) / NSTEP;
+    }
+    for (int i = 0; i < nf; i++) {           /* ticks + labels */
+        double frac = hi > lo ? (br[i] - lo) / (hi - lo) : 0.5;
+        char *lab = malloc(32); fmt_break(br[i], dec, lab);
+        g = gt_add(t, G_LINE, 2, 0, 2, 0);
+        g->col = C_TICK; g->lw = lw_pt(0.5);
+        g->x0 = barw_npc; g->x1 = barw_npc + TICK_LEN / w; g->y0 = g->y1 = frac;
+        g = gt_add(t, G_TEXT, 2, 0, 2, 0);
+        g->str = lab; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
+        g->tx = (BARW + TICK_LEN + TXT_GAP) / w; g->ty = frac; g->hj = 0; g->va = V_INKCENTER;
+    }
+    return t;
+}
+
 /* minor breaks: midpoints between majors in transformed space, extended
  * one gap beyond each end, filtered to the limits */
 static int make_minors(const double *maj, int nmaj, double lo, double hi, double *out) {
@@ -552,11 +605,14 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
 
     Col *pal = NULL;
     GTable *leg = NULL;
+    const char *col_title = spec->lab_colour ? spec->lab_colour : spec->colour.expr;
     if (cf) {
         pal = malloc(cf->nlev * sizeof(Col));
         hue_palette(cf->nlev, pal);
-        leg = build_legend(cr, spec->lab_colour ? spec->lab_colour : spec->colour.expr,
-                           cf, pal, haspoint, hasline || hasseg, hasbox || hasbar || hasrect);
+        leg = build_legend(cr, col_title, cf, pal, haspoint,
+                           hasline || hasseg, hasbox || hasbar || hasrect);
+    } else if (cont_col) {
+        leg = build_colorbar_legend(cr, col_title, &cscale, cdmin, cdmax);
     }
 
     /* ---- outer table ---- */
