@@ -679,18 +679,36 @@ int render_heatmap(const PlotSpec *spec, const char *out,
         } else if (r->o->type == HM_DENDROGRAM) {
             draw_dendro(T, CR, CC, r);
         } else if (r->o->type == HM_ANNOTATION) {
-            for (int k = 0; k < r->ann_n; k++) {
-                g = gt_add(T, G_RECT, CR, CC, CR, CC);
-                g->sub = 1;
-                g->col = r->ann_col[r->ann_ord[k]];   /* inherited order */
-                if (r->ann_horiz) {
-                    double cw = r->w / r->ann_n;
-                    g->x0 = r->l + k * cw; g->x1 = g->x0 + cw;
-                    g->y0 = r->b; g->y1 = r->b + r->h;
-                } else {
-                    double chh = r->h / r->ann_n;
-                    g->y1 = r->b + r->h - k * chh; g->y0 = g->y1 - chh;
-                    g->x0 = r->l; g->x1 = r->l + r->w;
+            if (r->ann_n > RASTER_MIN_CELLS) {
+                /* raster: a 1xN (horizontal) or Nx1 (vertical) image, same
+                 * engine as the heatmap body */
+                int iw = r->ann_horiz ? r->ann_n : 1;
+                int ih = r->ann_horiz ? 1 : r->ann_n;
+                int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, iw);
+                unsigned char *buf = malloc((size_t)ih * stride);
+                for (int k = 0; k < r->ann_n; k++) {
+                    uint32_t px = col_argb(r->ann_col[r->ann_ord[k]]);
+                    if (r->ann_horiz) ((uint32_t *)buf)[k] = px;   /* slot k -> column k */
+                    else *(uint32_t *)(buf + (size_t)k * stride) = px;  /* slot 0 at top */
+                }
+                g = gt_add(T, G_IMAGE, CR, CC, CR, CC);
+                g->img = buf; g->img_w = iw; g->img_h = ih; g->clip = 1;
+                g->x0 = r->l; g->x1 = r->l + r->w;
+                g->y0 = r->b; g->y1 = r->b + r->h;
+            } else {
+                for (int k = 0; k < r->ann_n; k++) {
+                    g = gt_add(T, G_RECT, CR, CC, CR, CC);
+                    g->sub = 1;
+                    g->col = r->ann_col[r->ann_ord[k]];   /* inherited order */
+                    if (r->ann_horiz) {
+                        double cw = r->w / r->ann_n;
+                        g->x0 = r->l + k * cw; g->x1 = g->x0 + cw;
+                        g->y0 = r->b; g->y1 = r->b + r->h;
+                    } else {
+                        double chh = r->h / r->ann_n;
+                        g->y1 = r->b + r->h - k * chh; g->y0 = g->y1 - chh;
+                        g->x0 = r->l; g->x1 = r->l + r->w;
+                    }
                 }
             }
         }

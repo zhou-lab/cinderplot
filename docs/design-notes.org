@@ -663,10 +663,14 @@ flat. Replaces the old hard error at >200k cells.
   have errored before). Row-gradient check confirms orientation (row 0
   at top) and value->colour mapping are correct under raster.
 
+** Follow-up [2026-07-18]: annotations raster too
+Annotations over RASTER_MIN_CELLS now use the same G_IMAGE path — a 1xN
+(horizontal) or Nx1 (vertical) image in inherited/clustered order.
+Small annotations stay vector (verified byte-identical before/after,
+0 px). A 2500-row categorical row annotation renders correctly (two
+colour blocks matching its discrete legend) in ~0.16 s.
+
 ** Deferred
-- Annotations still vector: a huge row/col annotation next to a big
-  heatmap is many rects. Same G_IMAGE technique applies; do when
-  needed.
 - Raster uses one pixel per cell (nearest-scaled); no anti-aliased
   downsampling for matrices far larger than the panel in pixels.
 
