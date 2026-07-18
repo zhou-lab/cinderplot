@@ -817,12 +817,18 @@ target in examples/genome/ (K562 EPICv2 CNV, hg38 scaffold).
   bin range would clip.
 - Chrom labels can crowd for short chromosomes (17-22) at small widths.
 
-** Follow-up: geom_rect
-Filled rectangles per row from (xmin,ymin) to (xmax,ymax) — ggplot
-xmin/xmax/ymin/ymax aes (aliased onto x/xend/y/yend); genome-offset
-aware; fill via mapped colour/fill aes or a constant fill=. Matches
-ggplot geom_rect; filled legend keys. Requires all four corners for now
-(full-panel region-highlight band, which needs per-layer aes, deferred).
+** Follow-up: geom_rect + region bands + continuous colorbar legend
+- geom_rect: filled rectangles (xmin,ymin)-(xmax,ymax); ggplot aes
+  aliased onto x/xend/y/yend; genome-offset; fill via mapped/constant.
+- Region-highlight bands: geom_rect(data="regions.tsv", fill=) reads its
+  own file and draws FULL-PANEL-height bands (genome-offset x), so a
+  region shades behind a scatter — put the layer before geom_point. Uses
+  the per-layer data= path (same as geom_segment); no per-layer aes
+  needed. (cinderplot has layers, just not per-layer aes() — data=/y=/
+  color= overrides cover the common cases.)
+- Continuous colorbar legend (build_colorbar_legend): vertical gradient
+  bar + Wilkinson tick labels for a numeric colour aesthetic; value-
+  correct (gradient2 midpoint right). Completes the CNV figure.
 
 ** M2 (later): locus track-browser
 Third assembler (render_tracks.c): coverage/genes/interval/arcs stacked

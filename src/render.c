@@ -263,10 +263,13 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         }
     }
     /* geom_segment/rect endpoints (xend required, yend defaults to y) */
-    int hasseg = 0, hasrect = 0;
+    int hasseg = 0, hasrect = 0, rect_top = 0;
     for (int i = 0; i < spec->nlayers; i++) {
         if (spec->layers[i].type == GEOM_SEGMENT) hasseg = 1;
-        if (spec->layers[i].type == GEOM_RECT) hasrect = 1;
+        if (spec->layers[i].type == GEOM_RECT) {
+            hasrect = 1;
+            if (!spec->layers[i].data) rect_top = 1;   /* full 4-corner rect */
+        }
     }
     const Column *xec = NULL, *yec = NULL;
     if (spec->xend.col) {
@@ -280,8 +283,11 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     if (hasseg && !xec && !disc_x) {
         sprintf(err, "geom_segment() needs aes(xend=...)"); return -1;
     }
-    if (hasrect && (!xec || !yec)) {
-        sprintf(err, "geom_rect() needs aes(xmin, xmax, ymin, ymax)"); return -1;
+    if (hasrect && !xec) {
+        sprintf(err, "geom_rect() needs aes(xmin, xmax)"); return -1;
+    }
+    if (rect_top && !yec) {
+        sprintf(err, "geom_rect() needs aes(ymin, ymax) (or data= for a full-height band)"); return -1;
     }
     /* genome coordinate x-scale: concatenate chromosomes via seqinfo offsets */
     int genome_x = spec->genome_seqinfo != NULL;
@@ -819,6 +825,29 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                                      : TXR(r));
                     g->y0 = NPCY(TY(yc->num[r]));
                     g->y1 = NPCY(yec ? TY(yec->num[r]) : TY(yc->num[r]));
+                }
+            } else if (gt == GEOM_RECT && spec->layers[li].data) {
+                /* region-highlight bands: own file, full panel height,
+                 * genome-offset x. Drawn in layer order (put before the
+                 * points to shade behind them) */
+                const Layer *L = &spec->layers[li];
+                DataFrame *d2 = df_read_csv(L->data, err);
+                if (!d2) return -1;
+                const Column *c_chr = genome_x ? df_col(d2, spec->chrom.col) : NULL;
+                const Column *c_x = df_col(d2, spec->x.col);
+                const Column *c_xe = spec->xend.col ? df_col(d2, spec->xend.col) : NULL;
+                if (!c_x || !c_xe || (genome_x && !c_chr)) {
+                    sprintf(err, "geom_rect(data=%s): needs chrom/xmin/xmax columns", L->data);
+                    return -1;
+                }
+                Col fixed = L->has_color ? L->color : (Col){0.85, 0.85, 0.85};
+                for (int r2 = 0; r2 < d2->nrow; r2++) {
+                    double off = genome_x ? genome_off(gs, c_chr->str[r2]) : 0;
+                    if ((genome_x && off < 0) || isnan(c_x->num[r2]) || isnan(c_xe->num[r2])) continue;
+                    g = gt_add(T, G_RECT, R, C, R, C);
+                    g->col = fixed; g->sub = 1; g->clip = 1;
+                    g->x0 = NPCX(off + c_x->num[r2]); g->x1 = NPCX(off + c_xe->num[r2]);
+                    g->y0 = 0; g->y1 = 1;         /* full panel height */
                 }
             } else if (gt == GEOM_RECT) {
                 /* filled rectangle per row: (xmin,ymin) .. (xmax,ymax) */
