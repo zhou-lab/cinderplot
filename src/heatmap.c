@@ -364,7 +364,8 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                     if (col->num[r] < lo) lo = col->num[r];
                     if (col->num[r] > hi) hi = col->num[r];
                 }
-                FillScale vir = {FILL_VIRIDIS, {0}, {0}, {0}, 0};
+                FillScale vir = {0};
+                vir.kind = FILL_VIRIDIS;
                 for (int r = 0; r < df->nrow; r++)
                     ro[i].ann_col[r] = isnan(col->num[r]) ? C_NA
                                      : fill_map_value(&vir, col->num[r], lo, hi);

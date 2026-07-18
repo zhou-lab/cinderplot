@@ -3,7 +3,7 @@ PKG_CONFIG ?= pkg-config
 
 CAIRO_CFLAGS := $(shell $(PKG_CONFIG) --cflags cairo 2>/dev/null || echo -I/opt/homebrew/include/cairo)
 CAIRO_LIBS := $(shell $(PKG_CONFIG) --libs cairo 2>/dev/null || echo -L/opt/homebrew/lib -lcairo)
-CPPFLAGS += -Iinclude $(CAIRO_CFLAGS)
+CPPFLAGS += -D_DEFAULT_SOURCE -Iinclude $(CAIRO_CFLAGS)
 CFLAGS ?= -O2
 CFLAGS += -std=c11 -Wall -Wextra
 LDLIBS += $(CAIRO_LIBS) -lm
