@@ -28,26 +28,6 @@ static double font_h(cairo_t *cr, double size) {
     return fe.ascent + fe.descent;
 }
 
-/* strip commas from a numeric token */
-static long parse_pos(const char *s, const char *end) {
-    char buf[32]; int j = 0;
-    for (const char *q = s; q < end && j < 31; q++) if (*q != ',') buf[j++] = *q;
-    buf[j] = 0;
-    return atol(buf);
-}
-/* chr:start-end (commas allowed); 0 = ok */
-int region_parse(const char *s, char *chrom, long *start, long *end) {
-    const char *colon = strchr(s, ':');
-    const char *dash = colon ? strchr(colon, '-') : NULL;
-    if (!colon || !dash) return -1;
-    size_t n = colon - s;
-    if (n == 0 || n >= 64) return -1;
-    memcpy(chrom, s, n); chrom[n] = 0;
-    *start = parse_pos(colon + 1, dash);
-    *end = parse_pos(dash + 1, s + strlen(s));
-    return (*end > *start) ? 0 : -1;
-}
-
 int render_tracks(const PlotSpec *spec, const char *out,
                   double w_pt, double h_pt, char *err) {
     if (!spec->region) {

@@ -197,6 +197,15 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err);  /* 0 = ok */
 int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 double w_pt, double h_pt, char *err);
 
+/* ---------- track_io.c: BED / bedGraph / BEDPE (region-filtered) ---------- */
+typedef struct { long start, end; char *name; char strand; double score; } Interval;
+typedef struct { long start, end; double val; } SigBin;
+typedef struct { long a_start, a_end, b_start, b_end; double score; } Link;
+int region_parse(const char *s, char *chrom, long *start, long *end);   /* 0 = ok */
+Interval *bed_read(const char *path, const char *chrom, long rs, long re, int *n, char *err);
+SigBin   *bedgraph_read(const char *path, const char *chrom, long rs, long re, int *n, char *err);
+Link     *bedpe_read(const char *path, const char *chrom, long rs, long re, int *n, char *err);
+
 /* ---------- render_tracks.c: locus track-browser mode ---------- */
 int render_tracks(const PlotSpec *spec, const char *out,
                   double w_pt, double h_pt, char *err);
