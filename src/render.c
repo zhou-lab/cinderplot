@@ -171,6 +171,21 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             return -1;
         }
     }
+    /* geom_segment endpoints (xend required, yend defaults to y = horizontal) */
+    int hasseg = 0;
+    for (int i = 0; i < spec->nlayers; i++) if (spec->layers[i].type == GEOM_SEGMENT) hasseg = 1;
+    const Column *xec = NULL, *yec = NULL;
+    if (spec->xend.col) {
+        xec = df_col(df, spec->xend.col);
+        if (!xec) { sprintf(err, "column `%s` not found", spec->xend.col); return -1; }
+    }
+    if (spec->yend.col) {
+        yec = df_col(df, spec->yend.col);
+        if (!yec) { sprintf(err, "column `%s` not found", spec->yend.col); return -1; }
+    }
+    if (hasseg && !xec && !disc_x) {
+        sprintf(err, "geom_segment() needs aes(xend=...)"); return -1;
+    }
     Factor *cf = NULL;
     if (spec->colour.col) {
         if (hascol || nhist) {
@@ -241,6 +256,11 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             double t = TXR(r);
             if (t < txmin) txmin = t;
             if (t > txmax) txmax = t;
+            if (xec && !isnan(xec->num[r])) {   /* segment end extends x range */
+                double te = spec->log_x ? log10(xec->num[r]) : xec->num[r];
+                if (te < txmin) txmin = te;
+                if (te > txmax) txmax = te;
+            }
         }
         if (txmax == txmin) { txmin -= 0.5; txmax += 0.5; }
     }
@@ -312,6 +332,11 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             double t = TY(yc->num[r]);
             if (t < tymin) tymin = t;
             if (t > tymax) tymax = t;
+            if (yec && !isnan(yec->num[r])) {   /* segment end extends y range */
+                double te = TY(yec->num[r]);
+                if (te < tymin) tymin = te;
+                if (te > tymax) tymax = te;
+            }
         }
         if (hascol && !spec->log_y) {           /* bars are anchored at 0 */
             if (tymin > 0) tymin = 0;
@@ -418,7 +443,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         pal = malloc(cf->nlev * sizeof(Col));
         hue_palette(cf->nlev, pal);
         leg = build_legend(cr, spec->lab_colour ? spec->lab_colour : spec->colour.expr,
-                           cf, pal, haspoint, hasline, hasbox || hasbar);
+                           cf, pal, haspoint, hasline || hasseg, hasbox || hasbar);
     }
 
     /* ---- outer table ---- */
@@ -585,6 +610,19 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     g->n = np; g->px = px; g->py = py;
                     g->col = cf ? pal[grp] : C_BLACK;
                     g->lw = lw_pt(0.5); g->clip = 1;
+                }
+            } else if (gt == GEOM_SEGMENT) {
+                /* one line per row: (x,y) -> (xend, yend); yend defaults to y */
+                for (int r = 0; r < df->nrow; r++) {
+                    if (!use[r] || (ff && ff->idx[r] != p)) continue;
+                    if (xec && isnan(xec->num[r])) continue;
+                    g = gt_add(T, G_LINE, R, C, R, C);
+                    g->col = cf ? pal[cf->idx[r]] : C_BLACK;
+                    g->lw = lw_pt(0.5); g->clip = 1;
+                    g->x0 = NPCX(TXR(r));
+                    g->x1 = NPCX(xec ? (spec->log_x ? log10(xec->num[r]) : xec->num[r]) : TXR(r));
+                    g->y0 = NPCY(TY(yc->num[r]));
+                    g->y1 = NPCY(yec ? TY(yec->num[r]) : TY(yc->num[r]));
                 }
             } else if (gt == GEOM_BOXPLOT) {
                 /* five-number summary + Tukey whiskers + outliers, in

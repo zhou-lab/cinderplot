@@ -102,9 +102,12 @@ static int parse_aes(P *p, PlotSpec *spec) {
             p->s++;
             if (!strcmp(key, "x")) e = &spec->x;
             else if (!strcmp(key, "y")) e = &spec->y;
+            else if (!strcmp(key, "xend")) e = &spec->xend;
+            else if (!strcmp(key, "yend")) e = &spec->yend;
+            else if (!strcmp(key, "chrom") || !strcmp(key, "chr")) e = &spec->chrom;
             else if (!strcmp(key, "colour") || !strcmp(key, "color")
                   || !strcmp(key, "fill")) e = &spec->colour;
-            else return fail(p, "aes(%s=...) is not implemented; supported: x, y, colour, fill", key);
+            else return fail(p, "aes(%s=...) is not implemented; supported: x, y, xend, yend, chrom, colour, fill", key);
             free(key);
         } else {
             p->s = save;                     /* positional: x then y */
@@ -283,6 +286,7 @@ static int parse_term(P *p, PlotSpec *spec) {
     else if (!strcmp(name, "geom_histogram")) gt = GEOM_HISTOGRAM;
     else if (!strcmp(name, "geom_boxplot")) gt = GEOM_BOXPLOT;
     else if (!strcmp(name, "geom_bar")) gt = GEOM_BAR;
+    else if (!strcmp(name, "geom_segment")) gt = GEOM_SEGMENT;
     else is_geom = 0;
     if (is_geom) {
         if (spec->nlayers == MAX_LAYERS) return fail(p, "too many layers", "");

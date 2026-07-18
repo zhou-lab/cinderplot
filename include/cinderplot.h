@@ -120,7 +120,8 @@ void gt_render(GTable *t, cairo_t *cr);
 /* ---------- dsl.c: verbatim ggplot subset ---------- */
 typedef struct { char *col; int is_factor; char *expr; } AesEntry; /* col NULL = unset */
 
-typedef enum { GEOM_POINT, GEOM_LINE, GEOM_COL, GEOM_HISTOGRAM, GEOM_BOXPLOT, GEOM_BAR } GeomType;
+typedef enum { GEOM_POINT, GEOM_LINE, GEOM_COL, GEOM_HISTOGRAM, GEOM_BOXPLOT, GEOM_BAR,
+               GEOM_SEGMENT } GeomType;
 typedef struct { GeomType type; int bins; } Layer;
 #define MAX_LAYERS 8
 
@@ -148,6 +149,9 @@ typedef struct {
 typedef struct {
     char *data_path;
     AesEntry x, y, colour;          /* colour also accepts fill= */
+    AesEntry xend, yend;            /* geom_segment endpoints */
+    AesEntry chrom;                 /* genome scale: chromosome column */
+    char *genome_seqinfo;           /* scale_x_genome: seqinfo TSV path */
     Layer layers[MAX_LAYERS];
     int nlayers;
     int log_x, log_y;
