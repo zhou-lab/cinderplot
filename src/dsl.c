@@ -312,6 +312,12 @@ static int parse_term(P *p, PlotSpec *spec) {
         if (name[6] == 'x') spec->log_x = 1; else spec->log_y = 1;
         return expect(p, ')');
     }
+    if (!strcmp(name, "scale_x_genome")) {
+        char *v = string_lit(p);
+        if (!v) return fail(p, "scale_x_genome() expects a quoted seqinfo TSV path", "");
+        spec->genome_seqinfo = v;
+        return expect(p, ')');
+    }
 
     /* ---- matrix (wheatmap) mode ---- */
     if (!strcmp(name, "heatmap")) {

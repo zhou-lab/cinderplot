@@ -126,6 +126,33 @@ static void box_stats(const double *s, int n, BoxStat *b) {
     b->wlo = s[n - 1]; for (int i = n - 1; i >= 0; i--) if (s[i] >= lo) b->wlo = s[i];
 }
 
+/* genome coordinate scale: chromosomes concatenated in seqinfo order */
+typedef struct { char **chr; double *off, *len; int n; double total; } GenomeScale;
+static GenomeScale *genome_load(const char *path, char *err) {
+    DataFrame *sq = df_read_csv(path, err);
+    if (!sq) return NULL;
+    const Column *sc = df_col(sq, "chrom"), *lc = df_col(sq, "length");
+    if (!sc || sc->type != COL_STR || !lc || lc->type != COL_NUM) {
+        sprintf(err, "seqinfo `%s` needs a text `chrom` and numeric `length` column", path);
+        return NULL;
+    }
+    GenomeScale *g = malloc(sizeof *g);
+    g->n = sq->nrow;
+    g->chr = malloc(g->n * sizeof(char *));
+    g->off = malloc(g->n * sizeof(double));
+    g->len = malloc(g->n * sizeof(double));
+    double cum = 0;
+    for (int i = 0; i < g->n; i++) {
+        g->chr[i] = sc->str[i]; g->len[i] = lc->num[i]; g->off[i] = cum; cum += g->len[i];
+    }
+    g->total = cum;
+    return g;
+}
+static double genome_off(const GenomeScale *g, const char *chr) {
+    for (int i = 0; i < g->n; i++) if (!strcmp(g->chr[i], chr)) return g->off[i];
+    return -1;   /* sentinel: chromosome absent from seqinfo */
+}
+
 int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 double w_pt, double h_pt, char *err) {
     /* ---- layer summary ---- */
@@ -186,6 +213,25 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     if (hasseg && !xec && !disc_x) {
         sprintf(err, "geom_segment() needs aes(xend=...)"); return -1;
     }
+    /* genome coordinate x-scale: concatenate chromosomes via seqinfo offsets */
+    int genome_x = spec->genome_seqinfo != NULL;
+    GenomeScale *gs = NULL;
+    double *roff = NULL;             /* per-row genome offset (-1 = drop) */
+    if (genome_x) {
+        if (disc_x || spec->log_x) {
+            sprintf(err, "scale_x_genome() needs a continuous, non-log x"); return -1;
+        }
+        if (!spec->chrom.col) {
+            sprintf(err, "scale_x_genome() needs a chromosome column: aes(chrom=...)"); return -1;
+        }
+        if (!(gs = genome_load(spec->genome_seqinfo, err))) return -1;
+        const Column *cc = df_col(df, spec->chrom.col);
+        if (!cc || cc->type != COL_STR) {
+            sprintf(err, "chrom column `%s` must be text", spec->chrom.col); return -1;
+        }
+        roff = malloc(df->nrow * sizeof(double));
+        for (int r = 0; r < df->nrow; r++) roff[r] = genome_off(gs, cc->str[r]);
+    }
     Factor *cf = NULL;
     if (spec->colour.col) {
         if (hascol || nhist) {
@@ -212,7 +258,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     /* ---- usable rows (NA and log-domain filtering) ---- */
     int *use = malloc(df->nrow * sizeof(int)), nuse = 0, d_na = 0, d_log = 0;
     for (int r = 0; r < df->nrow; r++) {
-        int xok = disc_x ? (xf->idx[r] >= 0) : !isnan(xc->num[r]);
+        int xok = disc_x ? (xf->idx[r] >= 0)
+                : genome_x ? (roff[r] >= 0 && !isnan(xc->num[r]))
+                : !isnan(xc->num[r]);
         int ok = xok && (!yc || !isnan(yc->num[r]))
               && (!cf || cf->idx[r] >= 0) && (!ff || ff->idx[r] >= 0);
         if (!ok) d_na++;
@@ -227,9 +275,13 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     if (d_log) fprintf(stderr, "cinderplot: removed %d rows with non-positive values on a log axis\n", d_log);
 
 #define TY(v) (spec->log_y ? log10(v) : (v))
-/* transformed x for row r: category position (discrete) or value (continuous) */
-#define XVAL(r) (disc_x ? (double)(xf->idx[r] + 1) : xc->num[r])
+/* transformed x for row r: category position (discrete), genome offset+pos
+ * (genome), or raw value (continuous) */
+#define XVAL(r) (disc_x ? (double)(xf->idx[r] + 1) \
+               : genome_x ? (roff[r] + xc->num[r]) : xc->num[r])
 #define TXR(r)  (spec->log_x ? log10(XVAL(r)) : XVAL(r))
+/* genome offset applied to any within-chromosome position (e.g. xend) */
+#define GX(r, v) (genome_x ? (roff[r] + (v)) : (v))
 
     /* ---- panel grid: ggplot2 wrap_dims = rev(grDevices::n2mfrow(n)) ---- */
     int npan = ff ? ff->nlev : 1, ncolp, nrowp;
@@ -249,6 +301,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     double txmin, txmax;
     if (disc_x) {                          /* categories at 1..k */
         txmin = 1; txmax = xf->nlev;
+    } else if (genome_x) {                 /* whole genome, exact */
+        txmin = 0; txmax = gs->total;
     } else {
         txmin = 1e300; txmax = -1e300;
         for (int r = 0; r < df->nrow; r++) {
@@ -349,17 +403,33 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
      * each side; continuous uses 5% of the range. ---- */
     double x0, x1;
     if (disc_x) { x0 = 1 - 0.6; x1 = xf->nlev + 0.6; }
+    else if (genome_x) { x0 = 0; x1 = gs->total; }     /* no expansion */
     else { x0 = txmin - 0.05 * (txmax - txmin); x1 = txmax + 0.05 * (txmax - txmin); }
     double y0 = tymin - 0.05 * (tymax - tymin), y1 = tymax + 0.05 * (tymax - tymin);
 #define NPCX(t) (((t) - x0) / (x1 - x0))
 #define NPCY(t) (((t) - y0) / (y1 - y0))
 
-    double xbr[16], ybr[16];
-    char **xlabs = malloc(16 * sizeof(char *)), **ylabs = malloc(16 * sizeof(char *));
+    double xbr[40], ybr[16];
+    char **xlabs = malloc(40 * sizeof(char *)), **ylabs = malloc(16 * sizeof(char *));
     int nxbr, nybr;
+    /* genome mode uses separate axis arrays: gridlines at chrom boundaries,
+     * labels (chrom names) at chrom midpoints */
+    double *gax_pos = NULL; char **gax_lab = NULL; int gax_n = 0;
     if (disc_x) {                          /* one break per category, level labels */
         nxbr = xf->nlev;
         for (int i = 0; i < nxbr; i++) { xbr[i] = i + 1; xlabs[i] = strdup(xf->levels[i]); }
+    } else if (genome_x) {
+        nxbr = gs->n > 1 ? gs->n - 1 : 0;  /* internal boundaries = faint gridlines */
+        for (int i = 0; i < nxbr; i++) { xbr[i] = gs->off[i + 1]; xlabs[i] = strdup(""); }
+        gax_n = gs->n;
+        gax_pos = malloc(gax_n * sizeof(double));
+        gax_lab = malloc(gax_n * sizeof(char *));
+        for (int i = 0; i < gs->n; i++) {
+            gax_pos[i] = NPCX(gs->off[i] + gs->len[i] / 2);
+            const char *nm = gs->chr[i];
+            if (!strncmp(nm, "chr", 3)) nm += 3;   /* compact: chr1 -> 1 */
+            gax_lab[i] = strdup(nm);
+        }
     } else if (spec->log_x) {
         nxbr = log10_breaks(x0, x1, xbr, xlabs, 16);
     } else {
@@ -382,7 +452,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     for (int i = 0; i < nxbr; i++) xnpc[i] = NPCX(xbr[i]);
     for (int i = 0; i < nybr; i++) ynpc[i] = NPCY(ybr[i]);
     double xmin_br[32], ymin_br[32];
-    int nxmin = disc_x ? 0 : make_minors(xbr, nxbr, x0, x1, xmin_br);
+    int nxmin = (disc_x || genome_x) ? 0 : make_minors(xbr, nxbr, x0, x1, xmin_br);
     int nymin = make_minors(ybr, nybr, y0, y1, ymin_br);
 
     /* ---- geom_col bar width: 0.9 x min gap between distinct x ---- */
@@ -434,7 +504,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     double labh = font_h(cr, SZ_AXIS_TEXT), baseh = font_h(cr, SZ_BASE);
     double striph = ff ? labh + 2 * STRIP_PAD : 0;
 
-    const char *xtitle = spec->lab_x ? spec->lab_x : spec->x.expr;
+    const char *xtitle = spec->lab_x ? spec->lab_x : genome_x ? "" : spec->x.expr;
     const char *ytitle = spec->lab_y ? spec->lab_y : (nhist || hasbar ? "count" : spec->y.expr);
 
     Col *pal = NULL;
@@ -620,7 +690,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     g->col = cf ? pal[cf->idx[r]] : C_BLACK;
                     g->lw = lw_pt(0.5); g->clip = 1;
                     g->x0 = NPCX(TXR(r));
-                    g->x1 = NPCX(xec ? (spec->log_x ? log10(xec->num[r]) : xec->num[r]) : TXR(r));
+                    g->x1 = NPCX(xec ? (genome_x ? GX(r, xec->num[r])
+                                      : spec->log_x ? log10(xec->num[r]) : xec->num[r])
+                                     : TXR(r));
                     g->y0 = NPCY(TY(yc->num[r]));
                     g->y1 = NPCY(yec ? TY(yec->num[r]) : TY(yc->num[r]));
                 }
@@ -701,7 +773,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             g = gt_add(T, G_AXIS_X, r_axis, PC(c), r_axis, PC(c));
         else
             g = gt_add(T, G_AXIS_X, PR(rb) + 1, PC(c), PR(rb + 1), PC(c));
-        g->n = nxbr; g->px = xnpc; g->labels = xlabs;
+        if (genome_x) { g->n = gax_n; g->px = gax_pos; g->labels = gax_lab; }
+        else { g->n = nxbr; g->px = xnpc; g->labels = xlabs; }
     }
 
     /* ---- go ---- */
