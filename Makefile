@@ -1,8 +1,28 @@
 CC ?= cc
 PKG_CONFIG ?= pkg-config
 
-CAIRO_CFLAGS := $(shell $(PKG_CONFIG) --cflags cairo 2>/dev/null || echo -I/opt/homebrew/include/cairo)
-CAIRO_LIBS := $(shell $(PKG_CONFIG) --libs cairo 2>/dev/null || echo -L/opt/homebrew/lib -lcairo)
+# Cairo flags: prefer pkg-config; else fall back to a Homebrew prefix ONLY if
+# the headers are really there (macs often have cairo via brew but no
+# pkg-config); otherwise stop with a clear error instead of guessing a path
+# that may not exist. Pass CAIRO_CFLAGS and CAIRO_LIBS on the command line (as
+# the conda recipe does) to bypass detection entirely.
+ifndef CAIRO_CFLAGS
+ifeq ($(shell $(PKG_CONFIG) --exists cairo 2>/dev/null && echo ok),ok)
+CAIRO_CFLAGS := $(shell $(PKG_CONFIG) --cflags cairo)
+CAIRO_LIBS := $(shell $(PKG_CONFIG) --libs cairo)
+else
+BREW_PREFIX := $(shell brew --prefix 2>/dev/null)
+ifneq ($(wildcard $(BREW_PREFIX)/include/cairo/cairo.h),)
+CAIRO_CFLAGS := -I$(BREW_PREFIX)/include/cairo
+CAIRO_LIBS := -L$(BREW_PREFIX)/lib -lcairo
+else
+$(error Cairo not found. Install it — "brew install cairo pkg-config" (macOS) \
+or "apt-get install libcairo2-dev pkg-config" (Debian/Ubuntu) — \
+or pass CAIRO_CFLAGS and CAIRO_LIBS explicitly)
+endif
+endif
+endif
+
 CPPFLAGS += -D_DEFAULT_SOURCE -Iinclude $(CAIRO_CFLAGS)
 CFLAGS ?= -O2
 CFLAGS += -std=c11 -Wall -Wextra
