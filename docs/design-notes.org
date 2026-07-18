@@ -776,6 +776,53 @@ draws bars of the counts; fill/colour stacks by group.
 - Bar dodge (position_dodge for bars) and fill on geom_col; geom_bar on
   continuous x (count unique values). geom_smooth; discrete y.
 
+* Milestone: genomic plotting M1 — whole-genome coordinate plots     :spike:
+Result [2026-07-18]. cinderplot renders whole-genome CNV/Manhattan
+figures (sesame visualizeSegments target). Grammar mode + a genome
+coordinate scale — no new assembler; engine unchanged. Example data +
+target in examples/genome/ (K562 EPICv2 CNV, hg38 scaffold).
+
+** What was added (all in grammar mode / render.c unless noted)
+- TSV input (csv.c): split_record takes a delimiter, sniffed from the
+  first line (tab -> TSV). Comma CSVs byte-identical.
+- geom_segment: G_LINE per row (x,y)->(xend,yend); yend defaults to y.
+  aes gains xend/yend. Matches ggplot.
+- Genome x-scale: scale_x_genome(seqinfo.tsv) + aes(chrom=). Offset
+  table concatenates chromosomes; per-row gx=offset[chrom]+x (same
+  XVAL/TXR pattern as the discrete scale). Domain [0,genome_len], no
+  expansion; faint boundary gridlines; chrom-name labels at midpoints
+  (chr prefix stripped). Rows off-seqinfo dropped.
+- Continuous colour with squish: numeric colour aes -> fill_map_value;
+  scale_colour_gradient/gradient2 with limits=c(lo,hi) squishing
+  out-of-range to the endpoint colour. Shared scale_fill_/scale_colour_
+  parser. greyNN colour names.
+- Per-layer data: geom_segment(data="segments.tsv", y=seg.mean,
+  color=) reads a SECOND file (CBS segments) on the shared genome
+  scale. Layer struct gains data/ycol/color.
+- Ideogram: ideogram("cytoband.tsv") reserves the panel's bottom 6%
+  and draws gieStain-coloured bands (grey ramp + red acen).
+
+** Verified
+- Full K562 CNV figure reproduces sesame's visualizeSegments:
+  diverging squished bins (red del / green amp), blue segment lines,
+  chrom-boundary gridlines, cytoband ideogram, chrom-name axis; the
+  chr9p21 CDKN2A deletion and 13/14/22 amplifications are correct.
+- Regressions byte-identical: scatter, boxplot, discrete/continuous
+  colour; test suite passes.
+
+** Known limits (M1)
+- Continuous-colour COLORBAR legend not drawn yet (points coloured, no
+  key). y-training for per-layer segment data uses the primary df's
+  range (segments are bin means, within range) — a segment beyond the
+  bin range would clip.
+- Chrom labels can crowd for short chromosomes (17-22) at small widths.
+
+** M2 (later): locus track-browser
+Third assembler (render_tracks.c): coverage/genes/interval/arcs stacked
+on a single region. Gene models as BED12+ bgzip+tabix (zlib + small
+bgzf/tabix reader); headerless BED/GFF parsers. Plan:
+docs (plan file) / design-notes M2 section.
+
 * Next: algorithms discussion agenda                                  :next:
 - Layout constraint solver — what grid's viewport/unit system buys and
   how much of it is needed.

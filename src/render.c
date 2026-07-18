@@ -153,6 +153,17 @@ static double genome_off(const GenomeScale *g, const char *chr) {
     return -1;   /* sentinel: chromosome absent from seqinfo */
 }
 
+/* cytoband gieStain -> colour: grey ramp for gpos*, red centromere */
+static Col stain_color(const char *s) {
+    if (!strcmp(s, "acen")) { Col c = {0.878, 0, 0}; return c; }      /* #E00000 */
+    if (!strcmp(s, "gneg")) return C_WHITE;
+    if (!strcmp(s, "gpos25")) { Col c = {0.753, 0.753, 0.753}; return c; }
+    if (!strcmp(s, "gpos50")) { Col c = {0.565, 0.565, 0.565}; return c; }
+    if (!strcmp(s, "gpos75")) { Col c = {0.376, 0.376, 0.376}; return c; }
+    if (!strcmp(s, "gpos100")) { Col c = {0, 0, 0}; return c; }
+    Col c = {0.502, 0.502, 0.502}; return c;                          /* gvar/stalk */
+}
+
 int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 double w_pt, double h_pt, char *err) {
     /* ---- layer summary ---- */
@@ -429,6 +440,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     else if (genome_x) { x0 = 0; x1 = gs->total; }     /* no expansion */
     else { x0 = txmin - 0.05 * (txmax - txmin); x1 = txmax + 0.05 * (txmax - txmin); }
     double y0 = tymin - 0.05 * (tymax - tymin), y1 = tymax + 0.05 * (tymax - tymin);
+    /* reserve the bottom `ideo_npc` of the panel for the ideogram track */
+    double ideo_npc = (spec->ideogram_path && genome_x) ? 0.06 : 0;
+    if (ideo_npc > 0) y0 -= (y1 - y0) * ideo_npc / (1 - ideo_npc);
 #define NPCX(t) (((t) - x0) / (x1 - x0))
 #define NPCY(t) (((t) - y0) / (y1 - y0))
 
@@ -704,6 +718,31 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     g->col = cf ? pal[grp] : C_BLACK;
                     g->lw = lw_pt(0.5); g->clip = 1;
                 }
+            } else if (gt == GEOM_SEGMENT && spec->layers[li].data) {
+                /* per-layer data (e.g. CBS segments): its own file, genome-
+                 * offset horizontal lines from start..end at y */
+                const Layer *L = &spec->layers[li];
+                DataFrame *d2 = df_read_csv(L->data, err);
+                if (!d2) return -1;
+                const Column *c_chr = genome_x ? df_col(d2, spec->chrom.col) : NULL;
+                const Column *c_x = df_col(d2, spec->x.col);
+                const Column *c_xe = spec->xend.col ? df_col(d2, spec->xend.col) : NULL;
+                const Column *c_y = df_col(d2, L->ycol ? L->ycol : spec->y.col);
+                if (!c_x || !c_y || (genome_x && !c_chr)) {
+                    sprintf(err, "geom_segment(data=%s): missing chrom/x/y column", L->data);
+                    return -1;
+                }
+                Col lcol = L->has_color ? L->color : C_BLACK;
+                for (int r2 = 0; r2 < d2->nrow; r2++) {
+                    double off = genome_x ? genome_off(gs, c_chr->str[r2]) : 0;
+                    if (genome_x && off < 0) continue;
+                    if (isnan(c_x->num[r2]) || isnan(c_y->num[r2])) continue;
+                    g = gt_add(T, G_LINE, R, C, R, C);
+                    g->col = lcol; g->lw = lw_pt(0.6); g->clip = 1;
+                    g->x0 = NPCX(off + c_x->num[r2]);
+                    g->x1 = NPCX(off + (c_xe ? c_xe->num[r2] : c_x->num[r2]));
+                    g->y0 = g->y1 = NPCY(TY(c_y->num[r2]));
+                }
             } else if (gt == GEOM_SEGMENT) {
                 /* one line per row: (x,y) -> (xend, yend); yend defaults to y */
                 for (int r = 0; r < df->nrow; r++) {
@@ -780,6 +819,26 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         free(ys);
                     }
                 }
+            }
+        }
+
+        /* ideogram track: cytoband rects in the reserved bottom band */
+        if (ideo_npc > 0) {
+            DataFrame *cb = df_read_csv(spec->ideogram_path, err);
+            if (!cb) return -1;
+            const Column *bc = df_col(cb, "chrom"), *bs = df_col(cb, "start"),
+                         *be = df_col(cb, "end"), *bt = df_col(cb, "stain");
+            if (!bc || !bs || !be || !bt) {
+                sprintf(err, "ideogram cytoband needs chrom,start,end,stain columns"); return -1;
+            }
+            double yb0 = 0.010, yb1 = ideo_npc - 0.010;   /* npc band at panel bottom */
+            for (int r2 = 0; r2 < cb->nrow; r2++) {
+                double off = genome_off(gs, bc->str[r2]);
+                if (off < 0) continue;
+                g = gt_add(T, G_RECT, R, C, R, C);
+                g->col = stain_color(bt->str[r2]); g->sub = 1; g->clip = 1;
+                g->x0 = NPCX(off + bs->num[r2]); g->x1 = NPCX(off + be->num[r2]);
+                g->y0 = yb0; g->y1 = yb1;
             }
         }
 

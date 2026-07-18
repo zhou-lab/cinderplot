@@ -124,7 +124,13 @@ typedef struct { char *col; int is_factor; char *expr; } AesEntry; /* col NULL =
 
 typedef enum { GEOM_POINT, GEOM_LINE, GEOM_COL, GEOM_HISTOGRAM, GEOM_BOXPLOT, GEOM_BAR,
                GEOM_SEGMENT } GeomType;
-typedef struct { GeomType type; int bins; } Layer;
+typedef struct {
+    GeomType type;
+    int bins;
+    char *data;          /* per-layer data file (NULL = inherit) */
+    char *ycol;          /* per-layer y column override (NULL = inherit) */
+    Col color; int has_color;   /* constant layer colour override */
+} Layer;
 #define MAX_LAYERS 8
 
 /* matrix (wheatmap) mode: anchor-placed objects */
@@ -154,6 +160,7 @@ typedef struct {
     AesEntry xend, yend;            /* geom_segment endpoints */
     AesEntry chrom;                 /* genome scale: chromosome column */
     char *genome_seqinfo;           /* scale_x_genome: seqinfo TSV path */
+    char *ideogram_path;            /* ideogram(): cytoband TSV path */
     Layer layers[MAX_LAYERS];
     int nlayers;
     int log_x, log_y;

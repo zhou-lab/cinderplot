@@ -353,6 +353,27 @@ static int parse_term(P *p, PlotSpec *spec) {
             if (l->bins < 1 || l->bins > 10000)
                 return fail(p, "geom_histogram(bins=...) must be 1..10000", "");
             skip_ws(p);
+        } else if (gt == GEOM_SEGMENT) {
+            /* per-layer data=, y=, color= (for a second data source like CBS segments) */
+            while (*p->s != ')') {
+                char *key = ident(p);
+                if (!key || expect(p, '=')) return fail(p, "geom_segment() takes data=, y=, color=", "");
+                skip_ws(p);
+                if (!strcmp(key, "data")) {
+                    l->data = string_lit(p);
+                    if (!l->data) return fail(p, "geom_segment(data=...) expects a quoted path", "");
+                } else if (!strcmp(key, "y")) {
+                    l->ycol = ident(p);
+                    if (!l->ycol) return fail(p, "geom_segment(y=...) expects a column name", "");
+                } else if (!strcmp(key, "color") || !strcmp(key, "colour")) {
+                    char *v = string_lit(p);
+                    if (!v || parse_color(v, &l->color))
+                        return fail(p, "geom_segment(color=...) bad colour", "");
+                    l->has_color = 1;
+                } else return fail(p, "geom_segment() option `%s` not implemented", key);
+                skip_ws(p);
+                if (*p->s == ',') { p->s++; skip_ws(p); }
+            }
         }
         if (*p->s != ')')
             return fail(p, "`%s()` arguments are not implemented yet", name);
@@ -367,6 +388,12 @@ static int parse_term(P *p, PlotSpec *spec) {
         char *v = string_lit(p);
         if (!v) return fail(p, "scale_x_genome() expects a quoted seqinfo TSV path", "");
         spec->genome_seqinfo = v;
+        return expect(p, ')');
+    }
+    if (!strcmp(name, "ideogram")) {
+        char *v = string_lit(p);
+        if (!v) return fail(p, "ideogram() expects a quoted cytoband TSV path", "");
+        spec->ideogram_path = v;
         return expect(p, ')');
     }
 
