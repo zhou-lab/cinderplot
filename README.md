@@ -25,7 +25,7 @@ make
 make test
 ```
 
-A conda recipe lives in [`recipe/`](recipe/) — see its README for building
+A conda recipe lives in [`conda-recipe/`](conda-recipe/) — see its README for building
 and publishing to the channel.
 
 ## Examples

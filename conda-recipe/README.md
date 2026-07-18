@@ -16,11 +16,11 @@ Requires `conda-build` and `anaconda-client`:
 conda install -n base conda-build anaconda-client
 
 # Build (Linux + macOS; Windows is skipped)
-conda build recipe/
+conda build conda-recipe/
 
 # Upload the built package to the zhou-lab channel
 anaconda login
-anaconda upload -u zhou-lab $(conda build recipe/ --output)
+anaconda upload -u zhou-lab $(conda build conda-recipe/ --output)
 ```
 
 To automatically upload on every successful build:
@@ -39,4 +39,4 @@ conda config --set anaconda_upload yes
   lines in `meta.yaml` with `path: ..`.
 - Only dependency is Cairo (pulled from conda-forge); make sure conda-forge
   is on your channel list when building:
-  `conda build -c conda-forge recipe/`.
+  `conda build -c conda-forge conda-recipe/`.
