@@ -201,10 +201,17 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
 typedef struct { long start, end; char *name; char strand; double score; } Interval;
 typedef struct { long start, end; double val; } SigBin;
 typedef struct { long a_start, a_end, b_start, b_end; double score; } Link;
+typedef struct { long start, end; } Exon;
+typedef struct {
+    long tx_start, tx_end, cds_start, cds_end;   /* thick = CDS */
+    char *name; char strand;
+    Exon *exons; int nexon;
+} GeneModel;
 int region_parse(const char *s, char *chrom, long *start, long *end);   /* 0 = ok */
 Interval *bed_read(const char *path, const char *chrom, long rs, long re, int *n, char *err);
 SigBin   *bedgraph_read(const char *path, const char *chrom, long rs, long re, int *n, char *err);
 Link     *bedpe_read(const char *path, const char *chrom, long rs, long re, int *n, char *err);
+GeneModel *bed12_read(const char *path, const char *chrom, long rs, long re, int *n, char *err);
 
 /* ---------- render_tracks.c: locus track-browser mode ---------- */
 int render_tracks(const PlotSpec *spec, const char *out,

@@ -92,6 +92,47 @@ SigBin *bedgraph_read(const char *path, const char *chrom, long rs, long re, int
     free(buf); *n = cnt; return out;
 }
 
+/* parse a comma-separated list of longs; returns count */
+static int commalist(const char *s, long *out, int maxn) {
+    int n = 0;
+    for (const char *p = s; *p && n < maxn; ) {
+        out[n++] = atol(p);
+        const char *c = strchr(p, ',');
+        if (!c) break;
+        p = c + 1;
+    }
+    return n;
+}
+
+GeneModel *bed12_read(const char *path, const char *chrom, long rs, long re, int *n, char *err) {
+    char *buf = slurp(path, err); if (!buf) return NULL;
+    int cap = 64, cnt = 0;
+    GeneModel *out = malloc(cap * sizeof *out);
+    FOR_LINES(buf) {
+        char *f[12]; int nf = split_tab(line, f, 12);
+        if (nf < 12 || strcmp(f[0], chrom)) continue;
+        long s = atol(f[1]), e = atol(f[2]);
+        if (!overlaps(s, e, rs, re)) continue;
+        if (cnt == cap) { cap *= 2; out = realloc(out, cap * sizeof *out); }
+        GeneModel *g = &out[cnt];
+        g->tx_start = s; g->tx_end = e;
+        g->cds_start = atol(f[6]); g->cds_end = atol(f[7]);
+        g->name = strcmp(f[3], ".") ? strdup(f[3]) : NULL;
+        g->strand = f[5][0];
+        long sizes[1024], starts[1024];
+        int bc = atoi(f[9]);
+        int ns = commalist(f[10], sizes, 1024), nst = commalist(f[11], starts, 1024);
+        g->nexon = bc < ns ? bc : ns; if (nst < g->nexon) g->nexon = nst;
+        g->exons = malloc(g->nexon * sizeof(Exon));
+        for (int j = 0; j < g->nexon; j++) {
+            g->exons[j].start = s + starts[j];
+            g->exons[j].end = s + starts[j] + sizes[j];
+        }
+        cnt++;
+    }
+    free(buf); *n = cnt; return out;
+}
+
 Link *bedpe_read(const char *path, const char *chrom, long rs, long re, int *n, char *err) {
     char *buf = slurp(path, err); if (!buf) return NULL;
     int cap = 64, cnt = 0;

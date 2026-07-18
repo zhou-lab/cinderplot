@@ -21,6 +21,10 @@ static int cmp_iv(const void *a, const void *b) {
     long d = ((const Interval *)a)->start - ((const Interval *)b)->start;
     return d < 0 ? -1 : d > 0 ? 1 : 0;
 }
+static int cmp_gene(const void *a, const void *b) {
+    long d = ((const GeneModel *)a)->tx_start - ((const GeneModel *)b)->tx_start;
+    return d < 0 ? -1 : d > 0 ? 1 : 0;
+}
 
 static double text_w(cairo_t *cr, double size, const char *s) {
     cairo_text_extents_t e;
@@ -78,6 +82,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
         }
     double titleh = spec->lab_title ? font_h(cr, SZ_TITLE) : 0;
     double axh = font_h(cr, SZ_AXIS_TEXT);
+    double panel_w = w_pt - 2 * MARGIN - labw - (labw > 0 ? HALF_LINE : 0);  /* pt */
 
     /* ---- outer gtable: [MARGIN|label|gap|PANEL|MARGIN] cols;
      * [MARGIN|title|gap| tracks+gaps |axis|MARGIN] rows ---- */
@@ -143,9 +148,59 @@ int render_tracks(const PlotSpec *spec, const char *out,
             g = gt_add(T, G_TEXT, R, CC, R, CC);
             g->str = rd; g->size = SZ_AXIS_TEXT; g->col = C_AXTXT;
             g->tx = 0.004; g->ty = 0.98; g->hj = 0; g->va = V_TOP;
-        } else if (t->type == TRK_INTERVAL || t->type == TRK_GENES) {
-            /* interval blocks packed into non-overlapping lanes (gene models
-             * get exon structure in M2.3; here they render as blocks) */
+        } else if (t->type == TRK_GENES) {
+            /* gene models (BED12): exon boxes (thin UTR / thick CDS), intron
+             * center line, strand chevrons, transcript name; lane-packed */
+            int ng; GeneModel *gm = bed12_read(t->data, chrom, rstart, rend, &ng, err);
+            if (!gm) return -1;
+            qsort(gm, ng, sizeof *gm, cmp_gene);
+            long laneend[64]; int nlanes = 0, *lane = malloc(ng * sizeof(int));
+            for (int k = 0; k < ng; k++) {
+                int L = -1;
+                for (int j = 0; j < nlanes; j++) if (laneend[j] <= gm[k].tx_start) { L = j; break; }
+                if (L < 0 && nlanes < 64) L = nlanes++;
+                if (L < 0) L = nlanes - 1;
+                lane[k] = L; laneend[L] = gm[k].tx_end;
+            }
+            Col col = t->has_color ? t->color : C_IVAL;
+            double lh = 1.0 / nlanes, utr = 0.26 * lh, cds = 0.52 * lh;
+            for (int k = 0; k < ng; k++) {
+                double yc = 1 - (lane[k] + 0.5) * lh;
+                double xa = NPCX(gm[k].tx_start), xb = NPCX(gm[k].tx_end);
+                g = gt_add(T, G_LINE, R, CC, R, CC);         /* intron line */
+                g->col = col; g->lw = lw_pt(0.5); g->clip = 1;
+                g->x0 = xa; g->x1 = xb; g->y0 = g->y1 = yc;
+                double achx = 3.0 / panel_w;                 /* chevron half-width (npc) */
+                double dir = gm[k].strand == '-' ? -1 : 1;
+                for (double xc = xa + 0.02; xc < xb - 0.01; xc += 40.0 / panel_w) {
+                    g = gt_add(T, G_LINE, R, CC, R, CC);
+                    g->col = col; g->lw = lw_pt(0.4); g->clip = 1;
+                    g->x0 = xc - dir * achx; g->x1 = xc; g->y0 = yc + 0.12 * lh; g->y1 = yc;
+                    g = gt_add(T, G_LINE, R, CC, R, CC);
+                    g->col = col; g->lw = lw_pt(0.4); g->clip = 1;
+                    g->x0 = xc - dir * achx; g->x1 = xc; g->y0 = yc - 0.12 * lh; g->y1 = yc;
+                }
+                for (int j = 0; j < gm[k].nexon; j++) {      /* exon boxes */
+                    long es = gm[k].exons[j].start, ee = gm[k].exons[j].end;
+                    g = gt_add(T, G_RECT, R, CC, R, CC);     /* UTR (thin) */
+                    g->col = col; g->sub = 1; g->clip = 1;
+                    g->x0 = NPCX(es); g->x1 = NPCX(ee); g->y0 = yc - utr / 2; g->y1 = yc + utr / 2;
+                    long cs = es > gm[k].cds_start ? es : gm[k].cds_start;
+                    long ce = ee < gm[k].cds_end ? ee : gm[k].cds_end;
+                    if (ce > cs) {                           /* CDS (thick) */
+                        g = gt_add(T, G_RECT, R, CC, R, CC);
+                        g->col = col; g->sub = 1; g->clip = 1;
+                        g->x0 = NPCX(cs); g->x1 = NPCX(ce); g->y0 = yc - cds / 2; g->y1 = yc + cds / 2;
+                    }
+                }
+                if (gm[k].name) {                            /* name to the right */
+                    g = gt_add(T, G_TEXT, R, CC, R, CC);
+                    g->str = gm[k].name; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
+                    g->tx = xb + 0.004; g->ty = yc; g->hj = 0; g->va = V_INKCENTER;
+                }
+            }
+        } else if (t->type == TRK_INTERVAL) {
+            /* interval blocks packed into non-overlapping lanes */
             int ni; Interval *iv = bed_read(t->data, chrom, rstart, rend, &ni, err);
             if (!iv) return -1;
             qsort(iv, ni, sizeof *iv, cmp_iv);
