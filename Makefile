@@ -20,7 +20,12 @@ $(OBJECTS): include/cinderplot.h
 test: $(TARGET)
 	sh tests/test.sh
 
+PREFIX ?= /usr/local
+install: $(TARGET)
+	mkdir -p $(DESTDIR)$(PREFIX)/bin
+	cp $(TARGET) $(DESTDIR)$(PREFIX)/bin/
+
 clean:
 	rm -f $(TARGET) $(OBJECTS)
 
-.PHONY: clean test
+.PHONY: clean test install

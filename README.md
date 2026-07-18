@@ -8,6 +8,14 @@ The project is an early prototype. Its current plotting grammar is inspired by
 ggplot2, but Cinderplot is an independent implementation rather than a drop-in
 replacement.
 
+## Install
+
+From the `zhou-lab` conda channel:
+
+```sh
+conda install -c zhou-lab cinderplot
+```
+
 ## Build
 
 Cinderplot requires a C11 compiler and Cairo.
@@ -16,6 +24,9 @@ Cinderplot requires a C11 compiler and Cairo.
 make
 make test
 ```
+
+A conda recipe lives in [`conda-recipe/`](conda-recipe/) — see its README for building
+and publishing to the channel.
 
 ## Examples
 

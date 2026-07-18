@@ -1,0 +1,52 @@
+{% set name = "cinderplot" %}
+{% set version = "0.1.0" %}
+
+package:
+  name: {{ name }}
+  version: {{ version }}
+
+source:
+  # Build the tagged release straight from GitHub. For a local build
+  # (e.g. testing an unreleased change) replace these two lines with:
+  #   path: ..
+  git_url: https://github.com/zhou-lab/cinderplot.git
+  git_rev: v{{ version }}
+
+build:
+  number: 0
+  skip: true  # [win]
+
+requirements:
+  build:
+    - {{ compiler('c') }}
+    - make
+    - pkg-config
+  host:
+    - cairo
+  run:
+    # cairo's run_exports pins the runtime automatically; listed for clarity
+    - cairo
+
+test:
+  commands:
+    - cinderplot --version
+    - cinderplot --help
+
+about:
+  home: https://github.com/zhou-lab/cinderplot
+  license: MIT
+  license_family: MIT
+  license_file: LICENSE
+  summary: Fast C plotter for ggplot2-quality PDF figures and wheatmap-style heatmaps
+  description: |
+    Cinderplot is a small, fast, grammar-inspired plotting tool written in C.
+    It turns CSV data into publication-quality PDF graphics via Cairo, with a
+    ggplot2-flavoured mini-DSL (aes/geom_point/line/col/histogram, facets,
+    log scales) and a wheatmap-style matrix mode (composable heatmaps,
+    annotations, hierarchical clustering, dendrograms, and rigid legends).
+    Dependencies are deliberately minimal: just Cairo and libm.
+  dev_url: https://github.com/zhou-lab/cinderplot
+
+extra:
+  recipe-maintainers:
+    - zwdzwd
