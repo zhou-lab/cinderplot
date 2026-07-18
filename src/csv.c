@@ -32,9 +32,10 @@ static char *read_all(FILE *f) {
     return buf;
 }
 
-/* split one CSV record starting at *p; returns fields (malloc'd), advances
- * *p past the record's newline; returns 0 fields at end of input */
-static int split_record(char **p, StrVec *fields) {
+/* split one record starting at *p using `delim` (',' or '\t'); returns fields
+ * (malloc'd), advances *p past the record's newline; 0 fields at end of input */
+static int split_record(char **p, StrVec *fields, char delim) {
+    char stop[4] = {delim, '\r', '\n', 0};
     char *s = *p;
     if (!*s) return 0;
     int nf = 0;
@@ -57,12 +58,12 @@ static int split_record(char **p, StrVec *fields) {
                 else *o++ = *s++;
             }
             *o = 0;
-            if (*s && *s != ',' && *s != '\r' && *s != '\n') {
+            if (*s && *s != delim && *s != '\r' && *s != '\n') {
                 free(out);
                 return -1;
             }
         } else {
-            size_t len = strcspn(s, ",\r\n");
+            size_t len = strcspn(s, stop);
             out = malloc(len + 1);
             memcpy(out, s, len);
             out[len] = 0;
@@ -70,7 +71,7 @@ static int split_record(char **p, StrVec *fields) {
         }
         sv_push(fields, out);
         nf++;
-        if (*s == ',') { s++; continue; }
+        if (*s == delim) { s++; continue; }
         if (*s == '\r') s++;
         if (*s == '\n') s++;
         break;
@@ -89,9 +90,14 @@ DataFrame *df_read_csv(const char *path, char *err) {
     char *buf = read_all(f);
     if (f != stdin) fclose(f);
 
+    /* sniff the delimiter: tab in the first line => TSV, else comma */
+    char delim = ',';
+    for (const char *q = buf; *q && *q != '\n'; q++)
+        if (*q == '\t') { delim = '\t'; break; }
+
     char *p = buf;
     StrVec header = {0};
-    int hn = split_record(&p, &header);
+    int hn = split_record(&p, &header, delim);
     if (hn < 0) {
         snprintf(err, 256, "%s: malformed quoted field in header", path);
         free(buf);
@@ -107,7 +113,7 @@ DataFrame *df_read_csv(const char *path, char *err) {
     int nrow = 0;
     for (;;) {
         StrVec rec = {0};
-        int nf = split_record(&p, &rec);
+        int nf = split_record(&p, &rec, delim);
         if (nf < 0) {
             snprintf(err, 256, "%s: malformed quoted field in row %d", path, nrow + 2);
             free(buf);
