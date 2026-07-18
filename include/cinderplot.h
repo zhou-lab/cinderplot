@@ -123,7 +123,7 @@ void gt_render(GTable *t, cairo_t *cr);
 typedef struct { char *col; int is_factor; char *expr; } AesEntry; /* col NULL = unset */
 
 typedef enum { GEOM_POINT, GEOM_LINE, GEOM_COL, GEOM_HISTOGRAM, GEOM_BOXPLOT, GEOM_BAR,
-               GEOM_SEGMENT } GeomType;
+               GEOM_SEGMENT, GEOM_RECT } GeomType;
 typedef struct {
     GeomType type;
     int bins;

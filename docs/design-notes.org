@@ -817,6 +817,13 @@ target in examples/genome/ (K562 EPICv2 CNV, hg38 scaffold).
   bin range would clip.
 - Chrom labels can crowd for short chromosomes (17-22) at small widths.
 
+** Follow-up: geom_rect
+Filled rectangles per row from (xmin,ymin) to (xmax,ymax) — ggplot
+xmin/xmax/ymin/ymax aes (aliased onto x/xend/y/yend); genome-offset
+aware; fill via mapped colour/fill aes or a constant fill=. Matches
+ggplot geom_rect; filled legend keys. Requires all four corners for now
+(full-panel region-highlight band, which needs per-layer aes, deferred).
+
 ** M2 (later): locus track-browser
 Third assembler (render_tracks.c): coverage/genes/interval/arcs stacked
 on a single region. Gene models as BED12+ bgzip+tabix (zlib + small

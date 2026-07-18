@@ -100,10 +100,10 @@ static int parse_aes(P *p, PlotSpec *spec) {
         skip_ws(p);
         if (key && *p->s == '=') {
             p->s++;
-            if (!strcmp(key, "x")) e = &spec->x;
-            else if (!strcmp(key, "y")) e = &spec->y;
-            else if (!strcmp(key, "xend")) e = &spec->xend;
-            else if (!strcmp(key, "yend")) e = &spec->yend;
+            if (!strcmp(key, "x") || !strcmp(key, "xmin")) e = &spec->x;
+            else if (!strcmp(key, "y") || !strcmp(key, "ymin")) e = &spec->y;
+            else if (!strcmp(key, "xend") || !strcmp(key, "xmax")) e = &spec->xend;
+            else if (!strcmp(key, "yend") || !strcmp(key, "ymax")) e = &spec->yend;
             else if (!strcmp(key, "chrom") || !strcmp(key, "chr")) e = &spec->chrom;
             else if (!strcmp(key, "colour") || !strcmp(key, "color")
                   || !strcmp(key, "fill")) e = &spec->colour;
@@ -338,6 +338,7 @@ static int parse_term(P *p, PlotSpec *spec) {
     else if (!strcmp(name, "geom_boxplot")) gt = GEOM_BOXPLOT;
     else if (!strcmp(name, "geom_bar")) gt = GEOM_BAR;
     else if (!strcmp(name, "geom_segment")) gt = GEOM_SEGMENT;
+    else if (!strcmp(name, "geom_rect")) gt = GEOM_RECT;
     else is_geom = 0;
     if (is_geom) {
         if (spec->nlayers == MAX_LAYERS) return fail(p, "too many layers", "");
@@ -353,24 +354,25 @@ static int parse_term(P *p, PlotSpec *spec) {
             if (l->bins < 1 || l->bins > 10000)
                 return fail(p, "geom_histogram(bins=...) must be 1..10000", "");
             skip_ws(p);
-        } else if (gt == GEOM_SEGMENT) {
-            /* per-layer data=, y=, color= (for a second data source like CBS segments) */
+        } else if (gt == GEOM_SEGMENT || gt == GEOM_RECT) {
+            /* per-layer data=, y=, color=/fill= (a second data source, or a
+             * constant colour for segments/rects) */
             while (*p->s != ')') {
                 char *key = ident(p);
-                if (!key || expect(p, '=')) return fail(p, "geom_segment() takes data=, y=, color=", "");
+                if (!key || expect(p, '=')) return fail(p, "layer takes data=, y=, color=/fill=", "");
                 skip_ws(p);
                 if (!strcmp(key, "data")) {
                     l->data = string_lit(p);
-                    if (!l->data) return fail(p, "geom_segment(data=...) expects a quoted path", "");
+                    if (!l->data) return fail(p, "data= expects a quoted path", "");
                 } else if (!strcmp(key, "y")) {
                     l->ycol = ident(p);
-                    if (!l->ycol) return fail(p, "geom_segment(y=...) expects a column name", "");
-                } else if (!strcmp(key, "color") || !strcmp(key, "colour")) {
+                    if (!l->ycol) return fail(p, "y= expects a column name", "");
+                } else if (!strcmp(key, "color") || !strcmp(key, "colour") || !strcmp(key, "fill")) {
                     char *v = string_lit(p);
                     if (!v || parse_color(v, &l->color))
-                        return fail(p, "geom_segment(color=...) bad colour", "");
+                        return fail(p, "bad colour for `%s`", key);
                     l->has_color = 1;
-                } else return fail(p, "geom_segment() option `%s` not implemented", key);
+                } else return fail(p, "layer option `%s` not implemented", key);
                 skip_ws(p);
                 if (*p->s == ',') { p->s++; skip_ws(p); }
             }

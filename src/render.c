@@ -209,9 +209,12 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             return -1;
         }
     }
-    /* geom_segment endpoints (xend required, yend defaults to y = horizontal) */
-    int hasseg = 0;
-    for (int i = 0; i < spec->nlayers; i++) if (spec->layers[i].type == GEOM_SEGMENT) hasseg = 1;
+    /* geom_segment/rect endpoints (xend required, yend defaults to y) */
+    int hasseg = 0, hasrect = 0;
+    for (int i = 0; i < spec->nlayers; i++) {
+        if (spec->layers[i].type == GEOM_SEGMENT) hasseg = 1;
+        if (spec->layers[i].type == GEOM_RECT) hasrect = 1;
+    }
     const Column *xec = NULL, *yec = NULL;
     if (spec->xend.col) {
         xec = df_col(df, spec->xend.col);
@@ -223,6 +226,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     }
     if (hasseg && !xec && !disc_x) {
         sprintf(err, "geom_segment() needs aes(xend=...)"); return -1;
+    }
+    if (hasrect && (!xec || !yec)) {
+        sprintf(err, "geom_rect() needs aes(xmin, xmax, ymin, ymax)"); return -1;
     }
     /* genome coordinate x-scale: concatenate chromosomes via seqinfo offsets */
     int genome_x = spec->genome_seqinfo != NULL;
@@ -550,7 +556,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         pal = malloc(cf->nlev * sizeof(Col));
         hue_palette(cf->nlev, pal);
         leg = build_legend(cr, spec->lab_colour ? spec->lab_colour : spec->colour.expr,
-                           cf, pal, haspoint, hasline || hasseg, hasbox || hasbar);
+                           cf, pal, haspoint, hasline || hasseg, hasbox || hasbar || hasrect);
     }
 
     /* ---- outer table ---- */
@@ -757,6 +763,22 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                                      : TXR(r));
                     g->y0 = NPCY(TY(yc->num[r]));
                     g->y1 = NPCY(yec ? TY(yec->num[r]) : TY(yc->num[r]));
+                }
+            } else if (gt == GEOM_RECT) {
+                /* filled rectangle per row: (xmin,ymin) .. (xmax,ymax) */
+                Col fixed = spec->layers[li].has_color ? spec->layers[li].color : C_BAR;
+                for (int r = 0; r < df->nrow; r++) {
+                    if (!use[r] || (ff && ff->idx[r] != p)) continue;
+                    if (isnan(xec->num[r]) || isnan(yec->num[r])) continue;
+                    double a = NPCX(TXR(r));
+                    double b = NPCX(genome_x ? GX(r, xec->num[r])
+                                  : spec->log_x ? log10(xec->num[r]) : xec->num[r]);
+                    double c0 = NPCY(TY(yc->num[r])), d = NPCY(TY(yec->num[r]));
+                    g = gt_add(T, G_RECT, R, C, R, C);
+                    g->col = cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : fixed;
+                    g->sub = 1; g->clip = 1;
+                    g->x0 = fmin(a, b); g->x1 = fmax(a, b);
+                    g->y0 = fmin(c0, d); g->y1 = fmax(c0, d);
                 }
             } else if (gt == GEOM_BOXPLOT) {
                 /* five-number summary + Tukey whiskers + outliers, in
