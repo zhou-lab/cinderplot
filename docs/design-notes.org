@@ -450,6 +450,48 @@ gained ZERO lines for heatmaps.
 - Per-object colormaps (each heatmap its own scale) not yet — one
   shared fill scale for now.
 
+* Milestone: heatmap spike 2 — clustering + dendrograms            :spike:
+Result [2026-07-18], in the cinderplot repo. hclust + dendrograms
+land; the anchor-canvas assembler gained clustering with no engine
+changes (dendrogram segments are ordinary G_LINE grobs).
+
+** New pieces
+- =src/cluster.c= :: R-compatible hclust. Euclidean dist (R's NA
+  pairwise scaling p/#complete), Ward.D2 via Lance-Williams on squared
+  distances, R merge convention (singletons-before-clusters, ascending
+  id), leaf order by recursive first-then-second expansion. Naive
+  O(n^3), fine for heatmap sizes.
+- =tests/cluster_check.c= :: dumps order+heights for R comparison.
+- DSL: heatmap(cluster=rows|cols|both|none); dendrogram(placement)
+  (left/right = row tree, top/beneath = column tree).
+
+** Ergonomic win over wheatmap R
+Anchored objects INHERIT the clustered order automatically: a
+top/beneath annotation inherits the anchor's column order, a
+left/right annotation its row order, and dendrogram() pulls the
+anchor's tree + order. No manual reordering (wheatmap R makes you pass
+grp[clust$order]). Implemented via per-heatmap display->data maps
+(roword/coword), identity when unclustered — so unclustered output is
+byte-unchanged (composite regression 0 px).
+
+** Verified
+- C order + merge heights == R hclust(dist(m),"ward.D2") EXACTLY for
+  expr.csv rows (20) and cols (12).
+- Clustered heatmap + both dendrograms + inherited annotation matches
+  wheatmap R (both.cluster): same column block pattern 2/3/2/1/4 (hue
+  differs: our ggplot palette vs Set1). Dendrogram topology matches;
+  our right-angle brackets render cleaner than wheatmap's.
+- Regression: unclustered composite 0 px diff; grammar-mode test suite
+  passes; dendrogram-without-cluster errors clearly.
+
+** Deferred (spike 3 and beyond)
+- Auto-margin measurement (fixed 30pt legend slack, no row/col tick
+  labels yet).
+- Dendrogram depth default 0.2*anchor (wheatmap uses its own); width=/
+  height= override works.
+- Raster mode (>200k cells still errors); horizontal legends; per-
+  object colormaps; drawing rownames/colnames.
+
 * Next: algorithms discussion agenda                                  :next:
 - Layout constraint solver — what grid's viewport/unit system buys and
   how much of it is needed.

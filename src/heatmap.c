@@ -27,10 +27,42 @@ typedef struct {
     double l, b, w, h;              /* npc canvas rect (y up) */
     int nr, nc;
     Matrix *m;                      /* heatmap */
+    int *roword, *coword;           /* heatmap: display slot -> data index */
+    HClust *rowclust, *colclust;    /* heatmap: trees (NULL if unclustered) */
     int ann_n, ann_horiz;           /* annotation */
-    Col *ann_col;
+    Col *ann_col;                   /* data order */
+    int *ann_ord;                   /* annotation: display slot -> data index */
     int target;                     /* legend: index of source heatmap */
+    HClust *tree; int dir, nleaf;   /* dendrogram */
+    int *slot;                      /* dendrogram: data index -> display slot */
 } RObj;
+
+/* dendrogram orientations */
+enum { DEND_LEFT, DEND_RIGHT, DEND_TOP, DEND_BENEATH };
+
+/* cluster the rows (dim==0) or cols (dim==1) of m; returns tree, fills
+ * a freshly-malloc'd display-order array into *ord (display slot -> data) */
+static HClust *cluster_dim(const Matrix *m, int dim, int **ord, char *err) {
+    int n = dim == 0 ? m->nr : m->nc;
+    int p = dim == 0 ? m->nc : m->nr;
+    double *obs = malloc((size_t)n * p * sizeof(double));
+    for (int i = 0; i < n; i++)
+        for (int k = 0; k < p; k++)
+            obs[(size_t)i * p + k] = dim == 0 ? m->v[(size_t)i * m->nc + k]
+                                              : m->v[(size_t)k * m->nc + i];
+    HClust *h = hclust_ward(obs, n, p, err);
+    free(obs);
+    if (!h) return NULL;
+    *ord = malloc(n * sizeof(int));
+    memcpy(*ord, h->order, n * sizeof(int));
+    return h;
+}
+
+static int *identity(int n) {
+    int *v = malloc(n * sizeof(int));
+    for (int i = 0; i < n; i++) v[i] = i;
+    return v;
+}
 
 static Matrix *matrix_from_df(const DataFrame *df, char *err) {
     int c0 = df->ncol && df->cols[0].type == COL_STR ? 1 : 0;
@@ -64,6 +96,50 @@ static int find_obj(RObj *ro, int n, const char *name) {
     return -1;
 }
 
+/* map (leaf fraction lf in [0,1], depth fraction df in [0,1]) to canvas
+ * npc for a dendrogram of the given orientation and rect. df=0 is the
+ * leaf edge (touching the heatmap); df=1 is the root. */
+static void dend_xy(const RObj *r, double lf, double df, double *x, double *y) {
+    switch (r->dir) {
+    case DEND_LEFT:    *x = r->l + r->w * (1 - df); *y = r->b + r->h * (1 - lf); break;
+    case DEND_RIGHT:   *x = r->l + r->w * df;       *y = r->b + r->h * (1 - lf); break;
+    case DEND_TOP:     *x = r->l + r->w * lf;       *y = r->b + r->h * df;       break;
+    default:           *x = r->l + r->w * lf;       *y = r->b + r->h * (1 - df); break;
+    }
+}
+
+static void dend_seg(GTable *T, int CR, int CC, const RObj *r,
+                     double lf0, double df0, double lf1, double df1) {
+    double x0, y0, x1, y1;
+    dend_xy(r, lf0, df0, &x0, &y0);
+    dend_xy(r, lf1, df1, &x1, &y1);
+    Grob *g = gt_add(T, G_LINE, CR, CC, CR, CC);
+    g->col = C_BLACK; g->lw = lw_pt(0.5);
+    g->x0 = x0; g->y0 = y0; g->x1 = x1; g->y1 = y1;
+}
+
+/* draw the tree as inverted-U brackets; positions bottom-up over merges */
+static void draw_dendro(GTable *T, int CR, int CC, const RObj *r) {
+    HClust *t = r->tree;
+    int nn = t->n;
+    double maxh = nn > 1 ? t->height[nn - 2] : 1;
+    if (maxh <= 0) maxh = 1;
+    double *npos = malloc((nn - 1) * sizeof(double));   /* node leaf-fraction */
+    for (int s = 0; s < nn - 1; s++) {
+        int a = t->merge[s][0], b = t->merge[s][1];
+        double pa = a < 0 ? (r->slot[-a - 1] + 0.5) / nn : npos[a - 1];
+        double pb = b < 0 ? (r->slot[-b - 1] + 0.5) / nn : npos[b - 1];
+        double ha = a < 0 ? 0 : t->height[a - 1] / maxh;
+        double hb = b < 0 ? 0 : t->height[b - 1] / maxh;
+        double hs = t->height[s] / maxh;
+        dend_seg(T, CR, CC, r, pa, ha, pa, hs);         /* riser A */
+        dend_seg(T, CR, CC, r, pb, hb, pb, hs);         /* riser B */
+        dend_seg(T, CR, CC, r, pa, hs, pb, hs);         /* crossbar */
+        npos[s] = (pa + pb) / 2;
+    }
+    free(npos);
+}
+
 int render_heatmap(const PlotSpec *spec, const char *out,
                    double w_pt, double h_pt, char *err) {
     RObj ro[MAX_HMOBJS];
@@ -81,6 +157,16 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             if (!(ro[i].m = matrix_from_df(df, err))) return -1;
             ro[i].nr = ro[i].m->nr;
             ro[i].nc = ro[i].m->nc;
+            ro[i].roword = identity(ro[i].nr);
+            ro[i].coword = identity(ro[i].nc);
+            if (o->cluster == CL_ROWS || o->cluster == CL_BOTH) {
+                free(ro[i].roword);
+                if (!(ro[i].rowclust = cluster_dim(ro[i].m, 0, &ro[i].roword, err))) return -1;
+            }
+            if (o->cluster == CL_COLS || o->cluster == CL_BOTH) {
+                free(ro[i].coword);
+                if (!(ro[i].colclust = cluster_dim(ro[i].m, 1, &ro[i].coword, err))) return -1;
+            }
         }
 
         /* anchor */
@@ -128,6 +214,33 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             }
             ro[i].nr = ro[i].ann_horiz ? 1 : ro[i].ann_n;
             ro[i].nc = ro[i].ann_horiz ? ro[i].ann_n : 1;
+            /* inherit the anchor heatmap's ordering (col order if the
+             * annotation runs horizontally, row order if vertically) */
+            if (a->o->type == HM_HEATMAP)
+                ro[i].ann_ord = ro[i].ann_horiz ? a->coword : a->roword;
+            if (!ro[i].ann_ord) ro[i].ann_ord = identity(ro[i].ann_n);
+        }
+        if (o->type == HM_DENDROGRAM) {
+            if (!a || a->o->type != HM_HEATMAP) {
+                sprintf(err, "dendrogram() must be placed relative to a heatmap");
+                return -1;
+            }
+            int horiz = pl->kind == PL_TOP_OF || pl->kind == PL_BENEATH;
+            HClust *tree = horiz ? a->colclust : a->rowclust;
+            if (!tree) {
+                sprintf(err, "dendrogram() needs the heatmap `%s` clustered on that axis "
+                             "(add cluster=%s)", a->o->name, horiz ? "cols" : "rows");
+                return -1;
+            }
+            ro[i].tree = tree;
+            ro[i].nleaf = tree->n;
+            ro[i].dir = pl->kind == PL_LEFT_OF ? DEND_LEFT
+                      : pl->kind == PL_RIGHT_OF ? DEND_RIGHT
+                      : pl->kind == PL_TOP_OF ? DEND_TOP : DEND_BENEATH;
+            int *word = horiz ? a->coword : a->roword;
+            ro[i].slot = malloc(tree->n * sizeof(int));
+            for (int s = 0; s < tree->n; s++) ro[i].slot[word[s]] = s;
+            ro[i].nr = 1; ro[i].nc = 1;
         }
         if (o->type == HM_LEGEND) {
             any_legend = 1;
@@ -154,6 +267,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
         case PL_BENEATH:
             H = pl->height >= 0 ? pl->height
               : o->type == HM_LEGEND ? a->h
+              : o->type == HM_DENDROGRAM ? 0.2 * a->h
               : clampr((double)ro[i].nr / a->nr) * a->h;
             ro[i].l = a->l; ro[i].w = a->w; ro[i].h = H;
             ro[i].b = pl->kind == PL_TOP_OF ? a->b + a->h + pl->pad
@@ -163,6 +277,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
         case PL_LEFT_OF:
             W = pl->width >= 0 ? pl->width
               : o->type == HM_LEGEND ? 0.05
+              : o->type == HM_DENDROGRAM ? 0.2 * a->w
               : clampr((double)ro[i].nc / a->nc) * a->w;
             ro[i].b = a->b; ro[i].h = a->h; ro[i].w = W;
             ro[i].l = pl->kind == PL_RIGHT_OF ? a->l + a->w + pl->pad
@@ -247,18 +362,21 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             double cw = r->w / m->nc, chh = r->h / m->nr;
             for (int rr = 0; rr < m->nr; rr++)
                 for (int cc = 0; cc < m->nc; cc++) {
-                    double v = m->v[(size_t)rr * m->nc + cc];
+                    /* display slot (rr,cc) shows the clustered-order cell */
+                    double v = m->v[(size_t)r->roword[rr] * m->nc + r->coword[cc]];
                     g = gt_add(T, G_RECT, CR, CC, CR, CC);
                     g->sub = 1;
                     g->col = isnan(v) ? C_NA : fill_map_value(&spec->fill, v, dmin, dmax);
                     g->x0 = r->l + cc * cw; g->x1 = g->x0 + cw;
                     g->y1 = r->b + r->h - rr * chh; g->y0 = g->y1 - chh;
                 }
+        } else if (r->o->type == HM_DENDROGRAM) {
+            draw_dendro(T, CR, CC, r);
         } else if (r->o->type == HM_ANNOTATION) {
             for (int k = 0; k < r->ann_n; k++) {
                 g = gt_add(T, G_RECT, CR, CC, CR, CC);
                 g->sub = 1;
-                g->col = r->ann_col[k];
+                g->col = r->ann_col[r->ann_ord[k]];   /* inherited order */
                 if (r->ann_horiz) {
                     double cw = r->w / r->ann_n;
                     g->x0 = r->l + k * cw; g->x1 = g->x0 + cw;

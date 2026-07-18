@@ -127,11 +127,13 @@ typedef struct {
     char *anchor;                  /* NULL = previous object */
     double pad, width, height;     /* npc; width/height < 0 = auto */
 } HPlace;
-typedef enum { HM_HEATMAP, HM_ANNOTATION, HM_LEGEND } HMType;
+typedef enum { HM_HEATMAP, HM_ANNOTATION, HM_LEGEND, HM_DENDROGRAM } HMType;
+typedef enum { CL_NONE, CL_ROWS, CL_COLS, CL_BOTH } ClusterMode;
 typedef struct {
     HMType type;
     char *name;                    /* auto-assigned if absent */
     char *data;                    /* heatmap/annotation: csv path */
+    ClusterMode cluster;           /* heatmap only */
     HPlace place;
 } HMObj;
 #define MAX_HMOBJS 16
@@ -155,6 +157,15 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err);  /* 0 = ok */
 /* ---------- render.c ---------- */
 int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 double w_pt, double h_pt, char *err);
+
+/* ---------- cluster.c: hclust ward.D2, R-compatible ---------- */
+typedef struct {
+    int n;
+    int (*merge)[2];               /* R convention: <0 leaf (1-based), >0 step */
+    double *height;                /* ascending */
+    int *order;                    /* 0-based leaf indices, display order */
+} HClust;
+HClust *hclust_ward(const double *x, int n, int p, char *err);
 
 /* ---------- heatmap.c: matrix mode (wheatmap port) ---------- */
 typedef struct {

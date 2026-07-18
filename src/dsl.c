@@ -221,7 +221,15 @@ static int parse_hm_args(P *p, HMObj *o, int want_data) {
                 char *v = string_lit(p);
                 if (!v) return fail(p, "data= expects a quoted path", "");
                 o->data = v;
-            } else return fail(p, "option `%s` not implemented; supported: name=, data=, placements", key);
+            } else if (!strcmp(key, "cluster")) {
+                char *v = ident(p);
+                if (!v) return fail(p, "cluster= expects rows, cols, both, or none", "");
+                if (!strcmp(v, "rows")) o->cluster = CL_ROWS;
+                else if (!strcmp(v, "cols") || !strcmp(v, "columns")) o->cluster = CL_COLS;
+                else if (!strcmp(v, "both")) o->cluster = CL_BOTH;
+                else if (!strcmp(v, "none")) o->cluster = CL_NONE;
+                else return fail(p, "cluster=%s invalid; use rows, cols, both, or none", v);
+            } else return fail(p, "option `%s` not implemented; supported: name=, data=, cluster=, placements", key);
         } else {
             p->s = save;
             char *v = raw_token(p);
@@ -295,6 +303,12 @@ static int parse_term(P *p, PlotSpec *spec) {
         HMObj *o = hm_new(p, spec, HM_LEGEND);
         if (!o) return -1;
         o->place.kind = PL_RIGHT_OF;             /* sensible default */
+        return parse_hm_args(p, o, 0);
+    }
+    if (!strcmp(name, "dendrogram")) {
+        HMObj *o = hm_new(p, spec, HM_DENDROGRAM);
+        if (!o) return -1;
+        o->place.kind = PL_LEFT_OF;              /* default: row tree left */
         return parse_hm_args(p, o, 0);
     }
     if (!strncmp(name, "scale_fill_", 11)) {
