@@ -187,6 +187,57 @@ static int parse_place(P *p, const char *kind, HPlace *pl) {
     }
 }
 
+/* ---- track (locus-browser) mode ---- */
+static TrackObj *trk_new(P *p, PlotSpec *spec, TrackType t) {
+    if (spec->ntracks == MAX_TRACKS) { fail(p, "too many tracks", ""); return NULL; }
+    TrackObj *o = &spec->tobjs[spec->ntracks++];
+    memset(o, 0, sizeof *o);
+    o->type = t;
+    return o;
+}
+
+static int parse_trk_args(P *p, TrackObj *o) {
+    skip_ws(p);
+    if (*p->s == ')') { p->s++; goto done; }
+    for (;;) {
+        skip_ws(p);
+        const char *save = p->s;
+        char *key = ident(p);
+        skip_ws(p);
+        if (key && *p->s == '=') {
+            p->s++;
+            if (!strcmp(key, "name")) {
+                o->name = string_lit(p);
+                if (!o->name) return fail(p, "name= expects a quoted string", "");
+            } else if (!strcmp(key, "height")) {
+                skip_ws(p); o->height = strtod(p->s, (char **)&p->s);
+            } else if (!strcmp(key, "max")) {
+                skip_ws(p); o->max_value = strtod(p->s, (char **)&p->s);
+            } else if (!strcmp(key, "color") || !strcmp(key, "colour")) {
+                char *v = string_lit(p);
+                if (!v || parse_color(v, &o->color)) return fail(p, "bad track colour", "");
+                o->has_color = 1;
+            } else if (!strcmp(key, "data")) {
+                o->data = string_lit(p);
+                if (!o->data) return fail(p, "data= expects a quoted path", "");
+            } else return fail(p, "track option `%s` not implemented; supported: "
+                                  "name, height, max, color, data", key);
+        } else {
+            p->s = save;
+            char *v = raw_token(p);
+            if (!v || o->data) return fail(p, "unexpected argument near \"%.20s\"", save);
+            o->data = v;
+        }
+        skip_ws(p);
+        if (*p->s == ',') { p->s++; continue; }
+        if (expect(p, ')')) return -1;
+        break;
+    }
+done:
+    if (!o->data) return fail(p, "this track needs a data file", "");
+    return 0;
+}
+
 static HMObj *hm_new(P *p, PlotSpec *spec, HMType t) {
     if (spec->nhobjs == MAX_HMOBJS) { fail(p, "too many heatmap objects", ""); return NULL; }
     HMObj *o = &spec->hobjs[spec->nhobjs++];
@@ -399,6 +450,17 @@ static int parse_term(P *p, PlotSpec *spec) {
         return expect(p, ')');
     }
 
+    /* ---- track (locus-browser) mode ---- */
+    if (!strcmp(name, "region")) {
+        spec->region = raw_token(p);       /* chr:start-end (bare or quoted) */
+        if (!spec->region) return fail(p, "region() expects chr:start-end", "");
+        return expect(p, ')');
+    }
+    if (!strcmp(name, "coverage")) { TrackObj *o = trk_new(p, spec, TRK_COVERAGE); return o ? parse_trk_args(p, o) : -1; }
+    if (!strcmp(name, "interval")) { TrackObj *o = trk_new(p, spec, TRK_INTERVAL); return o ? parse_trk_args(p, o) : -1; }
+    if (!strcmp(name, "genes"))    { TrackObj *o = trk_new(p, spec, TRK_GENES);    return o ? parse_trk_args(p, o) : -1; }
+    if (!strcmp(name, "arcs"))     { TrackObj *o = trk_new(p, spec, TRK_ARCS);     return o ? parse_trk_args(p, o) : -1; }
+
     /* ---- matrix (wheatmap) mode ---- */
     if (!strcmp(name, "heatmap")) {
         HMObj *o = hm_new(p, spec, HM_HEATMAP);
@@ -440,7 +502,8 @@ static int parse_term(P *p, PlotSpec *spec) {
     return fail(p, "`%s()` is not implemented; supported: aes(), geom_point(), "
                    "geom_line(), geom_col(), geom_histogram(), geom_boxplot(), geom_bar(), labs(), "
                    "facet_wrap(~var), scale_x_log10(), scale_y_log10(), "
-                   "heatmap(), annotation(), legend(), scale_fill_*()", name);
+                   "heatmap(), annotation(), legend(), scale_fill_*(), "
+                   "region(), coverage(), interval(), genes(), arcs()", name);
 }
 
 int dsl_parse(const char *src, PlotSpec *spec, char *err) {
@@ -448,23 +511,33 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
     memset(spec, 0, sizeof *spec);
     spec->fill.kind = FILL_VIRIDIS;              /* default heatmap fill */
 
-    /* data term: everything up to the first '+' that has no '(' */
+    /* leading data term, unless the first term is a function call (track
+     * mode starts with region()/coverage() — no top-level data file) */
     skip_ws(&p);
     const char *s = p.s;
     while (*p.s && *p.s != '+' && !isspace((unsigned char)*p.s)) {
         if (*p.s == '(') break;
         p.s++;
     }
-    if (*p.s == '(')
-        return fail(&p, "the first term must be the data file (e.g. data.csv + aes(...))", "");
-    spec->data_path = strndup(s, p.s - s);
-    if (!*spec->data_path) return fail(&p, "missing data file at start of spec", "");
+    if (*p.s == '(') {                 /* function-first: no data file */
+        p.s = s;
+        if (parse_term(&p, spec)) return -1;
+    } else {
+        spec->data_path = strndup(s, p.s - s);
+        if (!*spec->data_path) return fail(&p, "missing data file at start of spec", "");
+    }
 
     for (;;) {
         skip_ws(&p);
         if (!*p.s) break;
         if (expect(&p, '+')) return -1;
         if (parse_term(&p, spec)) return -1;
+    }
+
+    if (spec->ntracks > 0) {           /* track (locus-browser) mode */
+        if (spec->nlayers || spec->nhobjs || spec->x.col)
+            return fail(&p, "track functions cannot be mixed with grammar/heatmap", "");
+        return 0;
     }
 
     if (spec->nhobjs > 0) {                      /* matrix mode */

@@ -50,7 +50,7 @@ static int append_quoted(char *buf, size_t cap, size_t *len, const char *s) {
 int main(int argc, char **argv) {
     const char *out = "plot.pdf", *expr = NULL, *data = NULL;
     const char *fx = NULL, *fy = NULL, *fc = NULL, *ff = NULL, *ft = NULL;
-    const char *fm = "point", *flog = NULL;
+    const char *fm = "point", *flog = NULL, *fregion = NULL;
     double w_in = 6, h_in = 4;
     int dump = 0;
 
@@ -64,6 +64,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "-t") && i + 1 < argc) ft = argv[++i];
         else if (!strcmp(a, "-m") && i + 1 < argc) fm = argv[++i];
         else if (!strcmp(a, "--log") && i + 1 < argc) flog = argv[++i];
+        else if ((!strcmp(a, "-r") || !strcmp(a, "--region")) && i + 1 < argc) fregion = argv[++i];
         else if (!strcmp(a, "--size") && i + 1 < argc) {
             char tail;
             if (sscanf(argv[++i], "%lfx%lf%c", &w_in, &h_in, &tail) != 2
@@ -114,6 +115,15 @@ int main(int argc, char **argv) {
     if (dsl_parse(expr, &spec, err)) {
         fprintf(stderr, "cinderplot: %s\n", err);
         return 1;
+    }
+    if (spec.ntracks > 0) {                      /* track (locus-browser) mode */
+        if (!spec.region) spec.region = (char *)fregion;   /* --region flag */
+        if (render_tracks(&spec, out, w_in * 72, h_in * 72, err)) {
+            fprintf(stderr, "cinderplot: %s\n", err);
+            return 1;
+        }
+        fprintf(stderr, "wrote %s\n", out);
+        return 0;
     }
     if (spec.nhobjs > 0) {                       /* matrix (wheatmap) mode */
         if (render_heatmap(&spec, out, w_in * 72, h_in * 72, err)) {

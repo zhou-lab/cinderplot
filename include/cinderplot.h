@@ -154,6 +154,18 @@ typedef struct {
 } HMObj;
 #define MAX_HMOBJS 16
 
+/* track (locus-browser) mode: stacked tracks over one genomic region */
+typedef enum { TRK_COVERAGE, TRK_INTERVAL, TRK_GENES, TRK_ARCS } TrackType;
+typedef struct {
+    TrackType type;
+    char *data;          /* input file (BED/bedGraph/GFF/BEDPE) */
+    char *name;          /* left-margin label */
+    double height;       /* row weight (<=0 = auto) */
+    double max_value;    /* coverage y-max (<=0 = auto) */
+    Col color; int has_color;
+} TrackObj;
+#define MAX_TRACKS 12
+
 typedef struct {
     char *data_path;
     AesEntry x, y, colour;          /* colour also accepts fill= */
@@ -173,6 +185,10 @@ typedef struct {
     /* grammar mode: continuous colour scale (scale_colour_gradient*) */
     FillScale colour_scale;
     int has_colour_scale;
+    /* track mode (locus browser) */
+    TrackObj tobjs[MAX_TRACKS];
+    int ntracks;
+    char *region;                   /* chr:start-end */
 } PlotSpec;
 
 int dsl_parse(const char *src, PlotSpec *spec, char *err);  /* 0 = ok */
@@ -180,6 +196,10 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err);  /* 0 = ok */
 /* ---------- render.c ---------- */
 int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 double w_pt, double h_pt, char *err);
+
+/* ---------- render_tracks.c: locus track-browser mode ---------- */
+int render_tracks(const PlotSpec *spec, const char *out,
+                  double w_pt, double h_pt, char *err);
 
 /* ---------- cluster.c: hclust ward.D2, R-compatible ---------- */
 typedef struct {
