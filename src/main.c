@@ -21,7 +21,8 @@ static const char *USAGE =
     "          + labs(title=\"...\") + facet_wrap(~g)'\n"
     "  flags: -x COL -y COL [-c COL] [-f COL] [-t TITLE] [-m point|line|col|histogram]\n"
     "         [--log x|y|xy]                              (desugar to the DSL)\n"
-    "  data \"-\" or omitted = stdin\n";
+    "  data \"-\" or omitted = stdin\n"
+    "  --version, --help\n";
 
 static int appendf(char *buf, size_t cap, size_t *len, const char *fmt, ...) {
     if (*len >= cap) return -1;
@@ -72,6 +73,7 @@ int main(int argc, char **argv) {
             }
         }
         else if (!strcmp(a, "--dump-spec")) dump = 1;
+        else if (!strcmp(a, "--version") || !strcmp(a, "-V")) { printf("cinderplot %s\n", CINDERPLOT_VERSION); return 0; }
         else if (!strcmp(a, "-h") || !strcmp(a, "--help")) { printf("%s", USAGE); return 0; }
         else if (strchr(a, '(')) expr = a;
         else if (a[0] == '-' && a[1]) { fprintf(stderr, "cinderplot: unknown flag %s\n%s", a, USAGE); return 1; }

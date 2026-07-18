@@ -2,6 +2,8 @@
 #ifndef CINDERPLOT_H
 #define CINDERPLOT_H
 
+#define CINDERPLOT_VERSION "0.1.0"
+
 #include <cairo.h>
 
 typedef struct { double r, g, b; } Col;
