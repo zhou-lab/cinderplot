@@ -70,6 +70,25 @@ void gt_render(GTable *t, cairo_t *cr) {
                 cairo_rectangle(cr, rx, ry, rw, rh);
             cairo_fill(cr);
             break;
+        case G_IMAGE: {
+            /* one image pixel per cell, scaled into the sub-rect with a
+             * nearest filter so cell edges stay crisp (geom_raster) */
+            int iw = g->img_w, ih = g->img_h;
+            int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, iw);
+            cairo_surface_t *img = cairo_image_surface_create_for_data(
+                g->img, CAIRO_FORMAT_ARGB32, iw, ih, stride);
+            double tx0 = DX(g->x0), ty0 = DY(g->y1);          /* top-left */
+            double tw = (g->x1 - g->x0) * rw, th = (g->y1 - g->y0) * rh;
+            cairo_save(cr);
+            cairo_translate(cr, tx0, ty0);
+            cairo_scale(cr, tw / iw, th / ih);
+            cairo_set_source_surface(cr, img, 0, 0);
+            cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_NEAREST);
+            cairo_paint(cr);
+            cairo_restore(cr);
+            cairo_surface_destroy(img);
+            break;
+        }
         case G_POLYLINE:
             set_col(cr, g->col);
             cairo_set_line_width(cr, g->lw);

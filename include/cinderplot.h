@@ -82,7 +82,7 @@ static inline Unit upt(double v)   { Unit u = {U_PT, v};   return u; }
 static inline Unit unull(double w) { Unit u = {U_NULL, w}; return u; }
 
 typedef enum { G_RECT, G_LINE, G_POLYLINE, G_TEXT, G_POINTS, G_TABLE,
-               G_AXIS_X, G_AXIS_Y } GType;
+               G_AXIS_X, G_AXIS_Y, G_IMAGE } GType;
 typedef enum { V_TOP, V_BOTTOM, V_INKCENTER } VAlign;
 
 typedef struct GTable GTable;
@@ -99,6 +99,7 @@ typedef struct {
     const double *px, *py; const Col *pcol; double radius;
     char **labels;                             /* axis tick labels */
     GTable *child;
+    unsigned char *img; int img_w, img_h;      /* G_IMAGE: ARGB32 buffer */
 } Grob;
 
 #define GT_MAXDIM 32

@@ -16,11 +16,28 @@
 #include "cinderplot.h"
 #include <cairo-pdf.h>
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #define MIN_RATIO 0.02
+
+/* Heatmap bodies with more than this many cells are drawn as ONE embedded
+ * image (a pixel per cell, nearest-scaled) instead of N vector rectangles,
+ * so the PDF and draw time stay flat for large matrices. Below it, stay
+ * vector — keeps small heatmaps byte-identical. */
+#define RASTER_MIN_CELLS 2000
+#define RASTER_MAX_CELLS 25000000L      /* ~100 MB ARGB buffer ceiling */
+
+/* colour -> cairo ARGB32 pixel (native-endian 0xAARRGGBB, opaque) */
+static uint32_t col_argb(Col c) {
+    int r = (int)(c.r * 255 + 0.5), g = (int)(c.g * 255 + 0.5), b = (int)(c.b * 255 + 0.5);
+    r = r < 0 ? 0 : r > 255 ? 255 : r;
+    g = g < 0 ? 0 : g > 255 ? 255 : g;
+    b = b < 0 ? 0 : b > 255 ? 255 : b;
+    return 0xFF000000u | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+}
 
 /* Legends are RIGID chrome, sized in physical units (never coupled to the
  * matrix), following ComplexHeatmap: bar 4mm thick, ~28mm long. */
@@ -490,8 +507,8 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             if (m->v[k] > dmax) dmax = m->v[k];
         }
     }
-    if (ncells > 200000) {
-        sprintf(err, "matrix too large for vector cells (%ld); raster mode not implemented yet", ncells);
+    if (ncells > RASTER_MAX_CELLS) {
+        sprintf(err, "matrix too large (%ld cells > %ld); downsample first", ncells, RASTER_MAX_CELLS);
         return -1;
     }
     if (dmin > dmax) { sprintf(err, "no finite values in matrix"); return -1; }
@@ -615,17 +632,36 @@ int render_heatmap(const PlotSpec *spec, const char *out,
         RObj *r = &ro[i];
         if (r->o->type == HM_HEATMAP) {
             Matrix *m = r->m;
-            double cw = r->w / m->nc, chh = r->h / m->nr;
-            for (int rr = 0; rr < m->nr; rr++)
-                for (int cc = 0; cc < m->nc; cc++) {
-                    /* display slot (rr,cc) shows the clustered-order cell */
-                    double v = m->v[(size_t)r->roword[rr] * m->nc + r->coword[cc]];
-                    g = gt_add(T, G_RECT, CR, CC, CR, CC);
-                    g->sub = 1;
-                    g->col = isnan(v) ? C_NA : fill_map_value(&spec->fill, v, dmin, dmax);
-                    g->x0 = r->l + cc * cw; g->x1 = g->x0 + cw;
-                    g->y1 = r->b + r->h - rr * chh; g->y0 = g->y1 - chh;
+            if ((long)m->nr * m->nc > RASTER_MIN_CELLS) {
+                /* raster: fill an ARGB image (one pixel per display cell)
+                 * and embed it as a single grob */
+                int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, m->nc);
+                unsigned char *buf = malloc((size_t)m->nr * stride);
+                for (int rr = 0; rr < m->nr; rr++) {
+                    uint32_t *row = (uint32_t *)(buf + (size_t)rr * stride);
+                    for (int cc = 0; cc < m->nc; cc++) {
+                        double v = m->v[(size_t)r->roword[rr] * m->nc + r->coword[cc]];
+                        row[cc] = isnan(v) ? col_argb(C_NA)
+                                : col_argb(fill_map_value(&spec->fill, v, dmin, dmax));
+                    }
                 }
+                g = gt_add(T, G_IMAGE, CR, CC, CR, CC);
+                g->img = buf; g->img_w = m->nc; g->img_h = m->nr; g->clip = 1;
+                g->x0 = r->l; g->x1 = r->l + r->w;
+                g->y0 = r->b; g->y1 = r->b + r->h;
+            } else {
+                double cw = r->w / m->nc, chh = r->h / m->nr;
+                for (int rr = 0; rr < m->nr; rr++)
+                    for (int cc = 0; cc < m->nc; cc++) {
+                        /* display slot (rr,cc) shows the clustered-order cell */
+                        double v = m->v[(size_t)r->roword[rr] * m->nc + r->coword[cc]];
+                        g = gt_add(T, G_RECT, CR, CC, CR, CC);
+                        g->sub = 1;
+                        g->col = isnan(v) ? C_NA : fill_map_value(&spec->fill, v, dmin, dmax);
+                        g->x0 = r->l + cc * cw; g->x1 = g->x0 + cw;
+                        g->y1 = r->b + r->h - rr * chh; g->y0 = g->y1 - chh;
+                    }
+            }
         } else if (r->o->type == HM_DENDROGRAM) {
             draw_dendro(T, CR, CC, r);
         } else if (r->o->type == HM_ANNOTATION) {

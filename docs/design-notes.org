@@ -640,6 +640,36 @@ Result [2026-07-18]. Two ergonomics from the legend review.
 - Ambiguous duplicate column names: first wins (could warn).
 - Horizontal discrete legends; per-heatmap fill overrides.
 
+* Milestone: raster mode for big heatmaps                           :spike:
+Result [2026-07-18]. Large heatmap bodies render as a single embedded
+image instead of N vector rectangles, so PDF size and draw time stay
+flat. Replaces the old hard error at >200k cells.
+
+** New
+- G_IMAGE grob (gtable.c): paints a cairo ARGB32 image surface into a
+  cell sub-rect, scaled with CAIRO_FILTER_NEAREST so cell edges stay
+  crisp (the geom_raster trick). Engine gains one grob type; layout
+  unchanged.
+- heatmap.c: a heatmap body with > RASTER_MIN_CELLS (2000) cells is
+  filled into an ARGB buffer (one pixel per display cell, in clustered
+  order) and emitted as one G_IMAGE; below that it stays vector, so
+  small heatmaps are byte-identical. col_argb() quantizes Col ->
+  0xAARRGGBB. Sanity ceiling RASTER_MAX_CELLS = 25M (~100 MB buffer).
+
+** Verified
+- Small heatmap (240 cells) byte-identical to golden (0 px); test
+  suite passes.
+- 120,000-cell clustered heatmap + legend: 0.09 s, ~200 KB PDF (would
+  have errored before). Row-gradient check confirms orientation (row 0
+  at top) and value->colour mapping are correct under raster.
+
+** Deferred
+- Annotations still vector: a huge row/col annotation next to a big
+  heatmap is many rects. Same G_IMAGE technique applies; do when
+  needed.
+- Raster uses one pixel per cell (nearest-scaled); no anti-aliased
+  downsampling for matrices far larger than the panel in pixels.
+
 * Next: algorithms discussion agenda                                  :next:
 - Layout constraint solver — what grid's viewport/unit system buys and
   how much of it is needed.
