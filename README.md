@@ -36,3 +36,7 @@ make test
 - `examples/data/` — example CSV datasets
 - `tests/` — regression tests
 - `docs/` — design notes and reference material
+
+## License
+
+MIT — see [LICENSE](LICENSE).
