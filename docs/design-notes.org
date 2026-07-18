@@ -700,6 +700,47 @@ overlapping (wheatmap's sibling-shift). Released as v0.2.0.
 ** Now resolved (was deferred in the legends milestone)
 - "rownames + legend on the same side would overlap" — fixed here.
 
+* Milestone: discrete positional scales + geom_boxplot             :spike:
+Result [2026-07-18]. Grammar mode gains a discrete x scale and
+geom_boxplot; both verified against ggplot2/R.
+
+** Discrete positional scale (render.c)
+- x is discrete when the column is a string or wrapped in factor().
+  Categories map to positions 1..k; ggplot's additive expansion 0.6
+  each side (panel range [0.4, k+0.6], confirmed via ggplot_build);
+  one break per category with the level name; no x minor gridlines.
+- Refactor: XVAL(r)/TXR(r) give a row's x position (category index+1
+  for discrete, value for continuous); continuous path unchanged
+  (scatter regression 0 px). Unlocks geom_col by category too.
+- Guards: discrete x rejects scale_x_log10 and geom_histogram;
+  geom_boxplot requires discrete x (clear error suggesting factor()).
+
+** geom_boxplot (render.c)
+- Per x-category: type-7 quantiles (R default) for Q1/median/Q3, Tukey
+  whiskers (furthest point within 1.5*IQR), outliers beyond. Draws box
+  (0.75 width, white fill, grey20 outline via new G_RECT stroke mode),
+  median line (fatten 2), whiskers, outlier points.
+- colour=factor(...) colours box lines/points by category and gives a
+  filled-square legend key (build_legend gained a hasbox glyph). Stats
+  computed in transformed-y space so log-y works.
+- CLI: -m boxplot wraps x in factor() automatically.
+
+** Verified
+- Numeric: box_stats == R's boxplot for mtcars cyl=8 EXACTLY
+  (q1 14.4, med 15.2, q3 16.25, whiskers 13.3/18.7, outliers
+  10.4/10.4/19.2).
+- Visual: mtcars mpg~factor(cyl) matches ggplot2 (positions, box,
+  whiskers, outliers, discrete axis, expansion). Coloured variant +
+  legend matches.
+- Regression: continuous scatter byte-identical (0 px); test suite
+  passes.
+
+** Deferred
+- Boxplot dodge (colour a different factor than x -> side-by-side
+  boxes) not done; colour is assumed to align with the x categories.
+- Discrete y scale; geom_bar (count stat); geom_smooth.
+- New G_RECT `stroke` mode (outline) reusable for future outlined geoms.
+
 * Next: algorithms discussion agenda                                  :next:
 - Layout constraint solver — what grid's viewport/unit system buys and
   how much of it is needed.

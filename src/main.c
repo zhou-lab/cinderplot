@@ -83,9 +83,12 @@ int main(int argc, char **argv) {
     char buf[4096];
     if (!expr) {
         int hist = !strcmp(fm, "histogram");
+        int box = !strcmp(fm, "boxplot");
         if (!fx || (!fy && !hist)) { fprintf(stderr, "%s", USAGE); return 1; }
         size_t n = 0;
-        int bad = appendf(buf, sizeof buf, &n, "%s + aes(x=%s", data ? data : "-", fx);
+        /* boxplot needs a discrete x — wrap the column in factor() */
+        int bad = box ? appendf(buf, sizeof buf, &n, "%s + aes(x=factor(%s)", data ? data : "-", fx)
+                      : appendf(buf, sizeof buf, &n, "%s + aes(x=%s", data ? data : "-", fx);
         if (!bad && fy) bad = appendf(buf, sizeof buf, &n, ", y=%s", fy);
         if (!bad && fc) bad = appendf(buf, sizeof buf, &n, ", colour=factor(%s)", fc);
         if (!bad) bad = appendf(buf, sizeof buf, &n, ") + geom_%s()", fm);

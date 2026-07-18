@@ -281,6 +281,7 @@ static int parse_term(P *p, PlotSpec *spec) {
     else if (!strcmp(name, "geom_line")) gt = GEOM_LINE;
     else if (!strcmp(name, "geom_col")) gt = GEOM_COL;
     else if (!strcmp(name, "geom_histogram")) gt = GEOM_HISTOGRAM;
+    else if (!strcmp(name, "geom_boxplot")) gt = GEOM_BOXPLOT;
     else is_geom = 0;
     if (is_geom) {
         if (spec->nlayers == MAX_LAYERS) return fail(p, "too many layers", "");
@@ -380,7 +381,7 @@ static int parse_term(P *p, PlotSpec *spec) {
         return expect(p, ')');
     }
     return fail(p, "`%s()` is not implemented; supported: aes(), geom_point(), "
-                   "geom_line(), geom_col(), geom_histogram(), labs(), "
+                   "geom_line(), geom_col(), geom_histogram(), geom_boxplot(), labs(), "
                    "facet_wrap(~var), scale_x_log10(), scale_y_log10(), "
                    "heatmap(), annotation(), legend(), scale_fill_*()", name);
 }

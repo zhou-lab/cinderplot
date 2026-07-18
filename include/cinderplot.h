@@ -93,6 +93,7 @@ typedef struct {
     Col col;
     double x0, y0, x1, y1, lw;                 /* line / sub-rect, npc */
     int sub;                                   /* G_RECT: use x0..y1 sub-rect */
+    int stroke;                                /* G_RECT: stroke (lw) not fill */
     const char *str; double size, tx, ty, hj;  /* text, npc anchor */
     VAlign va; int rot90;
     int n;                                     /* points / axis breaks */
@@ -119,7 +120,7 @@ void gt_render(GTable *t, cairo_t *cr);
 /* ---------- dsl.c: verbatim ggplot subset ---------- */
 typedef struct { char *col; int is_factor; char *expr; } AesEntry; /* col NULL = unset */
 
-typedef enum { GEOM_POINT, GEOM_LINE, GEOM_COL, GEOM_HISTOGRAM } GeomType;
+typedef enum { GEOM_POINT, GEOM_LINE, GEOM_COL, GEOM_HISTOGRAM, GEOM_BOXPLOT } GeomType;
 typedef struct { GeomType type; int bins; } Layer;
 #define MAX_LAYERS 8
 

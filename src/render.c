@@ -29,7 +29,7 @@ static double font_h(cairo_t *cr, double size) {
 }
 
 static GTable *build_legend(cairo_t *cr, const char *title, const Factor *f,
-                            const Col *pal, int haspoint, int hasline) {
+                            const Col *pal, int haspoint, int hasline, int hasbox) {
     GTable *t = calloc(1, sizeof(GTable));
     double label_w = 0;
     for (int i = 0; i < f->nlev; i++) {
@@ -59,6 +59,11 @@ static GTable *build_legend(cairo_t *cr, const char *title, const Factor *f,
     for (int i = 0; i < f->nlev; i++) {
         int r = 2 + 2 * i;
         g = gt_add(t, G_RECT, r, 0, r, 0); g->col = C_KEYBG;
+        if (hasbox) {
+            g = gt_add(t, G_RECT, r, 0, r, 0);
+            g->col = pal[i]; g->sub = 1;
+            g->x0 = 0.15; g->x1 = 0.85; g->y0 = 0.15; g->y1 = 0.85;
+        }
         if (hasline) {
             g = gt_add(t, G_LINE, r, 0, r, 0);
             g->col = pal[i]; g->lw = lw_pt(0.5);
@@ -101,22 +106,55 @@ static int cmp_double(const void *a, const void *b) {
     return av < bv ? -1 : av > bv ? 1 : 0;
 }
 
+/* type-7 quantile (R's default) on an ascending-sorted array */
+static double quantile7(const double *s, int n, double p) {
+    if (n == 1) return s[0];
+    double h = (n - 1) * p;
+    int lo = (int)floor(h);
+    if (lo >= n - 1) return s[n - 1];
+    return s[lo] + (h - lo) * (s[lo + 1] - s[lo]);
+}
+
+/* boxplot five-number summary + Tukey whiskers on sorted s (ggplot StatBoxplot) */
+typedef struct { double q1, med, q3, wlo, whi; } BoxStat;
+static void box_stats(const double *s, int n, BoxStat *b) {
+    b->q1 = quantile7(s, n, 0.25);
+    b->med = quantile7(s, n, 0.5);
+    b->q3 = quantile7(s, n, 0.75);
+    double iqr = b->q3 - b->q1, hi = b->q3 + 1.5 * iqr, lo = b->q1 - 1.5 * iqr;
+    b->whi = s[0]; for (int i = 0; i < n; i++) if (s[i] <= hi) b->whi = s[i];
+    b->wlo = s[n - 1]; for (int i = n - 1; i >= 0; i--) if (s[i] >= lo) b->wlo = s[i];
+}
+
 int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 double w_pt, double h_pt, char *err) {
     /* ---- layer summary ---- */
-    int haspoint = 0, hasline = 0, hascol = 0, nhist = 0;
+    int haspoint = 0, hasline = 0, hascol = 0, nhist = 0, hasbox = 0;
     for (int i = 0; i < spec->nlayers; i++) {
         if (spec->layers[i].type == GEOM_POINT) haspoint = 1;
         if (spec->layers[i].type == GEOM_LINE) hasline = 1;
         if (spec->layers[i].type == GEOM_COL) hascol = 1;
         if (spec->layers[i].type == GEOM_HISTOGRAM) nhist++;
+        if (spec->layers[i].type == GEOM_BOXPLOT) hasbox = 1;
     }
 
     /* ---- resolve columns ---- */
     const Column *xc = df_col(df, spec->x.col);
     if (!xc) { sprintf(err, "column `%s` not found", spec->x.col); return -1; }
-    if (xc->type != COL_NUM || spec->x.is_factor) {
-        sprintf(err, "discrete positional scales are not implemented; x must be numeric");
+    /* discrete x when the column is a string or wrapped in factor() */
+    int disc_x = (xc->type == COL_STR) || spec->x.is_factor;
+    Factor *xf = disc_x ? factor_make(df, xc) : NULL;
+    if (!disc_x && (xc->type != COL_NUM)) {
+        sprintf(err, "x column `%s` is not numeric", spec->x.col); return -1;
+    }
+    if (disc_x && spec->log_x) {
+        sprintf(err, "scale_x_log10() needs a continuous x"); return -1;
+    }
+    if (disc_x && nhist) {
+        sprintf(err, "geom_histogram() needs a continuous x"); return -1;
+    }
+    if (hasbox && !disc_x) {
+        sprintf(err, "geom_boxplot() needs a discrete x; use aes(x=factor(%s), ...)", spec->x.col);
         return -1;
     }
     const Column *yc = NULL;
@@ -154,7 +192,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     /* ---- usable rows (NA and log-domain filtering) ---- */
     int *use = malloc(df->nrow * sizeof(int)), nuse = 0, d_na = 0, d_log = 0;
     for (int r = 0; r < df->nrow; r++) {
-        int ok = !isnan(xc->num[r]) && (!yc || !isnan(yc->num[r]))
+        int xok = disc_x ? (xf->idx[r] >= 0) : !isnan(xc->num[r]);
+        int ok = xok && (!yc || !isnan(yc->num[r]))
               && (!cf || cf->idx[r] >= 0) && (!ff || ff->idx[r] >= 0);
         if (!ok) d_na++;
         else if ((spec->log_x && xc->num[r] <= 0) || (spec->log_y && yc && yc->num[r] <= 0)) {
@@ -167,8 +206,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     if (d_na) fprintf(stderr, "cinderplot: removed %d rows with missing values\n", d_na);
     if (d_log) fprintf(stderr, "cinderplot: removed %d rows with non-positive values on a log axis\n", d_log);
 
-#define TX(v) (spec->log_x ? log10(v) : (v))
 #define TY(v) (spec->log_y ? log10(v) : (v))
+/* transformed x for row r: category position (discrete) or value (continuous) */
+#define XVAL(r) (disc_x ? (double)(xf->idx[r] + 1) : xc->num[r])
+#define TXR(r)  (spec->log_x ? log10(XVAL(r)) : XVAL(r))
 
     /* ---- panel grid: ggplot2 wrap_dims = rev(grDevices::n2mfrow(n)) ---- */
     int npan = ff ? ff->nlev : 1, ncolp, nrowp;
@@ -185,14 +226,19 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     }
 
     /* ---- x scale training (transformed space) ---- */
-    double txmin = 1e300, txmax = -1e300;
-    for (int r = 0; r < df->nrow; r++) {
-        if (!use[r]) continue;
-        double t = TX(xc->num[r]);
-        if (t < txmin) txmin = t;
-        if (t > txmax) txmax = t;
+    double txmin, txmax;
+    if (disc_x) {                          /* categories at 1..k */
+        txmin = 1; txmax = xf->nlev;
+    } else {
+        txmin = 1e300; txmax = -1e300;
+        for (int r = 0; r < df->nrow; r++) {
+            if (!use[r]) continue;
+            double t = TXR(r);
+            if (t < txmin) txmin = t;
+            if (t > txmax) txmax = t;
+        }
+        if (txmax == txmin) { txmin -= 0.5; txmax += 0.5; }
     }
-    if (txmax == txmin) { txmin -= 0.5; txmax += 0.5; }
 
     /* ---- stat_bin for histogram layers (bins on the transformed scale,
      * ggplot's default alignment: boundary = width/2) ---- */
@@ -214,7 +260,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         for (int r = 0; r < df->nrow; r++) {
             if (!use[r]) continue;
             int p = ff ? ff->idx[r] : 0;
-            int bin = (int)((TX(xc->num[r]) - hs->start) / hs->width);
+            int bin = (int)((TXR(r) - hs->start) / hs->width);
             if (bin < 0) bin = 0;
             if (bin >= hs->nbins) bin = hs->nbins - 1;
             hs->counts[p * hs->nbins + bin]++;
@@ -248,8 +294,11 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     }
     if (tymax == tymin) { tymin -= 0.5; tymax += 0.5; }
 
-    /* ---- expansion (5% of transformed range) + breaks ---- */
-    double x0 = txmin - 0.05 * (txmax - txmin), x1 = txmax + 0.05 * (txmax - txmin);
+    /* ---- expansion + breaks. Discrete x uses ggplot's additive 0.6 on
+     * each side; continuous uses 5% of the range. ---- */
+    double x0, x1;
+    if (disc_x) { x0 = 1 - 0.6; x1 = xf->nlev + 0.6; }
+    else { x0 = txmin - 0.05 * (txmax - txmin); x1 = txmax + 0.05 * (txmax - txmin); }
     double y0 = tymin - 0.05 * (tymax - tymin), y1 = tymax + 0.05 * (tymax - tymin);
 #define NPCX(t) (((t) - x0) / (x1 - x0))
 #define NPCY(t) (((t) - y0) / (y1 - y0))
@@ -257,7 +306,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     double xbr[16], ybr[16];
     char **xlabs = malloc(16 * sizeof(char *)), **ylabs = malloc(16 * sizeof(char *));
     int nxbr, nybr;
-    if (spec->log_x) {
+    if (disc_x) {                          /* one break per category, level labels */
+        nxbr = xf->nlev;
+        for (int i = 0; i < nxbr; i++) { xbr[i] = i + 1; xlabs[i] = strdup(xf->levels[i]); }
+    } else if (spec->log_x) {
         nxbr = log10_breaks(x0, x1, xbr, xlabs, 16);
     } else {
         int nb = extended_breaks(x0, x1, 5, xbr, 16), n = 0;
@@ -279,7 +331,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     for (int i = 0; i < nxbr; i++) xnpc[i] = NPCX(xbr[i]);
     for (int i = 0; i < nybr; i++) ynpc[i] = NPCY(ybr[i]);
     double xmin_br[32], ymin_br[32];
-    int nxmin = make_minors(xbr, nxbr, x0, x1, xmin_br);
+    int nxmin = disc_x ? 0 : make_minors(xbr, nxbr, x0, x1, xmin_br);
     int nymin = make_minors(ybr, nybr, y0, y1, ymin_br);
 
     /* ---- geom_col bar width: 0.9 x min gap between distinct x ---- */
@@ -288,7 +340,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         double *xs = malloc(nuse * sizeof(double));
         int nx = 0;
         for (int r = 0; r < df->nrow; r++)
-            if (use[r]) xs[nx++] = TX(xc->num[r]);
+            if (use[r]) xs[nx++] = TXR(r);
         qsort(xs, nx, sizeof(double), cmp_double);
         double res = 1e300;
         for (int i = 1; i < nx; i++)
@@ -324,7 +376,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         pal = malloc(cf->nlev * sizeof(Col));
         hue_palette(cf->nlev, pal);
         leg = build_legend(cr, spec->lab_colour ? spec->lab_colour : spec->colour.expr,
-                           cf, pal, haspoint, hasline);
+                           cf, pal, haspoint, hasline, hasbox);
     }
 
     /* ---- outer table ---- */
@@ -429,7 +481,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 double base = spec->log_y ? 0.0 : NPCY(0.0);
                 for (int r = 0; r < df->nrow; r++) {
                     if (!use[r] || (ff && ff->idx[r] != p)) continue;
-                    double tx = TX(xc->num[r]), ty = TY(yc->num[r]);
+                    double tx = TXR(r), ty = TY(yc->num[r]);
                     g = gt_add(T, G_RECT, R, C, R, C);
                     g->col = C_BAR; g->sub = 1; g->clip = 1;
                     g->x0 = NPCX(tx - colw / 2); g->x1 = NPCX(tx + colw / 2);
@@ -444,7 +496,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 np = 0;
                 for (int r = 0; r < df->nrow; r++) {
                     if (!use[r] || (ff && ff->idx[r] != p)) continue;
-                    px[np] = NPCX(TX(xc->num[r])); py[np] = NPCY(TY(yc->num[r]));
+                    px[np] = NPCX(TXR(r)); py[np] = NPCY(TY(yc->num[r]));
                     pcol[np] = cf ? pal[cf->idx[r]] : C_BLACK;
                     np++;
                 }
@@ -464,7 +516,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     for (int r = 0; r < df->nrow; r++) {
                         if (!use[r] || (ff && ff->idx[r] != p)
                                     || (cf && cf->idx[r] != grp)) continue;
-                        pts[np].x = NPCX(TX(xc->num[r]));
+                        pts[np].x = NPCX(TXR(r));
                         pts[np].y = NPCY(TY(yc->num[r]));
                         np++;
                     }
@@ -476,6 +528,58 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     g->n = np; g->px = px; g->py = py;
                     g->col = cf ? pal[grp] : C_BLACK;
                     g->lw = lw_pt(0.5); g->clip = 1;
+                }
+            } else if (gt == GEOM_BOXPLOT) {
+                /* one box per x-category: five-number summary + Tukey
+                 * whiskers + outlier points, in transformed-y space */
+                const double HALFW = 0.375;             /* box half-width (0.75) */
+                for (int cat = 0; cat < xf->nlev; cat++) {
+                    int ny = 0;
+                    for (int r = 0; r < df->nrow; r++)
+                        if (use[r] && (!ff || ff->idx[r] == p) && xf->idx[r] == cat) ny++;
+                    if (ny == 0) continue;
+                    double *ys = malloc(ny * sizeof(double));
+                    ny = 0;
+                    for (int r = 0; r < df->nrow; r++)
+                        if (use[r] && (!ff || ff->idx[r] == p) && xf->idx[r] == cat)
+                            ys[ny++] = TY(yc->num[r]);
+                    qsort(ys, ny, sizeof(double), cmp_double);
+                    BoxStat b; box_stats(ys, ny, &b);
+                    double xi = cat + 1;
+                    double xl = NPCX(xi - HALFW), xr = NPCX(xi + HALFW), xm = NPCX(xi);
+                    Col lc = cf ? pal[cat % cf->nlev] : C_TICK;   /* box lines */
+
+                    for (int w = 0; w < 2; w++) {        /* whiskers */
+                        g = gt_add(T, G_LINE, R, C, R, C);
+                        g->col = lc; g->lw = lw_pt(0.5); g->clip = 1;
+                        g->x0 = g->x1 = xm;
+                        g->y0 = NPCY(w ? b.q1 : b.q3); g->y1 = NPCY(w ? b.wlo : b.whi);
+                    }
+                    g = gt_add(T, G_RECT, R, C, R, C);   /* white fill */
+                    g->col = C_WHITE; g->sub = 1; g->clip = 1;
+                    g->x0 = xl; g->x1 = xr; g->y0 = NPCY(b.q1); g->y1 = NPCY(b.q3);
+                    g = gt_add(T, G_RECT, R, C, R, C);   /* box outline */
+                    g->col = lc; g->sub = 1; g->stroke = 1; g->lw = lw_pt(0.5); g->clip = 1;
+                    g->x0 = xl; g->x1 = xr; g->y0 = NPCY(b.q1); g->y1 = NPCY(b.q3);
+                    g = gt_add(T, G_LINE, R, C, R, C);   /* median (fatten 2) */
+                    g->col = lc; g->lw = lw_pt(1.0); g->clip = 1;
+                    g->x0 = xl; g->x1 = xr; g->y0 = g->y1 = NPCY(b.med);
+
+                    int nout = 0;
+                    for (int i = 0; i < ny; i++) if (ys[i] > b.whi || ys[i] < b.wlo) nout++;
+                    if (nout) {
+                        double *ox = malloc(nout * sizeof(double)), *oy = malloc(nout * sizeof(double));
+                        Col *oc = malloc(nout * sizeof(Col));
+                        nout = 0;
+                        for (int i = 0; i < ny; i++)
+                            if (ys[i] > b.whi || ys[i] < b.wlo) {
+                                ox[nout] = xm; oy[nout] = NPCY(ys[i]); oc[nout] = lc; nout++;
+                            }
+                        g = gt_add(T, G_POINTS, R, C, R, C);
+                        g->n = nout; g->px = ox; g->py = oy; g->pcol = oc;
+                        g->radius = PT_RADIUS; g->clip = 1;
+                    }
+                    free(ys);
                 }
             }
         }

@@ -68,7 +68,8 @@ void gt_render(GTable *t, cairo_t *cr) {
                                 (g->x1 - g->x0) * rw, (g->y1 - g->y0) * rh);
             else
                 cairo_rectangle(cr, rx, ry, rw, rh);
-            cairo_fill(cr);
+            if (g->stroke) { cairo_set_line_width(cr, g->lw); cairo_stroke(cr); }
+            else cairo_fill(cr);
             break;
         case G_IMAGE: {
             /* one image pixel per cell, scaled into the sub-rect with a
