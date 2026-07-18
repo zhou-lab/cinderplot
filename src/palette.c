@@ -6,6 +6,7 @@
 #include "cinderplot.h"
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* D65 white point, u'v' chromaticity */
@@ -115,6 +116,14 @@ int parse_color(const char *s, Col *out) {
         int r, g, b;
         if (sscanf(s + 1, "%2x%2x%2x", &r, &g, &b) == 3) { *out = C(r, g, b); return 0; }
         return -1;
+    }
+    /* greyNN / grayNN: NN in 0..100 (ggplot grey ramp) */
+    if (!strncmp(s, "grey", 4) || !strncmp(s, "gray", 4)) {
+        char *end; long pct = strtol(s + 4, &end, 10);
+        if (*end == 0 && end != s + 4 && pct >= 0 && pct <= 100) {
+            int v = (int)(pct * 255 / 100.0 + 0.5);
+            *out = C(v, v, v); return 0;
+        }
     }
     for (size_t i = 0; i < sizeof named / sizeof *named; i++)
         if (!strcmp(s, named[i].n)) { *out = C(named[i].r, named[i].g, named[i].b); return 0; }

@@ -52,6 +52,8 @@ typedef struct {
     FillKind kind;
     Col low, mid, high;      /* gradient / gradient2 */
     double midpoint;         /* gradient2, default 0 */
+    double lim_lo, lim_hi;   /* limits: domain + out-of-range squish */
+    int has_limits;
 } FillScale;
 Col fill_map(const FillScale *fs, double t01);   /* t in [0,1] */
 /* map v in [dmin,dmax] -> colour, honouring gradient2's midpoint */
@@ -161,6 +163,9 @@ typedef struct {
     HMObj hobjs[MAX_HMOBJS];
     int nhobjs;
     FillScale fill;
+    /* grammar mode: continuous colour scale (scale_colour_gradient*) */
+    FillScale colour_scale;
+    int has_colour_scale;
 } PlotSpec;
 
 int dsl_parse(const char *src, PlotSpec *spec, char *err);  /* 0 = ok */

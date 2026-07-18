@@ -233,6 +233,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         for (int r = 0; r < df->nrow; r++) roff[r] = genome_off(gs, cc->str[r]);
     }
     Factor *cf = NULL;
+    const Column *colc = NULL;          /* continuous colour column */
+    int cont_col = 0;
+    FillScale cscale = spec->colour_scale;
     if (spec->colour.col) {
         if (hascol || nhist) {
             sprintf(err, "colour/fill on bars (stacking/dodging) is not implemented yet");
@@ -241,11 +244,15 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         const Column *cc = df_col(df, spec->colour.col);
         if (!cc) { sprintf(err, "column `%s` not found", spec->colour.col); return -1; }
         if (!spec->colour.is_factor && cc->type == COL_NUM) {
-            sprintf(err, "continuous colour scales are not implemented; "
-                         "use colour=factor(%s)", spec->colour.col);
-            return -1;
+            cont_col = 1; colc = cc;    /* continuous colour aesthetic */
+            if (!spec->has_colour_scale) {     /* ggplot default: blue gradient */
+                cscale.kind = FILL_GRADIENT;
+                parse_color("#132B43", &cscale.low);
+                parse_color("#56B1F7", &cscale.high);
+            }
+        } else {
+            cf = factor_make(df, cc);
         }
-        cf = factor_make(df, cc);
     }
     Factor *ff = NULL;
     if (spec->facet_var) {
@@ -273,6 +280,22 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     if (nuse == 0) { sprintf(err, "no complete rows to plot"); return -1; }
     if (d_na) fprintf(stderr, "cinderplot: removed %d rows with missing values\n", d_na);
     if (d_log) fprintf(stderr, "cinderplot: removed %d rows with non-positive values on a log axis\n", d_log);
+
+    /* continuous colour domain: limits (squished) or the data range */
+    double cdmin = 0, cdmax = 1;
+    if (cont_col) {
+        if (cscale.has_limits) { cdmin = cscale.lim_lo; cdmax = cscale.lim_hi; }
+        else {
+            cdmin = 1e300; cdmax = -1e300;
+            for (int r = 0; r < df->nrow; r++)
+                if (use[r] && !isnan(colc->num[r])) {
+                    if (colc->num[r] < cdmin) cdmin = colc->num[r];
+                    if (colc->num[r] > cdmax) cdmax = colc->num[r];
+                }
+            if (cdmax <= cdmin) cdmax = cdmin + 1;
+        }
+    }
+#define CCOL(r) fill_map_value(&cscale, colc->num[r], cdmin, cdmax)
 
 #define TY(v) (spec->log_y ? log10(v) : (v))
 /* transformed x for row r: category position (discrete), genome offset+pos
@@ -649,7 +672,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 for (int r = 0; r < df->nrow; r++) {
                     if (!use[r] || (ff && ff->idx[r] != p)) continue;
                     px[np] = NPCX(TXR(r)); py[np] = NPCY(TY(yc->num[r]));
-                    pcol[np] = cf ? pal[cf->idx[r]] : C_BLACK;
+                    pcol[np] = cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BLACK;
                     np++;
                 }
                 g = gt_add(T, G_POINTS, R, C, R, C);
@@ -687,7 +710,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     if (!use[r] || (ff && ff->idx[r] != p)) continue;
                     if (xec && isnan(xec->num[r])) continue;
                     g = gt_add(T, G_LINE, R, C, R, C);
-                    g->col = cf ? pal[cf->idx[r]] : C_BLACK;
+                    g->col = cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BLACK;
                     g->lw = lw_pt(0.5); g->clip = 1;
                     g->x0 = NPCX(TXR(r));
                     g->x1 = NPCX(xec ? (genome_x ? GX(r, xec->num[r])

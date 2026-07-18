@@ -270,6 +270,57 @@ done:
     return 0;
 }
 
+/* parse a gradient/viridis/jet/bwr scale body into `fs`; `k` is the suffix
+ * after scale_(fill|colour)_ , `fn` the prefix for error messages */
+static int parse_grad_scale(P *p, FillScale *fs, const char *k, const char *fn) {
+    if (!strcmp(k, "viridis")) fs->kind = FILL_VIRIDIS;
+    else if (!strcmp(k, "jet")) fs->kind = FILL_JET;
+    else if (!strcmp(k, "bwr")) fs->kind = FILL_BWR;
+    else if (!strcmp(k, "gradient")) {
+        fs->kind = FILL_GRADIENT;
+        parse_color("#132B43", &fs->low); parse_color("#56B1F7", &fs->high);
+    } else if (!strcmp(k, "gradient2")) {
+        fs->kind = FILL_GRADIENT2;
+        parse_color("#832424", &fs->low); parse_color("white", &fs->mid);
+        parse_color("#3A3A98", &fs->high); fs->midpoint = 0;
+    } else {
+        char msg[128];
+        snprintf(msg, sizeof msg, "`%s%s()` not implemented; supported: "
+                 "viridis, jet, bwr, gradient, gradient2", fn, k);
+        return fail(p, "%s", msg);
+    }
+    skip_ws(p);
+    while (*p->s != ')') {
+        char *key = ident(p);
+        if (!key || expect(p, '=')) return fail(p, "bad scale argument", "");
+        skip_ws(p);
+        if (!strcmp(key, "midpoint")) {
+            fs->midpoint = strtod(p->s, (char **)&p->s);
+        } else if (!strcmp(key, "limits")) {         /* c(lo, hi) — domain + squish */
+            skip_ws(p);
+            if (p->s[0] == 'c' && p->s[1] == '(') p->s += 2;
+            else return fail(p, "limits= expects c(lo, hi)", "");
+            fs->lim_lo = strtod(p->s, (char **)&p->s);
+            skip_ws(p); if (*p->s == ',') p->s++;
+            fs->lim_hi = strtod(p->s, (char **)&p->s);
+            skip_ws(p); if (*p->s == ')') p->s++;
+            fs->has_limits = 1;
+        } else {
+            char *v = string_lit(p); Col c;
+            if (!v || parse_color(v, &c))
+                return fail(p, "bad colour for `%s` (use names or #RRGGBB)", key);
+            if (!strcmp(key, "low")) fs->low = c;
+            else if (!strcmp(key, "mid")) fs->mid = c;
+            else if (!strcmp(key, "high")) fs->high = c;
+            else return fail(p, "scale option `%s` not implemented", key);
+        }
+        skip_ws(p);
+        if (*p->s == ',') { p->s++; skip_ws(p); }
+    }
+    p->s++;
+    return 0;
+}
+
 static int parse_term(P *p, PlotSpec *spec) {
     char *name = ident(p);
     if (!name) return fail(p, "expected a function call near \"%.20s\"", p->s);
@@ -342,46 +393,12 @@ static int parse_term(P *p, PlotSpec *spec) {
         o->place.kind = PL_LEFT_OF;              /* default: row tree left */
         return parse_hm_args(p, o, 0);
     }
-    if (!strncmp(name, "scale_fill_", 11)) {
-        const char *k = name + 11;
-        FillScale *fs = &spec->fill;
-        if (!strcmp(k, "viridis")) fs->kind = FILL_VIRIDIS;
-        else if (!strcmp(k, "jet")) fs->kind = FILL_JET;
-        else if (!strcmp(k, "bwr")) fs->kind = FILL_BWR;
-        else if (!strcmp(k, "gradient")) {
-            fs->kind = FILL_GRADIENT;
-            parse_color("#132B43", &fs->low);    /* ggplot defaults */
-            parse_color("#56B1F7", &fs->high);
-        } else if (!strcmp(k, "gradient2")) {
-            fs->kind = FILL_GRADIENT2;
-            parse_color("#832424", &fs->low);    /* muted red/blue, white mid */
-            parse_color("white", &fs->mid);
-            parse_color("#3A3A98", &fs->high);
-            fs->midpoint = 0;
-        } else return fail(p, "`scale_fill_%s()` is not implemented; supported: "
-                              "viridis, jet, bwr, gradient, gradient2", k);
-        skip_ws(p);
-        while (*p->s != ')') {
-            char *key = ident(p);
-            if (!key || expect(p, '=')) return fail(p, "bad scale_fill argument", "");
-            skip_ws(p);
-            if (!strcmp(key, "midpoint")) {
-                fs->midpoint = strtod(p->s, (char **)&p->s);
-            } else {
-                char *v = string_lit(p);
-                Col c;
-                if (!v || parse_color(v, &c))
-                    return fail(p, "bad colour for `%s` (use names or #RRGGBB)", key);
-                if (!strcmp(key, "low")) fs->low = c;
-                else if (!strcmp(key, "mid")) fs->mid = c;
-                else if (!strcmp(key, "high")) fs->high = c;
-                else return fail(p, "scale_fill option `%s` not implemented", key);
-            }
-            skip_ws(p);
-            if (*p->s == ',') { p->s++; skip_ws(p); }
-        }
-        p->s++;
-        return 0;
+    if (!strncmp(name, "scale_fill_", 11))
+        return parse_grad_scale(p, &spec->fill, name + 11, "scale_fill_");
+    if (!strncmp(name, "scale_colour_", 13) || !strncmp(name, "scale_color_", 12)) {
+        const char *k = name + (name[10] == 'u' ? 13 : 12);   /* colour vs color */
+        spec->has_colour_scale = 1;
+        return parse_grad_scale(p, &spec->colour_scale, k, "scale_colour_");
     }
     if (!strcmp(name, "facet_wrap")) {
         skip_ws(p);
