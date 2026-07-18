@@ -27,6 +27,8 @@
 #define MM       (72.0 / 25.4)
 #define LEG_BAR  (4.0 * MM)         /* colorbar thickness  */
 #define LEG_LEN  (28.0 * MM)        /* colorbar length     */
+#define LEG_GRID (4.0 * MM)         /* discrete key square */
+#define LEG_GAP  (2.0 * MM)         /* gap between keys    */
 
 typedef struct {
     const HMObj *o;
@@ -38,7 +40,9 @@ typedef struct {
     int ann_n, ann_horiz;           /* annotation */
     Col *ann_col;                   /* data order */
     int *ann_ord;                   /* annotation: display slot -> data index */
-    int target;                     /* legend: index of source heatmap */
+    Factor *ann_f; Col *ann_pal;    /* annotation: discrete levels + colours */
+    const char *ann_name;           /* annotation: source column name */
+    int target, leg_discrete;       /* legend: source obj index; discrete key? */
     HClust *tree; int dir, nleaf;   /* dendrogram */
     int *slot;                      /* dendrogram: data index -> display slot */
 } RObj;
@@ -103,6 +107,14 @@ static double clampr(double v) {
     return v < MIN_RATIO ? MIN_RATIO : v > 1.0 / MIN_RATIO ? 1.0 / MIN_RATIO : v;
 }
 
+/* legend title: explicit title= wins, else the fill label (continuous) or
+ * the annotation column name (discrete); NULL = no title drawn */
+static const char *legend_title(const PlotSpec *spec, const RObj *lg, const RObj *src) {
+    if (lg->o->title) return lg->o->title;
+    if (lg->leg_discrete) return src->ann_name;
+    return spec->lab_fill;
+}
+
 static int find_obj(RObj *ro, int n, const char *name) {
     for (int i = 0; i < n; i++)
         if (!strcmp(ro[i].o->name, name)) return i;
@@ -151,6 +163,110 @@ static void draw_dendro(GTable *T, int CR, int CC, const RObj *r) {
         npos[s] = (pa + pb) / 2;
     }
     free(npos);
+}
+
+/* one legend's block height in npc (content + title), vertical stacking */
+static double legend_block_h(const RObj *r, const RObj *tg, const char *title,
+                             double baseH, double ch_pt) {
+    double titleSpace = title ? (baseH + TXT_GAP) / ch_pt : 0;
+    double content = r->leg_discrete
+        ? tg->ann_f->nlev * LEG_GRID / ch_pt + (tg->ann_f->nlev - 1) * LEG_GAP / ch_pt
+        : LEG_LEN / ch_pt;
+    return content + titleSpace;
+}
+
+/* draw one legend. Vertical legends (right/left) are drawn from `blockTop`
+ * (npc y of the block's top) downward, so a caller can stack them.
+ * Horizontal legends (top/beneath) centre themselves on the target. */
+static void draw_one_legend(GTable *T, const RObj *r, const RObj *tg,
+                            const PlotSpec *spec, double dmin, double dmax,
+                            const char *title, double baseH,
+                            double cw_pt, double ch_pt, double blockTop) {
+#define LPTX(pt) ((pt) / cw_pt)
+#define LPTY(pt) ((pt) / ch_pt)
+    Grob *g;
+    PlaceKind pk = r->o->place.kind;
+    int vert = pk == PL_RIGHT_OF || pk == PL_LEFT_OF;
+    double titleSpace = title ? LPTY(baseH + TXT_GAP) : 0;
+    double topY, leftX;
+
+    if (r->leg_discrete) {                          /* categorical key */
+        Factor *f = tg->ann_f; Col *pal = tg->ann_pal;
+        double gw = LPTX(LEG_GRID), gh = LPTY(LEG_GRID), gap = LPTY(LEG_GAP);
+        double topEdge = blockTop - titleSpace;
+        double sx = pk == PL_RIGHT_OF ? 1 + LPTX(HALF_LINE) : 0 - LPTX(HALF_LINE) - gw;
+        for (int k = 0; k < f->nlev; k++) {
+            double y1 = topEdge - k * (gh + gap);
+            g = gt_add(T, G_RECT, T->nrow - 2, 1, T->nrow - 2, 1);
+            g->sub = 1; g->col = pal[k];
+            g->x0 = sx; g->x1 = sx + gw; g->y1 = y1; g->y0 = y1 - gh;
+            g = gt_add(T, G_TEXT, T->nrow - 2, 1, T->nrow - 2, 1);
+            g->str = f->levels[k]; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
+            g->tx = sx + gw + LPTX(TXT_GAP); g->ty = y1 - gh / 2; g->hj = 0; g->va = V_INKCENTER;
+        }
+        topY = blockTop; leftX = sx;
+    } else {                                        /* continuous colorbar */
+        double barT = vert ? LPTX(LEG_BAR) : LPTY(LEG_BAR);
+        double barL = vert ? LPTY(LEG_LEN) : LPTX(LEG_LEN);
+        const int NSTEP = 64, RR = T->nrow - 2, CCc = 1;
+        double bx0, by0;
+        if (vert) {
+            by0 = blockTop - titleSpace - barL;
+            bx0 = pk == PL_RIGHT_OF ? 1 + LPTX(HALF_LINE) : 0 - LPTX(HALF_LINE) - barT;
+        } else {
+            double xc = tg->l + tg->w / 2;
+            double hts = title ? LPTY(baseH + TXT_GAP) : 0;
+            bx0 = xc - barL / 2;
+            by0 = pk == PL_BENEATH ? 0 - LPTY(HALF_LINE) - hts - barT
+                                   : 1 + LPTY(HALF_LINE) + hts;
+        }
+        for (int k = 0; k < NSTEP; k++) {
+            g = gt_add(T, G_RECT, RR, CCc, RR, CCc);
+            g->sub = 1; g->col = fill_map(&spec->fill, (k + 0.5) / NSTEP);
+            if (vert) { g->x0 = bx0; g->x1 = bx0 + barT;
+                        g->y0 = by0 + barL * k / NSTEP; g->y1 = by0 + barL * (k + 1) / NSTEP; }
+            else { g->y0 = by0; g->y1 = by0 + barT;
+                   g->x0 = bx0 + barL * k / NSTEP; g->x1 = bx0 + barL * (k + 1) / NSTEP; }
+        }
+        double br[16];
+        int nb = extended_breaks(dmin, dmax, 5, br, 16), nf = 0;
+        for (int k = 0; k < nb; k++) if (br[k] >= dmin && br[k] <= dmax) br[nf++] = br[k];
+        int dec = axis_decimals(br, nf);
+        for (int k = 0; k < nf; k++) {
+            double frac = dmax > dmin ? (br[k] - dmin) / (dmax - dmin) : 0.5;
+            char *lab = malloc(32);
+            fmt_break(br[k], dec, lab);
+            g = gt_add(T, G_LINE, RR, CCc, RR, CCc);
+            g->col = C_TICK; g->lw = lw_pt(0.5);
+            if (vert) {
+                double y = by0 + frac * barL;
+                double tx = pk == PL_RIGHT_OF ? bx0 + barT : bx0, dir = pk == PL_RIGHT_OF ? 1 : -1;
+                g->x0 = tx; g->x1 = tx + dir * LPTX(TICK_LEN); g->y0 = g->y1 = y;
+                g = gt_add(T, G_TEXT, RR, CCc, RR, CCc);
+                g->str = lab; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
+                g->tx = tx + dir * LPTX(TICK_LEN + TXT_GAP); g->ty = y;
+                g->hj = pk == PL_RIGHT_OF ? 0 : 1; g->va = V_INKCENTER;
+            } else {
+                double x = bx0 + frac * barL;
+                double ty = pk == PL_BENEATH ? by0 : by0 + barT, dir = pk == PL_BENEATH ? -1 : 1;
+                g->y0 = ty; g->y1 = ty + dir * LPTY(TICK_LEN); g->x0 = g->x1 = x;
+                g = gt_add(T, G_TEXT, RR, CCc, RR, CCc);
+                g->str = lab; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
+                g->tx = x; g->ty = ty + dir * LPTY(TICK_LEN + TXT_GAP);
+                g->hj = 0.5; g->va = pk == PL_BENEATH ? V_TOP : V_BOTTOM;
+            }
+        }
+        topY = vert ? blockTop : by0 + barT;
+        leftX = bx0;
+    }
+    if (title) {
+        g = gt_add(T, G_TEXT, T->nrow - 2, 1, T->nrow - 2, 1);
+        g->str = title; g->size = SZ_BASE; g->col = C_BLACK;
+        g->tx = leftX; g->ty = vert ? topY : topY + LPTY(TXT_GAP);
+        g->hj = 0; g->va = vert ? V_TOP : V_BOTTOM;
+    }
+#undef LPTX
+#undef LPTY
 }
 
 int render_heatmap(const PlotSpec *spec, const char *out,
@@ -207,12 +323,14 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                 return -1;
             }
             ro[i].ann_col = malloc(df->nrow * sizeof(Col));
+            ro[i].ann_name = col->name;
             if (col->type == COL_STR) {
                 Factor *f = factor_make(df, col);
                 Col *pal = malloc(f->nlev * sizeof(Col));
                 hue_palette(f->nlev, pal);
                 for (int r = 0; r < df->nrow; r++)
                     ro[i].ann_col[r] = f->idx[r] >= 0 ? pal[f->idx[r]] : C_NA;
+                ro[i].ann_f = f; ro[i].ann_pal = pal;   /* for a discrete legend */
             } else {
                 double lo = 1e300, hi = -1e300;
                 for (int r = 0; r < df->nrow; r++) {
@@ -258,11 +376,25 @@ int render_heatmap(const PlotSpec *spec, const char *out,
         if (o->type == HM_LEGEND) {
             ro[i].nr = 1; ro[i].nc = 1;
             ro[i].target = -1;
-            if (a && a->o->type == HM_HEATMAP) ro[i].target = (int)(a - ro);
-            else
+            /* anchor decides what the legend describes: a categorical
+             * annotation -> discrete key; a heatmap -> continuous colorbar */
+            if (a && a->o->type == HM_ANNOTATION && a->ann_f) {
+                ro[i].target = (int)(a - ro); ro[i].leg_discrete = 1;
+            } else if (a && a->o->type == HM_HEATMAP) {
+                ro[i].target = (int)(a - ro);
+            } else {
                 for (int k = 0; k < i; k++)
                     if (ro[k].o->type == HM_HEATMAP) { ro[i].target = k; break; }
-            if (ro[i].target < 0) { sprintf(err, "legend() found no heatmap to describe"); return -1; }
+            }
+            if (ro[i].target < 0) {
+                sprintf(err, "legend() found nothing to describe; place it relative to a "
+                             "heatmap (colorbar) or a categorical annotation (discrete key)");
+                return -1;
+            }
+            if (ro[i].leg_discrete && (pl->kind == PL_TOP_OF || pl->kind == PL_BENEATH)) {
+                sprintf(err, "discrete legends must be vertical; use right_of()/left_of()");
+                return -1;
+            }
             /* rigid chrome placed in the margin; not a canvas rect */
             continue;
         }
@@ -342,8 +474,11 @@ int render_heatmap(const PlotSpec *spec, const char *out,
     cairo_select_font_face(cr, FONT_FAMILY, CAIRO_FONT_SLANT_NORMAL,
                            CAIRO_FONT_WEIGHT_NORMAL);
     cairo_font_extents_t fe;
-    cairo_set_font_size(cr, SZ_TITLE);
-    cairo_font_extents(cr, &fe);
+    cairo_set_font_size(cr, SZ_AXIS_TEXT); cairo_font_extents(cr, &fe);
+    double axH = fe.ascent + fe.descent;         /* tick/label line height */
+    cairo_set_font_size(cr, SZ_BASE); cairo_font_extents(cr, &fe);
+    double baseH = fe.ascent + fe.descent;       /* legend title line height */
+    cairo_set_font_size(cr, SZ_TITLE); cairo_font_extents(cr, &fe);
     double titleh = spec->lab_title ? fe.ascent + fe.descent : 0;
 
     double marL = MARGIN, marR = MARGIN, marT = MARGIN, marB = MARGIN;
@@ -377,28 +512,41 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                     marT = fmax(marT, ext);
             }
         } else if (r->o->type == HM_LEGEND) {
-            /* rigid footprint: fixed bar thickness + tick + widest label
-             * (V), or bar + tick + one text line (H). Reserved on the
-             * placement side; length is fixed (LEG_LEN), not the matrix. */
-            double br[16];
-            int nb = extended_breaks(dmin, dmax, 5, br, 16), nf = 0;
-            for (int k = 0; k < nb; k++) if (br[k] >= dmin && br[k] <= dmax) br[nf++] = br[k];
-            int dec = axis_decimals(br, nf);
-            double wmax = 0;
-            for (int k = 0; k < nf; k++) {
-                char b[32]; fmt_break(br[k], dec, b);
-                double tw = text_w(cr, SZ_AXIS_TEXT, b);
-                if (tw > wmax) wmax = tw;
-            }
+            /* rigid footprint reserved on the placement side, incl. title */
             PlaceKind pk = r->o->place.kind;
-            if (pk == PL_RIGHT_OF)
-                marR = fmax(marR, MARGIN + HALF_LINE + LEG_BAR + TICK_LEN + TXT_GAP + wmax);
-            else if (pk == PL_LEFT_OF)
-                marL = fmax(marL, MARGIN + HALF_LINE + LEG_BAR + TICK_LEN + TXT_GAP + wmax);
-            else if (pk == PL_BENEATH)
-                marB = fmax(marB, MARGIN + HALF_LINE + LEG_BAR + TICK_LEN + TXT_GAP + (fe.ascent + fe.descent));
-            else
-                marT = fmax(marT, MARGIN + HALF_LINE + LEG_BAR + TICK_LEN + TXT_GAP + (fe.ascent + fe.descent));
+            const char *title = legend_title(spec, r, &ro[r->target]);
+            double titleW = title ? text_w(cr, SZ_BASE, title) : 0;
+            double across;                       /* extent perpendicular to bar */
+            if (r->leg_discrete) {
+                double wmax = 0;
+                Factor *f = ro[r->target].ann_f;
+                for (int k = 0; k < f->nlev; k++) {
+                    double tw = text_w(cr, SZ_AXIS_TEXT, f->levels[k]);
+                    if (tw > wmax) wmax = tw;
+                }
+                across = fmax(LEG_GRID + TXT_GAP + wmax, titleW);
+            } else {
+                double br[16];
+                int nb = extended_breaks(dmin, dmax, 5, br, 16), nf = 0;
+                for (int k = 0; k < nb; k++) if (br[k] >= dmin && br[k] <= dmax) br[nf++] = br[k];
+                int dec = axis_decimals(br, nf);
+                double wmax = 0;
+                for (int k = 0; k < nf; k++) {
+                    char b[32]; fmt_break(br[k], dec, b);
+                    double tw = text_w(cr, SZ_AXIS_TEXT, b);
+                    if (tw > wmax) wmax = tw;
+                }
+                double barW = LEG_BAR + TICK_LEN + TXT_GAP + wmax;
+                across = (pk == PL_BENEATH || pk == PL_TOP_OF)
+                       ? LEG_BAR + TICK_LEN + TXT_GAP + axH
+                         + (title ? baseH + TXT_GAP : 0)                          /* height */
+                       : fmax(barW, titleW);
+            }
+            double ext = MARGIN + HALF_LINE + across;
+            if (pk == PL_RIGHT_OF) marR = fmax(marR, ext);
+            else if (pk == PL_LEFT_OF) marL = fmax(marL, ext);
+            else if (pk == PL_BENEATH) marB = fmax(marB, ext);
+            else marT = fmax(marT, ext);
         }
     }
 
@@ -465,72 +613,40 @@ int render_heatmap(const PlotSpec *spec, const char *out,
         /* HM_LEGEND is drawn separately, as rigid margin chrome, below */
     }
 
-    /* ---- rigid colorbar legends (fixed pt size, in the margin) ---- */
-    for (int i = 0; i < n; i++) {
+    /* ---- rigid legends: vertical legends STACK in their side margin,
+     * centred as a group on the canvas; horizontal legends centre on
+     * the target (ComplexHeatmap-style legend packing) ---- */
+    for (int pass = 0; pass < 2; pass++) {          /* right side, then left */
+        PlaceKind want = pass == 0 ? PL_RIGHT_OF : PL_LEFT_OF;
+        int idx[MAX_HMOBJS], ni = 0;
+        for (int i = 0; i < n; i++)
+            if (ro[i].o->type == HM_LEGEND && ro[i].o->place.kind == want) idx[ni++] = i;
+        if (!ni) continue;
+        double heights[MAX_HMOBJS], total = 0, inter = PTY(2 * HALF_LINE);
+        for (int j = 0; j < ni; j++) {
+            RObj *r = &ro[idx[j]];
+            const char *title = legend_title(spec, r, &ro[r->target]);
+            heights[j] = legend_block_h(r, &ro[r->target], title, baseH, ch_pt);
+            total += heights[j];
+        }
+        total += (ni - 1) * inter;
+        double top = 0.5 + total / 2;               /* top of the stack */
+        for (int j = 0; j < ni; j++) {
+            RObj *r = &ro[idx[j]];
+            const char *title = legend_title(spec, r, &ro[r->target]);
+            draw_one_legend(T, r, &ro[r->target], spec, dmin, dmax, title,
+                            baseH, cw_pt, ch_pt, top);
+            top -= heights[j] + inter;
+        }
+    }
+    for (int i = 0; i < n; i++) {                    /* horizontal legends */
         RObj *r = &ro[i];
         if (r->o->type != HM_LEGEND) continue;
-        RObj *tg = &ro[r->target];
         PlaceKind pk = r->o->place.kind;
-        int vert = pk == PL_RIGHT_OF || pk == PL_LEFT_OF;
-        double barT = vert ? PTX(LEG_BAR) : PTY(LEG_BAR);   /* thickness, npc */
-        double barL = vert ? PTY(LEG_LEN) : PTX(LEG_LEN);   /* length, npc    */
-        const int NSTEP = 64;
-
-        /* bar rectangle, centred on the target heatmap's cross-axis span */
-        double bx0, by0;                                    /* bar low corner */
-        if (vert) {
-            double yc = tg->b + tg->h / 2;
-            by0 = yc - barL / 2;
-            bx0 = pk == PL_RIGHT_OF ? 1 + PTX(HALF_LINE)
-                                    : 0 - PTX(HALF_LINE) - barT;
-        } else {
-            double xc = tg->l + tg->w / 2;
-            bx0 = xc - barL / 2;
-            by0 = pk == PL_BENEATH ? 0 - PTY(HALF_LINE) - barT
-                                   : 1 + PTY(HALF_LINE);
-        }
-        for (int k = 0; k < NSTEP; k++) {
-            g = gt_add(T, G_RECT, CR, CC, CR, CC);
-            g->sub = 1;
-            g->col = fill_map(&spec->fill, (k + 0.5) / NSTEP);
-            if (vert) {
-                g->x0 = bx0; g->x1 = bx0 + barT;
-                g->y0 = by0 + barL * k / NSTEP; g->y1 = by0 + barL * (k + 1) / NSTEP;
-            } else {
-                g->y0 = by0; g->y1 = by0 + barT;
-                g->x0 = bx0 + barL * k / NSTEP; g->x1 = bx0 + barL * (k + 1) / NSTEP;
-            }
-        }
-        double br[16];
-        int nb = extended_breaks(dmin, dmax, 5, br, 16), nf = 0;
-        for (int k = 0; k < nb; k++) if (br[k] >= dmin && br[k] <= dmax) br[nf++] = br[k];
-        int dec = axis_decimals(br, nf);
-        for (int k = 0; k < nf; k++) {
-            double frac = dmax > dmin ? (br[k] - dmin) / (dmax - dmin) : 0.5;
-            char *lab = malloc(32);
-            fmt_break(br[k], dec, lab);
-            g = gt_add(T, G_LINE, CR, CC, CR, CC);
-            g->col = C_TICK; g->lw = lw_pt(0.5);
-            if (vert) {
-                double y = by0 + frac * barL;
-                double tx = pk == PL_RIGHT_OF ? bx0 + barT : bx0;
-                double dir = pk == PL_RIGHT_OF ? 1 : -1;
-                g->x0 = tx; g->x1 = tx + dir * PTX(TICK_LEN); g->y0 = g->y1 = y;
-                g = gt_add(T, G_TEXT, CR, CC, CR, CC);
-                g->str = lab; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
-                g->tx = tx + dir * PTX(TICK_LEN + TXT_GAP); g->ty = y;
-                g->hj = pk == PL_RIGHT_OF ? 0 : 1; g->va = V_INKCENTER;
-            } else {
-                double x = bx0 + frac * barL;
-                double ty = pk == PL_BENEATH ? by0 : by0 + barT;
-                double dir = pk == PL_BENEATH ? -1 : 1;
-                g->y0 = ty; g->y1 = ty + dir * PTY(TICK_LEN); g->x0 = g->x1 = x;
-                g = gt_add(T, G_TEXT, CR, CC, CR, CC);
-                g->str = lab; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
-                g->tx = x; g->ty = ty + dir * PTY(TICK_LEN + TXT_GAP);
-                g->hj = 0.5; g->va = pk == PL_BENEATH ? V_TOP : V_BOTTOM;
-            }
-        }
+        if (pk != PL_BENEATH && pk != PL_TOP_OF) continue;
+        const char *title = legend_title(spec, r, &ro[r->target]);
+        draw_one_legend(T, r, &ro[r->target], spec, dmin, dmax, title,
+                        baseH, cw_pt, ch_pt, 0);
     }
 
     /* ---- row/col name labels (into the reserved margins) ---- */

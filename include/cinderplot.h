@@ -134,6 +134,7 @@ typedef struct {
     HMType type;
     char *name;                    /* auto-assigned if absent */
     char *data;                    /* heatmap/annotation: csv path */
+    char *title;                   /* legend title (NULL = default/none) */
     ClusterMode cluster;           /* heatmap only */
     Side rownames, colnames;       /* heatmap label sides (SIDE_NONE = off) */
     HPlace place;
@@ -147,7 +148,7 @@ typedef struct {
     int nlayers;
     int log_x, log_y;
     char *facet_var;
-    char *lab_title, *lab_x, *lab_y, *lab_colour;
+    char *lab_title, *lab_x, *lab_y, *lab_colour, *lab_fill;
     /* matrix mode */
     HMObj hobjs[MAX_HMOBJS];
     int nhobjs;

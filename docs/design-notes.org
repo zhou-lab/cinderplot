@@ -567,6 +567,46 @@ a fixed physical size, never coupled to matrix dimensions.
 - Legend + same-side rownames would overlap (put on different sides).
 - Width/height are fixed; no pt override exposed in the DSL yet.
 
+* Milestone: discrete legends + legend titles + stacking            :spike:
+Result [2026-07-18]. Categorical legends and titles added; multiple
+legends now pack in the margin instead of overlapping.
+
+** New
+- Discrete (categorical) legend: legend() anchored to a categorical
+  annotation draws a key of fixed 4mm colour squares + level labels,
+  reusing the annotation's factor + hue palette (colours match the
+  annotation bar exactly). Rigid, like the colorbar. Vertical only
+  (horizontal discrete errors clearly).
+- Legend titles: legend(title="...") explicit; else default from
+  labs(fill=) (continuous) or the annotation column name (discrete);
+  none if unset. Drawn at SZ_BASE above the legend, left-aligned.
+- Legend STACKING: vertical legends on a side are packed top-to-bottom,
+  centred as a group on the canvas (ComplexHeatmap-style), so a
+  colorbar + one or more annotation keys coexist without overlap. Fixes
+  the earlier bug where a discrete legend centred on a thin annotation
+  strip clipped off-canvas.
+
+** Design touch
+- draw_one_legend() factored out; a per-side stacking driver computes
+  each block's height (content + title) and lays them out. Discrete
+  key colours pulled from the stored ann_f/ann_pal on the annotation
+  RObj.
+
+** Verified
+- expr colorbar + group (A/B/C) key stack cleanly in the right margin;
+  discrete colours match the top annotation bar; all levels visible;
+  both titled.
+- No-legend heatmap still byte-identical (0 px). Test suite passes.
+  Single vertical legend unchanged; discrete+horizontal errors.
+
+** Deferred
+- Legend title (labs(fill=)) needs the annotation named for a discrete
+  legend to anchor (auto-names are h2, h3...). Consider anchoring by
+  data/column later.
+- Numeric (continuous) annotations get no legend yet (own scale).
+- Horizontal discrete legends; per-object fill scales; legend title
+  centring options.
+
 * Next: algorithms discussion agenda                                  :next:
 - Layout constraint solver — what grid's viewport/unit system buys and
   how much of it is needed.

@@ -132,7 +132,8 @@ static int parse_labs(P *p, PlotSpec *spec) {
         else if (!strcmp(key, "x")) spec->lab_x = val;
         else if (!strcmp(key, "y")) spec->lab_y = val;
         else if (!strcmp(key, "colour") || !strcmp(key, "color")) spec->lab_colour = val;
-        else return fail(p, "labs(%s=...) is not implemented; supported: title, x, y, colour", key);
+        else if (!strcmp(key, "fill")) spec->lab_fill = val;
+        else return fail(p, "labs(%s=...) is not implemented; supported: title, x, y, colour, fill", key);
         free(key);
         skip_ws(p);
         if (*p->s == ',') { p->s++; continue; }
@@ -221,6 +222,10 @@ static int parse_hm_args(P *p, HMObj *o, int want_data) {
                 char *v = string_lit(p);
                 if (!v) return fail(p, "data= expects a quoted path", "");
                 o->data = v;
+            } else if (!strcmp(key, "title")) {
+                char *v = string_lit(p);
+                if (!v) return fail(p, "title= expects a quoted string", "");
+                o->title = v;
             } else if (!strcmp(key, "cluster")) {
                 char *v = ident(p);
                 if (!v) return fail(p, "cluster= expects rows, cols, both, or none", "");
