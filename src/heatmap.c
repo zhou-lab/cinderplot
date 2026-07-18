@@ -42,6 +42,9 @@ typedef struct {
     int *ann_ord;                   /* annotation: display slot -> data index */
     Factor *ann_f; Col *ann_pal;    /* annotation: discrete levels + colours */
     const char *ann_name;           /* annotation: source column name */
+    int ann_continuous;             /* annotation: numeric (own colorbar)? */
+    double ann_dmin, ann_dmax;      /* annotation: continuous scale range */
+    FillScale ann_fill;             /* annotation: continuous colormap */
     int target, leg_discrete;       /* legend: source obj index; discrete key? */
     HClust *tree; int dir, nleaf;   /* dendrogram */
     int *slot;                      /* dendrogram: data index -> display slot */
@@ -111,13 +114,34 @@ static double clampr(double v) {
  * the annotation column name (discrete); NULL = no title drawn */
 static const char *legend_title(const PlotSpec *spec, const RObj *lg, const RObj *src) {
     if (lg->o->title) return lg->o->title;
-    if (lg->leg_discrete) return src->ann_name;
+    if (src->o->type == HM_ANNOTATION) return src->ann_name;
     return spec->lab_fill;
 }
 
+/* the scale a continuous legend draws: a numeric annotation uses its own
+ * range + colormap; a heatmap target uses the shared fill scale */
+static void legend_scale(const RObj *tg, const PlotSpec *spec,
+                         double hmin, double hmax,
+                         double *lo, double *hi, const FillScale **fs) {
+    if (tg->o->type == HM_ANNOTATION && tg->ann_continuous) {
+        *lo = tg->ann_dmin; *hi = tg->ann_dmax; *fs = &tg->ann_fill;
+    } else {
+        *lo = hmin; *hi = hmax; *fs = &spec->fill;
+    }
+}
+
+/* Resolve an anchor reference. An explicit object name= always wins;
+ * failing that, an annotation may be referenced by its data column name
+ * (the ergonomic case). Column names are matched as exact bytes, so a
+ * name with spaces or punctuation is fine as long as it was quoted in
+ * the DSL (right_of("odd name (v2)")). Explicit-name-first keeps a
+ * column that happens to collide with an object name unambiguous. */
 static int find_obj(RObj *ro, int n, const char *name) {
     for (int i = 0; i < n; i++)
         if (!strcmp(ro[i].o->name, name)) return i;
+    for (int i = 0; i < n; i++)
+        if (ro[i].o->type == HM_ANNOTATION && ro[i].ann_name
+            && !strcmp(ro[i].ann_name, name)) return i;
     return -1;
 }
 
@@ -206,6 +230,8 @@ static void draw_one_legend(GTable *T, const RObj *r, const RObj *tg,
         }
         topY = blockTop; leftX = sx;
     } else {                                        /* continuous colorbar */
+        double lo, hi; const FillScale *fs;
+        legend_scale(tg, spec, dmin, dmax, &lo, &hi, &fs);
         double barT = vert ? LPTX(LEG_BAR) : LPTY(LEG_BAR);
         double barL = vert ? LPTY(LEG_LEN) : LPTX(LEG_LEN);
         const int NSTEP = 64, RR = T->nrow - 2, CCc = 1;
@@ -222,18 +248,18 @@ static void draw_one_legend(GTable *T, const RObj *r, const RObj *tg,
         }
         for (int k = 0; k < NSTEP; k++) {
             g = gt_add(T, G_RECT, RR, CCc, RR, CCc);
-            g->sub = 1; g->col = fill_map(&spec->fill, (k + 0.5) / NSTEP);
+            g->sub = 1; g->col = fill_map(fs, (k + 0.5) / NSTEP);
             if (vert) { g->x0 = bx0; g->x1 = bx0 + barT;
                         g->y0 = by0 + barL * k / NSTEP; g->y1 = by0 + barL * (k + 1) / NSTEP; }
             else { g->y0 = by0; g->y1 = by0 + barT;
                    g->x0 = bx0 + barL * k / NSTEP; g->x1 = bx0 + barL * (k + 1) / NSTEP; }
         }
         double br[16];
-        int nb = extended_breaks(dmin, dmax, 5, br, 16), nf = 0;
-        for (int k = 0; k < nb; k++) if (br[k] >= dmin && br[k] <= dmax) br[nf++] = br[k];
+        int nb = extended_breaks(lo, hi, 5, br, 16), nf = 0;
+        for (int k = 0; k < nb; k++) if (br[k] >= lo && br[k] <= hi) br[nf++] = br[k];
         int dec = axis_decimals(br, nf);
         for (int k = 0; k < nf; k++) {
-            double frac = dmax > dmin ? (br[k] - dmin) / (dmax - dmin) : 0.5;
+            double frac = hi > lo ? (br[k] - lo) / (hi - lo) : 0.5;
             char *lab = malloc(32);
             fmt_break(br[k], dec, lab);
             g = gt_add(T, G_LINE, RR, CCc, RR, CCc);
@@ -342,6 +368,8 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                 for (int r = 0; r < df->nrow; r++)
                     ro[i].ann_col[r] = isnan(col->num[r]) ? C_NA
                                      : fill_map_value(&vir, col->num[r], lo, hi);
+                ro[i].ann_continuous = 1;           /* own colorbar scale */
+                ro[i].ann_dmin = lo; ro[i].ann_dmax = hi; ro[i].ann_fill = vir;
             }
             ro[i].nr = ro[i].ann_horiz ? 1 : ro[i].ann_n;
             ro[i].nc = ro[i].ann_horiz ? ro[i].ann_n : 1;
@@ -377,9 +405,12 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             ro[i].nr = 1; ro[i].nc = 1;
             ro[i].target = -1;
             /* anchor decides what the legend describes: a categorical
-             * annotation -> discrete key; a heatmap -> continuous colorbar */
+             * annotation -> discrete key; a numeric annotation -> its own
+             * colorbar; a heatmap -> the shared fill colorbar */
             if (a && a->o->type == HM_ANNOTATION && a->ann_f) {
                 ro[i].target = (int)(a - ro); ro[i].leg_discrete = 1;
+            } else if (a && a->o->type == HM_ANNOTATION && a->ann_continuous) {
+                ro[i].target = (int)(a - ro);
             } else if (a && a->o->type == HM_HEATMAP) {
                 ro[i].target = (int)(a - ro);
             } else {
@@ -388,7 +419,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             }
             if (ro[i].target < 0) {
                 sprintf(err, "legend() found nothing to describe; place it relative to a "
-                             "heatmap (colorbar) or a categorical annotation (discrete key)");
+                             "heatmap or an annotation");
                 return -1;
             }
             if (ro[i].leg_discrete && (pl->kind == PL_TOP_OF || pl->kind == PL_BENEATH)) {
@@ -526,9 +557,11 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                 }
                 across = fmax(LEG_GRID + TXT_GAP + wmax, titleW);
             } else {
+                double lo, hi; const FillScale *fs;
+                legend_scale(&ro[r->target], spec, dmin, dmax, &lo, &hi, &fs);
                 double br[16];
-                int nb = extended_breaks(dmin, dmax, 5, br, 16), nf = 0;
-                for (int k = 0; k < nb; k++) if (br[k] >= dmin && br[k] <= dmax) br[nf++] = br[k];
+                int nb = extended_breaks(lo, hi, 5, br, 16), nf = 0;
+                for (int k = 0; k < nb; k++) if (br[k] >= lo && br[k] <= hi) br[nf++] = br[k];
                 int dec = axis_decimals(br, nf);
                 double wmax = 0;
                 for (int k = 0; k < nf; k++) {

@@ -607,6 +607,39 @@ legends now pack in the margin instead of overlapping.
 - Horizontal discrete legends; per-object fill scales; legend title
   centring options.
 
+* Milestone: anchor-by-column + continuous annotation legends       :spike:
+Result [2026-07-18]. Two ergonomics from the legend review.
+
+** Anchor a legend (or any object) by an annotation's data column name
+- find_obj() now resolves an anchor string as: exact object name= first,
+  then an annotation's source column name. So legend(right_of("group"))
+  works without naming the annotation; the auto-name h2 still works too.
+- Protective: column names match as EXACT bytes, and a name with spaces
+  or punctuation is fine when quoted in the DSL — right_of("my group
+  (v2)") resolves (raw_token -> string_lit handles the quotes). Explicit
+  name= wins over a colliding column name; first match wins on dup
+  columns; unknown anchors still error clearly.
+
+** Continuous (numeric) annotation legends
+- A numeric annotation now stores its OWN scale (viridis over its
+  min/max) on the RObj (ann_continuous/ann_dmin/ann_dmax/ann_fill).
+- legend() anchored to a numeric annotation draws a colorbar in that
+  annotation's own scale, not the heatmap's shared fill scale
+  (legend_scale() picks the source's range + colormap; both the margin
+  measurement and the draw use it). Colours match the annotation bar.
+- Default title for any annotation legend = its column name.
+
+** Verified
+- One figure: expr heatmap colorbar + group discrete key + score
+  numeric colorbar (own 0-75 viridis scale), all three stacked in the
+  right margin, all anchored by column name (no name=).
+- Quoted weird column name resolves; unknown anchor errors; no-legend
+  output byte-identical (0 px); test suite passes.
+
+** Deferred
+- Ambiguous duplicate column names: first wins (could warn).
+- Horizontal discrete legends; per-heatmap fill overrides.
+
 * Next: algorithms discussion agenda                                  :next:
 - Layout constraint solver — what grid's viewport/unit system buys and
   how much of it is needed.
