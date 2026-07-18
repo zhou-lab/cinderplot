@@ -1,9 +1,19 @@
 /* gtable.c — the layout engine: fixed/null units, one-pass resolver,
  * grobs positioned in npc coordinates within cell spans. */
 #include "cinderplot.h"
+#include <cairo-pdf.h>
+#include <cairo-svg.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>   /* strcasecmp */
+
+cairo_surface_t *cp_surface_create(const char *out, double w_pt, double h_pt) {
+    const char *dot = strrchr(out, '.');
+    if (dot && strcasecmp(dot, ".svg") == 0)
+        return cairo_svg_surface_create(out, w_pt, h_pt);
+    return cairo_pdf_surface_create(out, w_pt, h_pt);
+}
 
 static void set_col(cairo_t *cr, Col c) { cairo_set_source_rgb(cr, c.r, c.g, c.b); }
 

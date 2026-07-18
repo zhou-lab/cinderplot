@@ -52,7 +52,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
     double x0 = rstart, x1 = rend;
 #define NPCX(v) (((v) - x0) / (x1 - x0))
 
-    cairo_surface_t *surf = cairo_pdf_surface_create(out, w_pt, h_pt);
+    cairo_surface_t *surf = cp_surface_create(out, w_pt, h_pt);
     cairo_t *cr = cairo_create(surf);
     cairo_select_font_face(cr, FONT_FAMILY, CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
 

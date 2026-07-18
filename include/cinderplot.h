@@ -119,6 +119,10 @@ double gt_fixed_h(const GTable *t);
 void gt_resolve(GTable *t, double x, double y, double w, double h);
 void gt_render(GTable *t, cairo_t *cr);
 
+/* Create the output surface, choosing the backend from the file extension:
+ * ".svg" -> SVG, anything else (".pdf") -> PDF. Dimensions in points. */
+cairo_surface_t *cp_surface_create(const char *out, double w_pt, double h_pt);
+
 /* ---------- dsl.c: verbatim ggplot subset ---------- */
 typedef struct { char *col; int is_factor; char *expr; } AesEntry; /* col NULL = unset */
 

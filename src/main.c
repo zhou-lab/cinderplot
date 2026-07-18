@@ -16,7 +16,8 @@
 #include <string.h>
 
 static const char *USAGE =
-    "usage: cinderplot [DSL-expr | flags] [data.csv] [-o out.pdf] [--size WxH] [--dump-spec]\n"
+    "usage: cinderplot [DSL-expr | flags] [data.csv] [-o out.pdf|out.svg] [--size WxH] [--dump-spec]\n"
+    "         (output format is chosen from the -o extension: .svg -> SVG, else PDF)\n"
     "  DSL:   'data.csv + aes(x, y, colour=factor(g)) + geom_point()\n"
     "          + labs(title=\"...\") + facet_wrap(~g)'\n"
     "  flags: -x COL -y COL [-c COL] [-f COL] [-t TITLE] [-m point|line|col|histogram]\n"
