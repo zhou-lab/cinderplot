@@ -349,6 +349,22 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         free(xs);
     }
 
+    /* ---- boxplot dodge: side-by-side boxes when colour is a different
+     * grouping than x (i.e. some x-category holds >1 colour group) ---- */
+    int box_dodge = 0;
+    if (hasbox && cf && disc_x) {
+        for (int cat = 0; cat < xf->nlev && !box_dodge; cat++) {
+            int *seen = calloc(cf->nlev, sizeof(int)), cnt = 0;
+            for (int r = 0; r < df->nrow; r++)
+                if (use[r] && xf->idx[r] == cat && cf->idx[r] >= 0 && !seen[cf->idx[r]]) {
+                    seen[cf->idx[r]] = 1; cnt++;
+                }
+            if (cnt > 1) box_dodge = 1;
+            free(seen);
+        }
+    }
+    int box_slots = box_dodge ? cf->nlev : 1;
+
 #define SR(r) (3 + 3 * (r))
 #define PR(r) (4 + 3 * (r))
 #define PC(c) (4 + 2 * (c))
@@ -530,56 +546,65 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     g->lw = lw_pt(0.5); g->clip = 1;
                 }
             } else if (gt == GEOM_BOXPLOT) {
-                /* one box per x-category: five-number summary + Tukey
-                 * whiskers + outlier points, in transformed-y space */
-                const double HALFW = 0.375;             /* box half-width (0.75) */
+                /* five-number summary + Tukey whiskers + outliers, in
+                 * transformed-y space; position_dodge2 when box_dodge */
+                const double WFULL = 0.75;               /* undodged box width */
+                double slotw = WFULL / box_slots;
+                double boxw = box_slots > 1 ? slotw * 0.9 : WFULL;  /* padding 0.1 */
                 for (int cat = 0; cat < xf->nlev; cat++) {
-                    int ny = 0;
-                    for (int r = 0; r < df->nrow; r++)
-                        if (use[r] && (!ff || ff->idx[r] == p) && xf->idx[r] == cat) ny++;
-                    if (ny == 0) continue;
-                    double *ys = malloc(ny * sizeof(double));
-                    ny = 0;
-                    for (int r = 0; r < df->nrow; r++)
-                        if (use[r] && (!ff || ff->idx[r] == p) && xf->idx[r] == cat)
-                            ys[ny++] = TY(yc->num[r]);
-                    qsort(ys, ny, sizeof(double), cmp_double);
-                    BoxStat b; box_stats(ys, ny, &b);
-                    double xi = cat + 1;
-                    double xl = NPCX(xi - HALFW), xr = NPCX(xi + HALFW), xm = NPCX(xi);
-                    Col lc = cf ? pal[cat % cf->nlev] : C_TICK;   /* box lines */
-
-                    for (int w = 0; w < 2; w++) {        /* whiskers */
-                        g = gt_add(T, G_LINE, R, C, R, C);
-                        g->col = lc; g->lw = lw_pt(0.5); g->clip = 1;
-                        g->x0 = g->x1 = xm;
-                        g->y0 = NPCY(w ? b.q1 : b.q3); g->y1 = NPCY(w ? b.wlo : b.whi);
-                    }
-                    g = gt_add(T, G_RECT, R, C, R, C);   /* white fill */
-                    g->col = C_WHITE; g->sub = 1; g->clip = 1;
-                    g->x0 = xl; g->x1 = xr; g->y0 = NPCY(b.q1); g->y1 = NPCY(b.q3);
-                    g = gt_add(T, G_RECT, R, C, R, C);   /* box outline */
-                    g->col = lc; g->sub = 1; g->stroke = 1; g->lw = lw_pt(0.5); g->clip = 1;
-                    g->x0 = xl; g->x1 = xr; g->y0 = NPCY(b.q1); g->y1 = NPCY(b.q3);
-                    g = gt_add(T, G_LINE, R, C, R, C);   /* median (fatten 2) */
-                    g->col = lc; g->lw = lw_pt(1.0); g->clip = 1;
-                    g->x0 = xl; g->x1 = xr; g->y0 = g->y1 = NPCY(b.med);
-
-                    int nout = 0;
-                    for (int i = 0; i < ny; i++) if (ys[i] > b.whi || ys[i] < b.wlo) nout++;
-                    if (nout) {
-                        double *ox = malloc(nout * sizeof(double)), *oy = malloc(nout * sizeof(double));
-                        Col *oc = malloc(nout * sizeof(Col));
-                        nout = 0;
-                        for (int i = 0; i < ny; i++)
-                            if (ys[i] > b.whi || ys[i] < b.wlo) {
-                                ox[nout] = xm; oy[nout] = NPCY(ys[i]); oc[nout] = lc; nout++;
+                    for (int s = 0; s < box_slots; s++) {
+                        int ny = 0, anyg = -1;
+                        for (int r = 0; r < df->nrow; r++)
+                            if (use[r] && (!ff || ff->idx[r] == p) && xf->idx[r] == cat
+                                && (box_slots == 1 || cf->idx[r] == s)) ny++;
+                        if (ny == 0) continue;
+                        double *ys = malloc(ny * sizeof(double));
+                        ny = 0;
+                        for (int r = 0; r < df->nrow; r++)
+                            if (use[r] && (!ff || ff->idx[r] == p) && xf->idx[r] == cat
+                                && (box_slots == 1 || cf->idx[r] == s)) {
+                                ys[ny++] = TY(yc->num[r]);
+                                anyg = cf ? cf->idx[r] : -1;
                             }
-                        g = gt_add(T, G_POINTS, R, C, R, C);
-                        g->n = nout; g->px = ox; g->py = oy; g->pcol = oc;
-                        g->radius = PT_RADIUS; g->clip = 1;
+                        qsort(ys, ny, sizeof(double), cmp_double);
+                        BoxStat b; box_stats(ys, ny, &b);
+                        double center = (cat + 1) - WFULL / 2 + slotw * (s + 0.5);
+                        double xl = NPCX(center - boxw / 2), xr = NPCX(center + boxw / 2);
+                        double xm = NPCX(center);
+                        Col lc = cf ? pal[box_slots > 1 ? s : anyg] : C_TICK;
+
+                        for (int w = 0; w < 2; w++) {    /* whiskers */
+                            g = gt_add(T, G_LINE, R, C, R, C);
+                            g->col = lc; g->lw = lw_pt(0.5); g->clip = 1;
+                            g->x0 = g->x1 = xm;
+                            g->y0 = NPCY(w ? b.q1 : b.q3); g->y1 = NPCY(w ? b.wlo : b.whi);
+                        }
+                        g = gt_add(T, G_RECT, R, C, R, C);   /* white fill */
+                        g->col = C_WHITE; g->sub = 1; g->clip = 1;
+                        g->x0 = xl; g->x1 = xr; g->y0 = NPCY(b.q1); g->y1 = NPCY(b.q3);
+                        g = gt_add(T, G_RECT, R, C, R, C);   /* box outline */
+                        g->col = lc; g->sub = 1; g->stroke = 1; g->lw = lw_pt(0.5); g->clip = 1;
+                        g->x0 = xl; g->x1 = xr; g->y0 = NPCY(b.q1); g->y1 = NPCY(b.q3);
+                        g = gt_add(T, G_LINE, R, C, R, C);   /* median (fatten 2) */
+                        g->col = lc; g->lw = lw_pt(1.0); g->clip = 1;
+                        g->x0 = xl; g->x1 = xr; g->y0 = g->y1 = NPCY(b.med);
+
+                        int nout = 0;
+                        for (int i = 0; i < ny; i++) if (ys[i] > b.whi || ys[i] < b.wlo) nout++;
+                        if (nout) {
+                            double *ox = malloc(nout * sizeof(double)), *oy = malloc(nout * sizeof(double));
+                            Col *oc = malloc(nout * sizeof(Col));
+                            nout = 0;
+                            for (int i = 0; i < ny; i++)
+                                if (ys[i] > b.whi || ys[i] < b.wlo) {
+                                    ox[nout] = xm; oy[nout] = NPCY(ys[i]); oc[nout] = lc; nout++;
+                                }
+                            g = gt_add(T, G_POINTS, R, C, R, C);
+                            g->n = nout; g->px = ox; g->py = oy; g->pcol = oc;
+                            g->radius = PT_RADIUS; g->clip = 1;
+                        }
+                        free(ys);
                     }
-                    free(ys);
                 }
             }
         }

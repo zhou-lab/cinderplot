@@ -735,9 +735,19 @@ geom_boxplot; both verified against ggplot2/R.
 - Regression: continuous scatter byte-identical (0 px); test suite
   passes.
 
+** Follow-up [2026-07-18]: boxplot dodge
+When colour is a DIFFERENT grouping than x (some x-category holds >1
+colour group), boxes dodge side-by-side (position_dodge2): the 0.75
+width splits into k_c slots, each box slotw*0.9 (padding 0.1), slot j =
+colour group j. Matches ggplot_build exactly (cyl4 centres 0.8125/
+1.1875, width 0.3375). colour==x still yields one centred box per
+category (dodge auto-detected off). Verified vs ggplot2; plain and
+coloured-single boxplots byte-identical; scatter unchanged.
+
 ** Deferred
-- Boxplot dodge (colour a different factor than x -> side-by-side
-  boxes) not done; colour is assumed to align with the x categories.
+- position_dodge2 edge cases: unbalanced groups (a colour absent from
+  some x-category) use fixed per-group slots, leaving a gap, rather
+  than ggplot's repacking. Fine for balanced designs.
 - Discrete y scale; geom_bar (count stat); geom_smooth.
 - New G_RECT `stroke` mode (outline) reusable for future outlined geoms.
 
