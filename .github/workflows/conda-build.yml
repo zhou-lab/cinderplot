@@ -61,5 +61,5 @@ jobs:
           fi
           for pkg in "$RUNNER_TEMP"/bld/*/*.conda; do
             echo "uploading $pkg"
-            anaconda -t "$ANACONDA_TOKEN" upload -u zhou-lab --label main --force "$pkg"
+            conda run -n base anaconda -t "$ANACONDA_TOKEN" upload -u zhou-lab --label main --force "$pkg"
           done
