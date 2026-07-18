@@ -22,6 +22,12 @@
 
 #define MIN_RATIO 0.02
 
+/* Legends are RIGID chrome, sized in physical units (never coupled to the
+ * matrix), following ComplexHeatmap: bar 4mm thick, ~28mm long. */
+#define MM       (72.0 / 25.4)
+#define LEG_BAR  (4.0 * MM)         /* colorbar thickness  */
+#define LEG_LEN  (28.0 * MM)        /* colorbar length     */
+
 typedef struct {
     const HMObj *o;
     double l, b, w, h;              /* npc canvas rect (y up) */
@@ -257,10 +263,8 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                 for (int k = 0; k < i; k++)
                     if (ro[k].o->type == HM_HEATMAP) { ro[i].target = k; break; }
             if (ro[i].target < 0) { sprintf(err, "legend() found no heatmap to describe"); return -1; }
-            if (pl->kind == PL_TOP_OF || pl->kind == PL_BENEATH) {
-                sprintf(err, "horizontal legends are not implemented yet; use right_of()/left_of()");
-                return -1;
-            }
+            /* rigid chrome placed in the margin; not a canvas rect */
+            continue;
         }
 
         /* rect (wheatmap generator semantics) */
@@ -292,15 +296,17 @@ int render_heatmap(const PlotSpec *spec, const char *out,
         }
     }
 
-    /* ---- normalize bounding box into [0,1] ---- */
+    /* ---- normalize bounding box into [0,1] (legends are margin chrome) ---- */
     double x0 = 1e300, x1 = -1e300, y0 = 1e300, y1 = -1e300;
     for (int i = 0; i < n; i++) {
+        if (ro[i].o->type == HM_LEGEND) continue;
         if (ro[i].l < x0) x0 = ro[i].l;
         if (ro[i].l + ro[i].w > x1) x1 = ro[i].l + ro[i].w;
         if (ro[i].b < y0) y0 = ro[i].b;
         if (ro[i].b + ro[i].h > y1) y1 = ro[i].b + ro[i].h;
     }
     for (int i = 0; i < n; i++) {
+        if (ro[i].o->type == HM_LEGEND) continue;
         ro[i].l = (ro[i].l - x0) / (x1 - x0);
         ro[i].w = ro[i].w / (x1 - x0);
         ro[i].b = (ro[i].b - y0) / (y1 - y0);
@@ -371,6 +377,9 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                     marT = fmax(marT, ext);
             }
         } else if (r->o->type == HM_LEGEND) {
+            /* rigid footprint: fixed bar thickness + tick + widest label
+             * (V), or bar + tick + one text line (H). Reserved on the
+             * placement side; length is fixed (LEG_LEN), not the matrix. */
             double br[16];
             int nb = extended_breaks(dmin, dmax, 5, br, 16), nf = 0;
             for (int k = 0; k < nb; k++) if (br[k] >= dmin && br[k] <= dmax) br[nf++] = br[k];
@@ -381,8 +390,15 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                 double tw = text_w(cr, SZ_AXIS_TEXT, b);
                 if (tw > wmax) wmax = tw;
             }
-            if (fabs(r->l + r->w - 1) < EPS)
-                marR = fmax(marR, MARGIN + TICK_LEN + TXT_GAP + wmax);
+            PlaceKind pk = r->o->place.kind;
+            if (pk == PL_RIGHT_OF)
+                marR = fmax(marR, MARGIN + HALF_LINE + LEG_BAR + TICK_LEN + TXT_GAP + wmax);
+            else if (pk == PL_LEFT_OF)
+                marL = fmax(marL, MARGIN + HALF_LINE + LEG_BAR + TICK_LEN + TXT_GAP + wmax);
+            else if (pk == PL_BENEATH)
+                marB = fmax(marB, MARGIN + HALF_LINE + LEG_BAR + TICK_LEN + TXT_GAP + (fe.ascent + fe.descent));
+            else
+                marT = fmax(marT, MARGIN + HALF_LINE + LEG_BAR + TICK_LEN + TXT_GAP + (fe.ascent + fe.descent));
         }
     }
 
@@ -445,33 +461,74 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                     g->x0 = r->l; g->x1 = r->l + r->w;
                 }
             }
-        } else {                                  /* vertical colorbar legend */
-            const int NSTEP = 64;
-            for (int k = 0; k < NSTEP; k++) {
-                g = gt_add(T, G_RECT, CR, CC, CR, CC);
-                g->sub = 1;
-                g->col = fill_map(&spec->fill, (k + 0.5) / NSTEP);
-                g->y0 = r->b + r->h * k / NSTEP;
-                g->y1 = r->b + r->h * (k + 1) / NSTEP;
-                g->x0 = r->l; g->x1 = r->l + r->w;
+        }
+        /* HM_LEGEND is drawn separately, as rigid margin chrome, below */
+    }
+
+    /* ---- rigid colorbar legends (fixed pt size, in the margin) ---- */
+    for (int i = 0; i < n; i++) {
+        RObj *r = &ro[i];
+        if (r->o->type != HM_LEGEND) continue;
+        RObj *tg = &ro[r->target];
+        PlaceKind pk = r->o->place.kind;
+        int vert = pk == PL_RIGHT_OF || pk == PL_LEFT_OF;
+        double barT = vert ? PTX(LEG_BAR) : PTY(LEG_BAR);   /* thickness, npc */
+        double barL = vert ? PTY(LEG_LEN) : PTX(LEG_LEN);   /* length, npc    */
+        const int NSTEP = 64;
+
+        /* bar rectangle, centred on the target heatmap's cross-axis span */
+        double bx0, by0;                                    /* bar low corner */
+        if (vert) {
+            double yc = tg->b + tg->h / 2;
+            by0 = yc - barL / 2;
+            bx0 = pk == PL_RIGHT_OF ? 1 + PTX(HALF_LINE)
+                                    : 0 - PTX(HALF_LINE) - barT;
+        } else {
+            double xc = tg->l + tg->w / 2;
+            bx0 = xc - barL / 2;
+            by0 = pk == PL_BENEATH ? 0 - PTY(HALF_LINE) - barT
+                                   : 1 + PTY(HALF_LINE);
+        }
+        for (int k = 0; k < NSTEP; k++) {
+            g = gt_add(T, G_RECT, CR, CC, CR, CC);
+            g->sub = 1;
+            g->col = fill_map(&spec->fill, (k + 0.5) / NSTEP);
+            if (vert) {
+                g->x0 = bx0; g->x1 = bx0 + barT;
+                g->y0 = by0 + barL * k / NSTEP; g->y1 = by0 + barL * (k + 1) / NSTEP;
+            } else {
+                g->y0 = by0; g->y1 = by0 + barT;
+                g->x0 = bx0 + barL * k / NSTEP; g->x1 = bx0 + barL * (k + 1) / NSTEP;
             }
-            double br[16];
-            int nb = extended_breaks(dmin, dmax, 5, br, 16), nf = 0;
-            for (int k = 0; k < nb; k++) if (br[k] >= dmin && br[k] <= dmax) br[nf++] = br[k];
-            int dec = axis_decimals(br, nf);
-            for (int k = 0; k < nf; k++) {
-                double frac = dmax > dmin ? (br[k] - dmin) / (dmax - dmin) : 0.5;
-                double y = r->b + frac * r->h;
-                g = gt_add(T, G_LINE, CR, CC, CR, CC);
-                g->col = C_TICK; g->lw = lw_pt(0.5);
-                g->x0 = r->l + r->w; g->x1 = r->l + r->w + PTX(TICK_LEN);
-                g->y0 = g->y1 = y;
-                char *lab = malloc(32);
-                fmt_break(br[k], dec, lab);
+        }
+        double br[16];
+        int nb = extended_breaks(dmin, dmax, 5, br, 16), nf = 0;
+        for (int k = 0; k < nb; k++) if (br[k] >= dmin && br[k] <= dmax) br[nf++] = br[k];
+        int dec = axis_decimals(br, nf);
+        for (int k = 0; k < nf; k++) {
+            double frac = dmax > dmin ? (br[k] - dmin) / (dmax - dmin) : 0.5;
+            char *lab = malloc(32);
+            fmt_break(br[k], dec, lab);
+            g = gt_add(T, G_LINE, CR, CC, CR, CC);
+            g->col = C_TICK; g->lw = lw_pt(0.5);
+            if (vert) {
+                double y = by0 + frac * barL;
+                double tx = pk == PL_RIGHT_OF ? bx0 + barT : bx0;
+                double dir = pk == PL_RIGHT_OF ? 1 : -1;
+                g->x0 = tx; g->x1 = tx + dir * PTX(TICK_LEN); g->y0 = g->y1 = y;
                 g = gt_add(T, G_TEXT, CR, CC, CR, CC);
                 g->str = lab; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
-                g->tx = r->l + r->w + PTX(TICK_LEN + TXT_GAP);
-                g->ty = y; g->hj = 0; g->va = V_INKCENTER;
+                g->tx = tx + dir * PTX(TICK_LEN + TXT_GAP); g->ty = y;
+                g->hj = pk == PL_RIGHT_OF ? 0 : 1; g->va = V_INKCENTER;
+            } else {
+                double x = bx0 + frac * barL;
+                double ty = pk == PL_BENEATH ? by0 : by0 + barT;
+                double dir = pk == PL_BENEATH ? -1 : 1;
+                g->y0 = ty; g->y1 = ty + dir * PTY(TICK_LEN); g->x0 = g->x1 = x;
+                g = gt_add(T, G_TEXT, CR, CC, CR, CC);
+                g->str = lab; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
+                g->tx = x; g->ty = ty + dir * PTY(TICK_LEN + TXT_GAP);
+                g->hj = 0.5; g->va = pk == PL_BENEATH ? V_TOP : V_BOTTOM;
             }
         }
     }

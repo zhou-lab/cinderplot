@@ -534,6 +534,39 @@ restriction.)
 - Raster mode (>200k cells); horizontal legends; per-object colormaps;
   45-degree colname rotation.
 
+* Milestone: rigid legends (V + H), decoupled from the matrix       :spike:
+Result [2026-07-18]. Fixed a design flaw: the spike-1 legend coupled
+its size to the heatmap (height = anchor height, width = 0.05 npc) —
+too tall on big matrices, too short on small ones, and it drifted with
+figure size. Redesigned per ComplexHeatmap: legends are RIGID chrome at
+a fixed physical size, never coupled to matrix dimensions.
+
+** Design
+- Fixed pt dims (ComplexHeatmap defaults): bar 4mm thick, 28mm long.
+  =#define LEG_BAR (4*MM)=, =LEG_LEN (28*MM)=, MM = 72/25.4.
+- Legend pulled OUT of the canvas bbox (no longer a normalized canvas
+  rect). It's margin chrome, like axis labels: reserves a fixed-size
+  margin on its placement side and is drawn there, centered on the
+  target heatmap's cross-axis.
+- Both orientations now: vertical (right_of/left_of) reserves L/R
+  margin; horizontal (beneath/top_of) reserves B/T margin. Ticks and
+  labels flip to the outward side automatically. (Answers "LegendV and
+  LegendH?" — both now exist; before, horizontal errored.)
+
+** Verified
+- Rigidity: colorbar renders 165 px (=28mm at 150dpi) for BOTH a 2-row
+  and a 20-row matrix at the same figure size — identical. That's the
+  bug fixed: size no longer tracks the matrix.
+- No-legend heatmap still byte-identical (0 px). Test suite passes.
+  Labels-right + legend-beneath compose cleanly (different sides).
+
+** Deferred
+- Discrete/categorical legends (fixed 4mm grid squares + gap) not yet —
+  only continuous colorbars. Annotations still self-color without a key.
+- Legend title (labs(fill=)) not drawn yet.
+- Legend + same-side rownames would overlap (put on different sides).
+- Width/height are fixed; no pt override exposed in the DSL yet.
+
 * Next: algorithms discussion agenda                                  :next:
 - Layout constraint solver — what grid's viewport/unit system buys and
   how much of it is needed.
