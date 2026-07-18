@@ -830,11 +830,40 @@ target in examples/genome/ (K562 EPICv2 CNV, hg38 scaffold).
   bar + Wilkinson tick labels for a numeric colour aesthetic; value-
   correct (gradient2 midpoint right). Completes the CNV figure.
 
-** M2 (later): locus track-browser
-Third assembler (render_tracks.c): coverage/genes/interval/arcs stacked
-on a single region. Gene models as BED12+ bgzip+tabix (zlib + small
-bgzf/tabix reader); headerless BED/GFF parsers. Plan:
-docs (plan file) / design-notes M2 section.
+* Milestone: genomic M2 — locus track-browser                       :spike:
+Result [2026-07-18]. A pyGenomeTracks-style single-region track stack,
+files-in / PDF-out, no R. New third assembler render_tracks.c +
+track_io.c; gtable engine unchanged.
+
+** Pieces
+- DSL/CLI: region(chr:start-end) or --region; coverage()/interval()/
+  genes()/arcs() -> TrackObj (name=,height=,max=,color=,data=). Mode by
+  ntracks>0; dsl_parse handles function-first expressions (no leading
+  data file). main.c dispatch mirrors nhobjs.
+- track_io.c: tab-separated, headerless, region-filtered readers — BED
+  (Interval), bedGraph (SigBin), BEDPE (Link), BED12 (GeneModel w/ exon
+  blocks). BED 0-based half-open kept as-is; overlap-filtered on load.
+- render_tracks.c: outer gtable [MARGIN|label|gap|PANEL null|MARGIN]
+  cols, one unull(weight) row per track + gaps + a genomic axis row.
+  Genomic axis picks bp/kb/Mb unit, extended_breaks in unit space,
+  suffix labels; faint gridlines; measured left labels.
+- Renderers: coverage (bedGraph rects to baseline, [0,max] readout),
+  interval (greedy lane-packing + names), genes (BED12: thin-UTR/thick-
+  CDS exon boxes, intron line, strand chevrons > / <, names, packed),
+  arcs (BEDPE midpoints -> polyline half-loops, height ~ span).
+
+** Verified
+- Full browser figure (ATAC coverage + gene models + peaks + loops over
+  chr1:1.0-1.2 Mb): coverage fill + readout, correct exon/CDS/strand
+  gene structure, lane-packed peaks (overlap -> 2nd lane), arcs. Region
+  filtering drops off-chrom / out-of-window records. Grammar + matrix +
+  test suite unaffected.
+
+** Deferred (M2 follow-ups)
+- BED12+ via bgzip+tabix (zlib + small bgzf/tabix reader) for true
+  region-slicing of large gene annotations; GFF3/GTF parsing; dense-
+  signal column-binning; rightmost axis-label edge overflow; --genome
+  hg38 auto-load of bundled models.
 
 * Next: algorithms discussion agenda                                  :next:
 - Layout constraint solver — what grid's viewport/unit system buys and
