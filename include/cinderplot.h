@@ -129,11 +129,13 @@ typedef struct {
 } HPlace;
 typedef enum { HM_HEATMAP, HM_ANNOTATION, HM_LEGEND, HM_DENDROGRAM } HMType;
 typedef enum { CL_NONE, CL_ROWS, CL_COLS, CL_BOTH } ClusterMode;
+typedef enum { SIDE_NONE, SIDE_LEFT, SIDE_RIGHT, SIDE_TOP, SIDE_BOTTOM } Side;
 typedef struct {
     HMType type;
     char *name;                    /* auto-assigned if absent */
     char *data;                    /* heatmap/annotation: csv path */
     ClusterMode cluster;           /* heatmap only */
+    Side rownames, colnames;       /* heatmap label sides (SIDE_NONE = off) */
     HPlace place;
 } HMObj;
 #define MAX_HMOBJS 16

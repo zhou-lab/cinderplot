@@ -492,6 +492,48 @@ byte-unchanged (composite regression 0 px).
 - Raster mode (>200k cells still errors); horizontal legends; per-
   object colormaps; drawing rownames/colnames.
 
+* Milestone: heatmap spike 3 — auto-margins + row/col labels        :spike:
+Result [2026-07-18]. wheatmap's auto_margin ported: outward labels are
+measured and reserved as page margins so nothing clips.
+
+** New pieces
+- DSL: heatmap(rownames=left|right|none, colnames=top|bottom|none).
+  Default none (opt-in, like wheatmap yticklabels=FALSE).
+- heatmap.c: a measurement pass computes marL/marR/marT/marB in pt from
+  every OUTWARD-facing label — rownames (L/R, horizontal), colnames
+  (T/B, rotated 90 via existing rot90 grob), legend colorbar tick
+  labels — replacing the old fixed 30pt legend slack. Boundary test: a
+  label reserves margin only if its object's edge on that side is at
+  the normalized bbox boundary (0 or 1), so interior labels don't
+  inflate the page.
+- Labels drawn into the reserved margin by placing grobs at npc just
+  outside [0,1], converting the pt gap through the FINAL canvas cell
+  size (cw_pt/ch_pt). Labels follow the clustered display order
+  (rn[roword[slot]]).
+
+** Coupling avoided
+Boundary-anchored labels have pt extent independent of canvas size, so
+margins resolve in a single pass — no measure/resolve iteration. (Grid
+gets this from draw-time measurement; we get it from the bbox-boundary
+restriction.)
+
+** Verified
+- Long-rowname clustered heatmap (very_long_gene_name_NN right +
+  sample_NN bottom + both dendrograms): all labels fully visible, none
+  clipped; right/bottom margins auto-sized to the longest label.
+- Regression: no-legend/no-label heatmap byte-identical (0 px) — all
+  margins collapse to MARGIN, same geometry as before. Legend figures
+  change intentionally (measured margin < old fixed 30pt). Grammar mode
+  and test suite unaffected.
+
+** Deferred
+- rownames + legend on the SAME side (would overlap): unsupported;
+  wheatmap shifts siblings outward — not ported. Put them on
+  different sides.
+- colnames=top combined with a title can collide (both want the top).
+- Raster mode (>200k cells); horizontal legends; per-object colormaps;
+  45-degree colname rotation.
+
 * Next: algorithms discussion agenda                                  :next:
 - Layout constraint solver — what grid's viewport/unit system buys and
   how much of it is needed.

@@ -86,6 +86,13 @@ static Matrix *matrix_from_df(const DataFrame *df, char *err) {
     return m;
 }
 
+static double text_w(cairo_t *cr, double size, const char *s) {
+    cairo_text_extents_t e;
+    cairo_set_font_size(cr, size);
+    cairo_text_extents(cr, s, &e);
+    return e.x_advance;
+}
+
 static double clampr(double v) {
     return v < MIN_RATIO ? MIN_RATIO : v > 1.0 / MIN_RATIO ? 1.0 / MIN_RATIO : v;
 }
@@ -144,7 +151,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                    double w_pt, double h_pt, char *err) {
     RObj ro[MAX_HMOBJS];
     memset(ro, 0, sizeof ro);
-    int n = spec->nhobjs, any_legend = 0;
+    int n = spec->nhobjs;
 
     /* ---- load data & resolve placements sequentially ---- */
     for (int i = 0; i < n; i++) {
@@ -243,7 +250,6 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             ro[i].nr = 1; ro[i].nc = 1;
         }
         if (o->type == HM_LEGEND) {
-            any_legend = 1;
             ro[i].nr = 1; ro[i].nc = 1;
             ro[i].target = -1;
             if (a && a->o->type == HM_HEATMAP) ro[i].target = (int)(a - ro);
@@ -320,7 +326,11 @@ int render_heatmap(const PlotSpec *spec, const char *out,
     }
     if (dmin > dmax) { sprintf(err, "no finite values in matrix"); return -1; }
 
-    /* ---- outer gtable: measured chrome, canvas as the null cell ---- */
+    /* ---- outer gtable: MEASURED chrome, canvas as the null cell ----
+     * wheatmap's auto_margin: measure every outward-facing label and
+     * reserve it as a page margin so nothing clips at the device edge.
+     * Boundary test: a label reserves margin only when its object's edge
+     * on that side sits at the normalized bbox boundary (0 or 1). */
     cairo_surface_t *surf = cairo_pdf_surface_create(out, w_pt, h_pt);
     cairo_t *cr = cairo_create(surf);
     cairo_select_font_face(cr, FONT_FAMILY, CAIRO_FONT_SLANT_NORMAL,
@@ -330,23 +340,71 @@ int render_heatmap(const PlotSpec *spec, const char *out,
     cairo_font_extents(cr, &fe);
     double titleh = spec->lab_title ? fe.ascent + fe.descent : 0;
 
-    GTable *T = calloc(1, sizeof(GTable));
-    T->ncol = 4;
-    T->colw[0] = upt(MARGIN);
-    T->colw[1] = unull(1);
-    T->colw[2] = upt(any_legend ? 30 : 0);       /* label slack; auto-margin is spike 3 */
-    T->colw[3] = upt(MARGIN);
-    T->nrow = 5;
-    T->rowh[0] = upt(MARGIN);
-    T->rowh[1] = upt(titleh);
-    T->rowh[2] = upt(titleh ? HALF_LINE : 0);
-    T->rowh[3] = unull(1);
-    T->rowh[4] = upt(MARGIN);
-    const int CR = 3, CC = 1;                    /* canvas cell */
+    double marL = MARGIN, marR = MARGIN, marT = MARGIN, marB = MARGIN;
+    const double EPS = 1e-6;
+    for (int i = 0; i < n; i++) {
+        RObj *r = &ro[i];
+        if (r->o->type == HM_HEATMAP) {
+            Matrix *m = r->m;
+            if (r->o->rownames && m->rn) {
+                double wmax = 0;
+                for (int k = 0; k < m->nr; k++) {
+                    double tw = text_w(cr, SZ_AXIS_TEXT, m->rn[k]);
+                    if (tw > wmax) wmax = tw;
+                }
+                double ext = MARGIN + TXT_GAP + wmax;
+                if (r->o->rownames == SIDE_RIGHT && fabs(r->l + r->w - 1) < EPS)
+                    marR = fmax(marR, ext);
+                if (r->o->rownames == SIDE_LEFT && fabs(r->l) < EPS)
+                    marL = fmax(marL, ext);
+            }
+            if (r->o->colnames && m->cn) {
+                double wmax = 0;
+                for (int k = 0; k < m->nc; k++) {
+                    double tw = text_w(cr, SZ_AXIS_TEXT, m->cn[k]);
+                    if (tw > wmax) wmax = tw;
+                }
+                double ext = MARGIN + TXT_GAP + wmax;   /* rotated 90 -> width along axis */
+                if (r->o->colnames == SIDE_BOTTOM && fabs(r->b) < EPS)
+                    marB = fmax(marB, ext);
+                if (r->o->colnames == SIDE_TOP && fabs(r->b + r->h - 1) < EPS)
+                    marT = fmax(marT, ext);
+            }
+        } else if (r->o->type == HM_LEGEND) {
+            double br[16];
+            int nb = extended_breaks(dmin, dmax, 5, br, 16), nf = 0;
+            for (int k = 0; k < nb; k++) if (br[k] >= dmin && br[k] <= dmax) br[nf++] = br[k];
+            int dec = axis_decimals(br, nf);
+            double wmax = 0;
+            for (int k = 0; k < nf; k++) {
+                char b[32]; fmt_break(br[k], dec, b);
+                double tw = text_w(cr, SZ_AXIS_TEXT, b);
+                if (tw > wmax) wmax = tw;
+            }
+            if (fabs(r->l + r->w - 1) < EPS)
+                marR = fmax(marR, MARGIN + TICK_LEN + TXT_GAP + wmax);
+        }
+    }
 
-    /* canvas size in pt, for pt->npc conversions inside the canvas */
-    double cw_pt = w_pt - 2 * MARGIN - (any_legend ? 30 : 0);
+    double titlegap = titleh ? HALF_LINE : 0;
+    GTable *T = calloc(1, sizeof(GTable));
+    T->ncol = 3;
+    T->colw[0] = upt(marL);
+    T->colw[1] = unull(1);
+    T->colw[2] = upt(marR);
+    T->nrow = 5;
+    T->rowh[0] = upt(marT);                        /* top auto-margin */
+    T->rowh[1] = upt(titleh);
+    T->rowh[2] = upt(titlegap);
+    T->rowh[3] = unull(1);                         /* canvas */
+    T->rowh[4] = upt(marB);
+    const int CR = 3, CC = 1;                      /* canvas cell */
+
+    /* final canvas cell size in pt, for pt->npc conversions inside it */
+    double cw_pt = w_pt - marL - marR;
+    double ch_pt = h_pt - marT - titleh - titlegap - marB;
 #define PTX(pt) ((pt) / cw_pt)
+#define PTY(pt) ((pt) / ch_pt)
 
     Grob *g;
     if (spec->lab_title) {
@@ -414,6 +472,41 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                 g->str = lab; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
                 g->tx = r->l + r->w + PTX(TICK_LEN + TXT_GAP);
                 g->ty = y; g->hj = 0; g->va = V_INKCENTER;
+            }
+        }
+    }
+
+    /* ---- row/col name labels (into the reserved margins) ---- */
+    for (int i = 0; i < n; i++) {
+        RObj *r = &ro[i];
+        if (r->o->type != HM_HEATMAP) continue;
+        Matrix *m = r->m;
+        if (r->o->rownames && m->rn) {
+            double chh = r->h / m->nr;
+            int right = r->o->rownames == SIDE_RIGHT;
+            for (int rr = 0; rr < m->nr; rr++) {
+                double yc = r->b + r->h - (rr + 0.5) * chh;
+                g = gt_add(T, G_TEXT, CR, CC, CR, CC);
+                g->str = m->rn[r->roword[rr]];       /* data name at this slot */
+                g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
+                g->tx = right ? r->l + r->w + PTX(TXT_GAP) : r->l - PTX(TXT_GAP);
+                g->ty = yc; g->hj = right ? 0 : 1; g->va = V_INKCENTER;
+            }
+        }
+        if (r->o->colnames && m->cn) {
+            double cw = r->w / m->nc;
+            int bottom = r->o->colnames == SIDE_BOTTOM;
+            for (int cc = 0; cc < m->nc; cc++) {
+                const char *s = m->cn[r->coword[cc]];
+                double adv = text_w(cr, SZ_AXIS_TEXT, s);
+                double xc = r->l + (cc + 0.5) * cw;
+                g = gt_add(T, G_TEXT, CR, CC, CR, CC);
+                g->str = s; g->size = SZ_AXIS_TEXT; g->col = C_BLACK; g->rot90 = 1;
+                /* rot90 centres the text on ty; push its centre a half-length
+                 * plus the gap past the heatmap edge so it hangs clear */
+                g->tx = xc;
+                g->ty = bottom ? r->b - PTY(TXT_GAP + adv / 2)
+                               : r->b + r->h + PTY(TXT_GAP + adv / 2);
             }
         }
     }

@@ -229,7 +229,21 @@ static int parse_hm_args(P *p, HMObj *o, int want_data) {
                 else if (!strcmp(v, "both")) o->cluster = CL_BOTH;
                 else if (!strcmp(v, "none")) o->cluster = CL_NONE;
                 else return fail(p, "cluster=%s invalid; use rows, cols, both, or none", v);
-            } else return fail(p, "option `%s` not implemented; supported: name=, data=, cluster=, placements", key);
+            } else if (!strcmp(key, "rownames") || !strcmp(key, "colnames")) {
+                int row = key[0] == 'r';
+                char *v = ident(p);
+                if (!v) return fail(p, "%s= expects left/right (rownames) or top/bottom (colnames), or none", key);
+                Side s;
+                if (!strcmp(v, "none")) s = SIDE_NONE;
+                else if (row && !strcmp(v, "left")) s = SIDE_LEFT;
+                else if (row && !strcmp(v, "right")) s = SIDE_RIGHT;
+                else if (!row && !strcmp(v, "top")) s = SIDE_TOP;
+                else if (!row && !strcmp(v, "bottom")) s = SIDE_BOTTOM;
+                else return fail(p, row ? "rownames= must be left, right, or none"
+                                        : "colnames= must be top, bottom, or none", "");
+                if (row) o->rownames = s; else o->colnames = s;
+            } else return fail(p, "option `%s` not implemented; supported: name=, data=, "
+                                  "cluster=, rownames=, colnames=, placements", key);
         } else {
             p->s = save;
             char *v = raw_token(p);
