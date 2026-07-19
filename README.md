@@ -18,47 +18,6 @@ From the `zhou-lab` conda channel:
 conda install -c zhou-lab cinderplot
 ```
 
-## Build
-
-Cinderplot requires a C11 compiler and Cairo.
-
-```sh
-make
-```
-
-A conda recipe lives in [`conda-recipe/`](conda-recipe/) — see its README for building
-and publishing to the channel.
-
-## Examples
-
-```sh
-./cinderplot data.csv -x hp -y mpg -o plot.pdf
-
-./cinderplot \
-  'data.csv + aes(hp, mpg, colour=factor(cyl)) + geom_point()' \
-  -o plot.pdf
-
-./cinderplot 'expr.csv + heatmap() + legend()' -o heatmap.pdf
-
-# themes: ggplot2's theme_gray by default; add + theme_bw() / theme_minimal() etc.
-./cinderplot 'data.csv + aes(hp, mpg) + geom_point() + theme_bw()' -o plot.pdf
-```
-
-Plots default to ggplot2's `theme_gray`; selectable themes include
-`theme_bw`, `theme_minimal`, `theme_classic`, `theme_void`, `theme_linedraw`,
-`theme_light`, `theme_dark`, and `theme_few`.
-
-Ready-to-run datasets, demo figures, and the regression test suite live in a
-separate repo, [cinderplot-examples](https://github.com/zhou-lab/cinderplot-examples)
-(kept out of this repo so it stays small).
-
-## Layout
-
-- `include/` — public interfaces
-- `src/` — implementation and CLI entry point
-- `docs/` — the documentation site (GitHub Pages source); rebuild with `python3 docs/build.py`
-- `notes/` — design notes and reference material
-
 ## License
 
 MIT — see [LICENSE](LICENSE).
