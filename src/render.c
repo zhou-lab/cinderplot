@@ -725,7 +725,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     if (!use[r] || (ff && ff->idx[r] != p)) continue;
                     double tx = TXR(r), ty = TY(yc->num[r]);
                     g = gt_add(T, G_RECT, R, C, R, C);
-                    g->col = C_BAR; g->sub = 1; g->clip = 1;
+                    g->col = spec->layers[li].has_color ? spec->layers[li].color : C_BAR;
+                    g->sub = 1; g->clip = 1;
                     g->x0 = NPCX(tx - colw / 2); g->x1 = NPCX(tx + colw / 2);
                     g->y0 = fmin(base, NPCY(ty)); g->y1 = fmax(base, NPCY(ty));
                 }
@@ -738,7 +739,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         int cnt = barcount[((size_t)(p * xf->nlev + cat)) * barng + grp];
                         if (!cnt) continue;
                         g = gt_add(T, G_RECT, R, C, R, C);
-                        g->col = cf ? pal[grp] : C_BAR; g->sub = 1; g->clip = 1;
+                        g->col = cf ? pal[grp] : spec->layers[li].has_color ? spec->layers[li].color : C_BAR;
+                        g->sub = 1; g->clip = 1;
                         g->x0 = NPCX(xi - 0.45); g->x1 = NPCX(xi + 0.45);
                         g->y0 = NPCY(cum); g->y1 = NPCY(cum + cnt);
                         cum += cnt;
@@ -754,7 +756,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 for (int r = 0; r < df->nrow; r++) {
                     if (!use[r] || (ff && ff->idx[r] != p)) continue;
                     px[np] = NPCX(TXR(r)); py[np] = NPCY(TY(yc->num[r]));
-                    pcol[np] = cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BLACK;
+                    pcol[np] = spec->layers[li].has_color ? spec->layers[li].color
+                             : cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BLACK;
                     np++;
                 }
                 g = gt_add(T, G_POINTS, R, C, R, C);
@@ -783,7 +786,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     free(pts);
                     g = gt_add(T, G_POLYLINE, R, C, R, C);
                     g->n = np; g->px = px; g->py = py;
-                    g->col = cf ? pal[grp] : C_BLACK;
+                    g->col = spec->layers[li].has_color ? spec->layers[li].color
+                           : cf ? pal[grp] : C_BLACK;
                     g->lw = lw_pt(0.5); g->clip = 1;
                 }
             } else if (gt == GEOM_SEGMENT && spec->layers[li].data) {

@@ -405,24 +405,28 @@ static int parse_term(P *p, PlotSpec *spec) {
             if (l->bins < 1 || l->bins > 10000)
                 return fail(p, "geom_histogram(bins=...) must be 1..10000", "");
             skip_ws(p);
-        } else if (gt == GEOM_SEGMENT || gt == GEOM_RECT) {
-            /* per-layer data=, y=, color=/fill= (a second data source, or a
-             * constant colour for segments/rects) */
+        } else {
+            /* generic layer args: color=/colour=/fill= sets a constant colour
+             * for any geom (overriding the colour aesthetic, as ggplot does when
+             * the aesthetic is set outside aes()); data=/y= give a second data
+             * source and are only meaningful for segment/rect. */
+            int se = (gt == GEOM_SEGMENT || gt == GEOM_RECT);
             while (*p->s != ')') {
                 char *key = ident(p);
-                if (!key || expect(p, '=')) return fail(p, "layer takes data=, y=, color=/fill=", "");
+                if (!key || expect(p, '='))
+                    return fail(p, "geom args: color=/fill= (segment/rect also data=, y=)", "");
                 skip_ws(p);
-                if (!strcmp(key, "data")) {
-                    l->data = string_lit(p);
-                    if (!l->data) return fail(p, "data= expects a quoted path", "");
-                } else if (!strcmp(key, "y")) {
-                    l->ycol = ident(p);
-                    if (!l->ycol) return fail(p, "y= expects a column name", "");
-                } else if (!strcmp(key, "color") || !strcmp(key, "colour") || !strcmp(key, "fill")) {
+                if (!strcmp(key, "color") || !strcmp(key, "colour") || !strcmp(key, "fill")) {
                     char *v = string_lit(p);
                     if (!v || parse_color(v, &l->color))
                         return fail(p, "bad colour for `%s`", key);
                     l->has_color = 1;
+                } else if (se && !strcmp(key, "data")) {
+                    l->data = string_lit(p);
+                    if (!l->data) return fail(p, "data= expects a quoted path", "");
+                } else if (se && !strcmp(key, "y")) {
+                    l->ycol = ident(p);
+                    if (!l->ycol) return fail(p, "y= expects a column name", "");
                 } else return fail(p, "layer option `%s` not implemented", key);
                 skip_ws(p);
                 if (*p->s == ',') { p->s++; skip_ws(p); }
