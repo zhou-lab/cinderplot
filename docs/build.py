@@ -64,6 +64,20 @@ SECTIONS = [
          "ggplot(betas, aes(beta)) + geom_density() +\n"
          "  scale_x_continuous(labels = scales::percent)"),
     ]),
+    ("Heatmaps", [
+        # matrix + row/column clustering, both dendrograms, a row annotation,
+        # legend and a diverging colormap. R reference uses ComplexHeatmap.
+        ("heatmap", "Complex assembly",
+         'data/mtcars_heat.csv + heatmap(name="m", cluster=both, rownames=right)'
+         ' + dendrogram(top_of("m")) + dendrogram(left_of("m"))'
+         ' + annotation("data/mtcars_cyl.csv", left_of("m")) + legend(right_of("m"))'
+         ' + scale_fill_gradient2(low="#2166ac", mid="#f7f7f7", high="#b2182b")',
+         '# mtcars, z-scored features (ComplexHeatmap)\n'
+         'library(ComplexHeatmap)\n'
+         'm <- scale(as.matrix(mtcars[, c("mpg","disp","hp","drat","wt","qsec","carb")]))\n'
+         'Heatmap(m, name = "z", cluster_rows = TRUE, cluster_columns = TRUE,\n'
+         '        left_annotation = rowAnnotation(cyl = factor(mtcars$cyl)))'),
+    ]),
 ]
 
 # Themes showcase: the same scatter under each theme. cinderplot renders these
@@ -90,6 +104,11 @@ DATASETS = [
     ("betas",    "data/gm12878_betas.tsv",   None),   # GM12878 methylation betas (TSV)
 ]
 
+def no_gg(slug):
+    """Slugs whose R reference isn't ggplot2, so render() skips the gg PNG:
+    theme showcases (same ggplot), and the heatmap (ComplexHeatmap)."""
+    return slug.startswith("theme-") or slug == "heatmap"
+
 def render():
     if not EXAMPLES.is_dir():
         raise SystemExit(f"example datasets not found at {EXAMPLES}\n"
@@ -113,15 +132,15 @@ def render():
         rd = "read.delim" if csv.endswith(".tsv") else "read.csv"
         r.append(f"{var} <- {rd}('{csv}')")
     for slug, _t, _cp, rc in VARIANTS:
-        if slug.startswith("theme-"):
-            continue                      # themes: cinderplot figure only, no gg
+        if no_gg(slug):
+            continue                      # cinderplot figure only, no ggplot2 gg
         r.append(f"ggsave('{FIGS / (slug + '-gg.pdf')}', {rc}, width=6, height=4)")
     (tmp / "gen.R").write_text("\n".join(r) + "\n")
     subprocess.run(["Rscript", str(tmp / "gen.R")], cwd=EXAMPLES, check=True,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     # 2. rasterise ggplot PDFs, render cinderplot SVGs (both read <examples>/data)
     for slug, _t, cp, _rc in VARIANTS:
-        if not slug.startswith("theme-"):
+        if not no_gg(slug):
             subprocess.run(["pdftoppm", "-r", "150", "-png", "-singlefile",
                             str(FIGS / f"{slug}-gg.pdf"), str(FIGS / f"{slug}-gg")],
                            check=True)

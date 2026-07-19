@@ -232,12 +232,39 @@ ggplot(betas, aes(beta)) + geom_density() +
     <section class="sect collapsed">
       <div class="sep"></div>
       <button class="sect__title" aria-expanded="false">
+        <span class="caret" aria-hidden="true">&#9656;</span>Heatmaps<span class="sect__n">1</span>
+      </button>
+      <div class="cards">
+        <figure class="cell" tabindex="0" role="button" aria-label="Figure 6: Complex assembly — show code" data-title="6 · Complex assembly">
+          <div class="thumb"><button class="zoom" data-i="5" aria-label="Maximize figure 6"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/heatmap-cp.svg" alt="Complex assembly — cinderplot"></div>
+          <figcaption><span class="num">6</span>Complex assembly</figcaption>
+          <template class="code">
+            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars_heat.csv
+  + heatmap(name=&quot;m&quot;, cluster=both, rownames=right)
+  + dendrogram(top_of(&quot;m&quot;))
+  + dendrogram(left_of(&quot;m&quot;))
+  + annotation(&quot;data/mtcars_cyl.csv&quot;, left_of(&quot;m&quot;))
+  + legend(right_of(&quot;m&quot;))
+  + scale_fill_gradient2(low=&quot;#2166ac&quot;, mid=&quot;#f7f7f7&quot;, high=&quot;#b2182b&quot;)&#x27; \
+  -o out.svg</pre></div>
+            <div class="snip"><span class="k">R · ggplot2</span><pre># mtcars, z-scored features (ComplexHeatmap)
+library(ComplexHeatmap)
+m &lt;- scale(as.matrix(mtcars[, c(&quot;mpg&quot;,&quot;disp&quot;,&quot;hp&quot;,&quot;drat&quot;,&quot;wt&quot;,&quot;qsec&quot;,&quot;carb&quot;)]))
+Heatmap(m, name = &quot;z&quot;, cluster_rows = TRUE, cluster_columns = TRUE,
+        left_annotation = rowAnnotation(cyl = factor(mtcars$cyl)))</pre></div>
+          </template>
+        </figure>
+      </div>
+    </section>
+    <section class="sect collapsed">
+      <div class="sep"></div>
+      <button class="sect__title" aria-expanded="false">
         <span class="caret" aria-hidden="true">&#9656;</span>Themes<span class="sect__n">8</span>
       </button>
       <div class="cards">
-        <figure class="cell" tabindex="0" role="button" aria-label="Figure 6: theme_bw — show code" data-title="6 · theme_bw">
-          <div class="thumb"><button class="zoom" data-i="5" aria-label="Maximize figure 6"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-bw-cp.svg" alt="theme_bw — cinderplot"></div>
-          <figcaption><span class="num">6</span>theme_bw</figcaption>
+        <figure class="cell" tabindex="0" role="button" aria-label="Figure 7: theme_bw — show code" data-title="7 · theme_bw">
+          <div class="thumb"><button class="zoom" data-i="6" aria-label="Maximize figure 7"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-bw-cp.svg" alt="theme_bw — cinderplot"></div>
+          <figcaption><span class="num">7</span>theme_bw</figcaption>
           <template class="code">
             <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
   + aes(wt, mpg, colour=factor(cyl))
@@ -247,9 +274,9 @@ ggplot(betas, aes(beta)) + geom_density() +
             <div class="snip"><span class="k">R · ggplot2</span><pre>ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) + geom_point() + theme_bw()</pre></div>
           </template>
         </figure>
-        <figure class="cell" tabindex="0" role="button" aria-label="Figure 7: theme_minimal — show code" data-title="7 · theme_minimal">
-          <div class="thumb"><button class="zoom" data-i="6" aria-label="Maximize figure 7"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-minimal-cp.svg" alt="theme_minimal — cinderplot"></div>
-          <figcaption><span class="num">7</span>theme_minimal</figcaption>
+        <figure class="cell" tabindex="0" role="button" aria-label="Figure 8: theme_minimal — show code" data-title="8 · theme_minimal">
+          <div class="thumb"><button class="zoom" data-i="7" aria-label="Maximize figure 8"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-minimal-cp.svg" alt="theme_minimal — cinderplot"></div>
+          <figcaption><span class="num">8</span>theme_minimal</figcaption>
           <template class="code">
             <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
   + aes(wt, mpg, colour=factor(cyl))
@@ -259,9 +286,9 @@ ggplot(betas, aes(beta)) + geom_density() +
             <div class="snip"><span class="k">R · ggplot2</span><pre>ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) + geom_point() + theme_minimal()</pre></div>
           </template>
         </figure>
-        <figure class="cell" tabindex="0" role="button" aria-label="Figure 8: theme_classic — show code" data-title="8 · theme_classic">
-          <div class="thumb"><button class="zoom" data-i="7" aria-label="Maximize figure 8"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-classic-cp.svg" alt="theme_classic — cinderplot"></div>
-          <figcaption><span class="num">8</span>theme_classic</figcaption>
+        <figure class="cell" tabindex="0" role="button" aria-label="Figure 9: theme_classic — show code" data-title="9 · theme_classic">
+          <div class="thumb"><button class="zoom" data-i="8" aria-label="Maximize figure 9"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-classic-cp.svg" alt="theme_classic — cinderplot"></div>
+          <figcaption><span class="num">9</span>theme_classic</figcaption>
           <template class="code">
             <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
   + aes(wt, mpg, colour=factor(cyl))
@@ -271,9 +298,9 @@ ggplot(betas, aes(beta)) + geom_density() +
             <div class="snip"><span class="k">R · ggplot2</span><pre>ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) + geom_point() + theme_classic()</pre></div>
           </template>
         </figure>
-        <figure class="cell" tabindex="0" role="button" aria-label="Figure 9: theme_void — show code" data-title="9 · theme_void">
-          <div class="thumb"><button class="zoom" data-i="8" aria-label="Maximize figure 9"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-void-cp.svg" alt="theme_void — cinderplot"></div>
-          <figcaption><span class="num">9</span>theme_void</figcaption>
+        <figure class="cell" tabindex="0" role="button" aria-label="Figure 10: theme_void — show code" data-title="10 · theme_void">
+          <div class="thumb"><button class="zoom" data-i="9" aria-label="Maximize figure 10"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-void-cp.svg" alt="theme_void — cinderplot"></div>
+          <figcaption><span class="num">10</span>theme_void</figcaption>
           <template class="code">
             <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
   + aes(wt, mpg, colour=factor(cyl))
@@ -283,9 +310,9 @@ ggplot(betas, aes(beta)) + geom_density() +
             <div class="snip"><span class="k">R · ggplot2</span><pre>ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) + geom_point() + theme_void()</pre></div>
           </template>
         </figure>
-        <figure class="cell" tabindex="0" role="button" aria-label="Figure 10: theme_linedraw — show code" data-title="10 · theme_linedraw">
-          <div class="thumb"><button class="zoom" data-i="9" aria-label="Maximize figure 10"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-linedraw-cp.svg" alt="theme_linedraw — cinderplot"></div>
-          <figcaption><span class="num">10</span>theme_linedraw</figcaption>
+        <figure class="cell" tabindex="0" role="button" aria-label="Figure 11: theme_linedraw — show code" data-title="11 · theme_linedraw">
+          <div class="thumb"><button class="zoom" data-i="10" aria-label="Maximize figure 11"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-linedraw-cp.svg" alt="theme_linedraw — cinderplot"></div>
+          <figcaption><span class="num">11</span>theme_linedraw</figcaption>
           <template class="code">
             <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
   + aes(wt, mpg, colour=factor(cyl))
@@ -295,9 +322,9 @@ ggplot(betas, aes(beta)) + geom_density() +
             <div class="snip"><span class="k">R · ggplot2</span><pre>ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) + geom_point() + theme_linedraw()</pre></div>
           </template>
         </figure>
-        <figure class="cell" tabindex="0" role="button" aria-label="Figure 11: theme_light — show code" data-title="11 · theme_light">
-          <div class="thumb"><button class="zoom" data-i="10" aria-label="Maximize figure 11"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-light-cp.svg" alt="theme_light — cinderplot"></div>
-          <figcaption><span class="num">11</span>theme_light</figcaption>
+        <figure class="cell" tabindex="0" role="button" aria-label="Figure 12: theme_light — show code" data-title="12 · theme_light">
+          <div class="thumb"><button class="zoom" data-i="11" aria-label="Maximize figure 12"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-light-cp.svg" alt="theme_light — cinderplot"></div>
+          <figcaption><span class="num">12</span>theme_light</figcaption>
           <template class="code">
             <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
   + aes(wt, mpg, colour=factor(cyl))
@@ -307,9 +334,9 @@ ggplot(betas, aes(beta)) + geom_density() +
             <div class="snip"><span class="k">R · ggplot2</span><pre>ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) + geom_point() + theme_light()</pre></div>
           </template>
         </figure>
-        <figure class="cell" tabindex="0" role="button" aria-label="Figure 12: theme_dark — show code" data-title="12 · theme_dark">
-          <div class="thumb"><button class="zoom" data-i="11" aria-label="Maximize figure 12"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-dark-cp.svg" alt="theme_dark — cinderplot"></div>
-          <figcaption><span class="num">12</span>theme_dark</figcaption>
+        <figure class="cell" tabindex="0" role="button" aria-label="Figure 13: theme_dark — show code" data-title="13 · theme_dark">
+          <div class="thumb"><button class="zoom" data-i="12" aria-label="Maximize figure 13"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-dark-cp.svg" alt="theme_dark — cinderplot"></div>
+          <figcaption><span class="num">13</span>theme_dark</figcaption>
           <template class="code">
             <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
   + aes(wt, mpg, colour=factor(cyl))
@@ -319,9 +346,9 @@ ggplot(betas, aes(beta)) + geom_density() +
             <div class="snip"><span class="k">R · ggplot2</span><pre>ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) + geom_point() + theme_dark()</pre></div>
           </template>
         </figure>
-        <figure class="cell" tabindex="0" role="button" aria-label="Figure 13: theme_few — show code" data-title="13 · theme_few">
-          <div class="thumb"><button class="zoom" data-i="12" aria-label="Maximize figure 13"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-few-cp.svg" alt="theme_few — cinderplot"></div>
-          <figcaption><span class="num">13</span>theme_few</figcaption>
+        <figure class="cell" tabindex="0" role="button" aria-label="Figure 14: theme_few — show code" data-title="14 · theme_few">
+          <div class="thumb"><button class="zoom" data-i="13" aria-label="Maximize figure 14"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-few-cp.svg" alt="theme_few — cinderplot"></div>
+          <figcaption><span class="num">14</span>theme_few</figcaption>
           <template class="code">
             <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
   + aes(wt, mpg, colour=factor(cyl))
