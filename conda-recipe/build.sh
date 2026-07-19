@@ -14,7 +14,11 @@ cairo_libs="$(pkg-config --libs cairo cairo-pdf 2>/dev/null || true)"
 : "${cairo_libs:=-lcairo}"
 
 # conda provides CC, CFLAGS, CPPFLAGS, LDFLAGS (with the sysroot); the
-# Makefile appends to them.
+# Makefile appends to them. The cairo flags must go to *every* make call: the
+# Makefile's cairo detection is a parse-time $(error ...) guard that fires for
+# any target (including `install`) when CAIRO_CFLAGS is unset, and on Linux the
+# pkg-config/brew fallback isn't available to satisfy it.
 make -j"${CPU_COUNT:-1}" CC="${CC}" \
      CAIRO_CFLAGS="${cairo_cflags}" CAIRO_LIBS="${cairo_libs}"
-make install PREFIX="${PREFIX}"
+make install PREFIX="${PREFIX}" \
+     CAIRO_CFLAGS="${cairo_cflags}" CAIRO_LIBS="${cairo_libs}"
