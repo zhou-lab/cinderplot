@@ -40,13 +40,13 @@ and publishing to the channel.
 
 ./cinderplot 'expr.csv + heatmap() + legend()' -o heatmap.pdf
 
-# themes: clean theme_minimal by default; add + theme_bw() / theme_classic() etc.
+# themes: ggplot2's theme_gray by default; add + theme_bw() / theme_minimal() etc.
 ./cinderplot 'data.csv + aes(hp, mpg) + geom_point() + theme_bw()' -o plot.pdf
 ```
 
-Plots default to a clean `theme_minimal`; selectable themes include
-`theme_gray` (ggplot2's grey), `theme_bw`, `theme_classic`, `theme_void`,
-`theme_linedraw`, `theme_light`, `theme_dark`, `theme_pubr`, and `theme_few`.
+Plots default to ggplot2's `theme_gray`; selectable themes include
+`theme_bw`, `theme_minimal`, `theme_classic`, `theme_void`, `theme_linedraw`,
+`theme_light`, `theme_dark`, and `theme_few`.
 
 Ready-to-run datasets, demo figures, and the regression test suite live in a
 separate repo, [cinderplot-examples](https://github.com/zhou-lab/cinderplot-examples)

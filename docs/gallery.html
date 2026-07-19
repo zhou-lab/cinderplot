@@ -36,7 +36,15 @@
   main.scroll{flex:1 1 auto;min-height:0;overflow-y:auto;padding:20px 0 60px;}
   .sect{margin:0;}
   .sep{height:1px;background:var(--line);margin:20px 0 7px;}   /* sits just above the title */
-  .sect__title{font-family:var(--head);font-weight:600;font-size:1.05rem;color:var(--ink);margin:0 0 14px;}
+  .sect__title{display:flex;align-items:center;gap:9px;width:100%;text-align:left;background:none;
+               border:0;cursor:pointer;padding:2px 0;font-family:var(--head);font-weight:600;
+               font-size:1.05rem;color:var(--ink);margin:0 0 14px;}
+  .sect__title .caret{color:var(--accent);font-size:.72em;transition:transform .15s ease;}
+  .sect:not(.collapsed) .sect__title .caret{transform:rotate(90deg);}
+  .sect__title .sect__n{font-family:var(--head);font-weight:600;font-size:.68rem;color:var(--muted);
+                        background:var(--bg);border:1px solid var(--line);border-radius:99px;padding:1px 8px;}
+  .sect.collapsed .sect__title{margin-bottom:0;}
+  .sect.collapsed .cards{display:none;}
   .smallprint{color:var(--muted);font-size:.76rem;margin:24px 0 0;}
   .smallprint a{color:var(--accent);text-decoration:none;}
   .smallprint a:hover{text-decoration:underline;}
@@ -138,9 +146,11 @@
 </div>
 <main class="scroll">
   <div class="wrap">
-    <section class="sect">
+    <section class="sect collapsed">
       <div class="sep"></div>
-      <h2 class="sect__title">Scatterplots</h2>
+      <button class="sect__title" aria-expanded="false">
+        <span class="caret" aria-hidden="true">&#9656;</span>Scatterplots<span class="sect__n">4</span>
+      </button>
       <div class="cards">
         <figure class="cell" tabindex="0" role="button" aria-label="Figure 1: Colour by group — show code" data-title="1 · Colour by group">
           <div class="thumb"><button class="zoom" data-i="0" aria-label="Maximize figure 1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/group-cyl-cp.svg" alt="Colour by group — cinderplot"></div>
@@ -197,9 +207,11 @@ ggplot(diamonds, aes(carat, price, colour = cut)) + geom_point()</pre></div>
         </figure>
       </div>
     </section>
-    <section class="sect">
+    <section class="sect collapsed">
       <div class="sep"></div>
-      <h2 class="sect__title">Themes</h2>
+      <button class="sect__title" aria-expanded="false">
+        <span class="caret" aria-hidden="true">&#9656;</span>Themes<span class="sect__n">8</span>
+      </button>
       <div class="cards">
         <figure class="cell" tabindex="0" role="button" aria-label="Figure 5: theme_bw — show code" data-title="5 · theme_bw">
           <div class="thumb"><button class="zoom" data-i="4" aria-label="Maximize figure 5"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-bw-cp.svg" alt="theme_bw — cinderplot"></div>
@@ -285,22 +297,9 @@ ggplot(diamonds, aes(carat, price, colour = cut)) + geom_point()</pre></div>
             <div class="snip"><span class="k">R · ggplot2</span><pre>ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) + geom_point() + theme_dark()</pre></div>
           </template>
         </figure>
-        <figure class="cell" tabindex="0" role="button" aria-label="Figure 12: theme_pubr — show code" data-title="12 · theme_pubr">
-          <div class="thumb"><button class="zoom" data-i="11" aria-label="Maximize figure 12"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-pubr-cp.svg" alt="theme_pubr — cinderplot"></div>
-          <figcaption><span class="num">12</span>theme_pubr</figcaption>
-          <template class="code">
-            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
-  + aes(wt, mpg, colour=factor(cyl))
-  + geom_point()
-  + theme_pubr()&#x27; \
-  -o out.svg</pre></div>
-            <div class="snip"><span class="k">R · ggplot2</span><pre># requires ggpubr
-ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) + geom_point() + theme_pubr()</pre></div>
-          </template>
-        </figure>
-        <figure class="cell" tabindex="0" role="button" aria-label="Figure 13: theme_few — show code" data-title="13 · theme_few">
-          <div class="thumb"><button class="zoom" data-i="12" aria-label="Maximize figure 13"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-few-cp.svg" alt="theme_few — cinderplot"></div>
-          <figcaption><span class="num">13</span>theme_few</figcaption>
+        <figure class="cell" tabindex="0" role="button" aria-label="Figure 12: theme_few — show code" data-title="12 · theme_few">
+          <div class="thumb"><button class="zoom" data-i="11" aria-label="Maximize figure 12"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-few-cp.svg" alt="theme_few — cinderplot"></div>
+          <figcaption><span class="num">12</span>theme_few</figcaption>
           <template class="code">
             <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
   + aes(wt, mpg, colour=factor(cyl))
@@ -335,6 +334,14 @@ ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) + geom_point() + theme_few()<
 <script>
 (function () {
   var cells = [].slice.call(document.querySelectorAll('.cell'));
+
+  // --- foldable sections (folded by default) ---
+  [].slice.call(document.querySelectorAll('.sect__title')).forEach(function (b) {
+    b.addEventListener('click', function () {
+      var collapsed = b.closest('.sect').classList.toggle('collapsed');
+      b.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    });
+  });
 
   // --- code drop-down (push panel) ---
   var drawer = document.getElementById('drawer'),

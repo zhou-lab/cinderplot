@@ -8,9 +8,8 @@
 
 typedef struct { double r, g, b; } Col;
 
-/* ---------- base style constants (ggplot2 theme_gray values, base_size 11,
- * units: PDF pt). These define the theme_gray preset; the DEFAULT theme is
- * theme_minimal (set in dsl_parse). See THEMES[] below for all themes. ------ */
+/* ---------- base style constants (ggplot2 theme_gray, base_size 11, units:
+ * PDF pt). theme_gray is the DEFAULT; see THEMES[] below for the others. ---- */
 /* ggplot linewidth u -> lwd = u * 2.845276 in 1/96", -> pt */
 static inline double lw_pt(double u) { return u * 2.845276 * 72.0 / 96.0; }
 
@@ -39,8 +38,8 @@ static const Col C_STRIPTXT = {0.102, 0.102, 0.102}; /* grey10 */
 /* ---------- selectable themes (ggplot2 / ggthemes / ggpubr) --------------
  * A theme is pure data: colours + on/off flags + raw ggplot linewidth units
  * (lw_pt() applied at draw time so this table stays a constant literal).
- * THEME_GRAY reproduces ggplot2's grey theme; the DEFAULT is THEME_MINIMAL
- * (set in dsl_parse). All themes use greys/white/black, so no new deps. */
+ * THEME_GRAY (index 0) reproduces ggplot2's grey theme and is the memset
+ * default. All themes use greys/white/black, so no new deps. */
 typedef struct {
     Col panel_bg;   int panel_bg_on;
     Col grid_major; double grid_major_lw; int grid_major_on;
@@ -56,7 +55,7 @@ typedef struct {
 } Theme;
 
 typedef enum { THEME_GRAY, THEME_BW, THEME_MINIMAL, THEME_CLASSIC, THEME_VOID,
-               THEME_LINEDRAW, THEME_LIGHT, THEME_DARK, THEME_PUBR, THEME_FEW } ThemeType;
+               THEME_LINEDRAW, THEME_LIGHT, THEME_DARK, THEME_FEW } ThemeType;
 
 #define GY(v) {v, v, v}
 /* fields: panel,on | gridMaj,lw,on | gridMin,lw,on | border,lw,on |
@@ -71,7 +70,6 @@ static const Theme THEMES[] = {
 /*LINEDRAW*/ { GY(1),1, GY(0),0.1,1, GY(0),0.05,1, GY(0),0.1,1, GY(0),0.5,0, GY(0),1, GY(0.302),1, GY(0),1, GY(0), GY(0),1,GY(1), GY(1),1 },
 /*LIGHT   */ { GY(1),1, GY(0.87),0.5,1, GY(0.87),0.25,1, GY(0.7),0.25,1, GY(0),0.5,0, GY(0.7),1, GY(0.302),1, GY(0),1, GY(0), GY(0.7),1,GY(1), GY(1),1 },
 /*DARK    */ { GY(0.5),1, GY(0.42),0.5,1, GY(0.42),0.25,1, GY(0.2),0.5,0, GY(0),0.5,0, GY(0.2),1, GY(0.302),1, GY(0),1, GY(0), GY(0.15),1,GY(0.9), GY(1),1 },
-/*PUBR    */ { GY(1),1, GY(1),0.5,0, GY(1),0.25,0, GY(0.2),0.5,0, GY(0),0.5,1, GY(0),1, GY(0),1, GY(0),1, GY(0), GY(1),0,GY(0), GY(1),1 },
 /*FEW     */ { GY(1),1, GY(1),0.5,0, GY(1),0.25,0, GY(0.302),0.5,1, GY(0),0.5,0, GY(0.302),1, GY(0.302),1, GY(0.302),1, GY(0.302), GY(1),0,GY(0.302), GY(1),1 },
 };
 #undef GY

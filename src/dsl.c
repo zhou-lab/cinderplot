@@ -539,11 +539,10 @@ static int parse_term(P *p, PlotSpec *spec) {
         else if (!strcmp(t, "linedraw"))        spec->theme = THEME_LINEDRAW;
         else if (!strcmp(t, "light"))           spec->theme = THEME_LIGHT;
         else if (!strcmp(t, "dark"))            spec->theme = THEME_DARK;
-        else if (!strcmp(t, "pubr"))            spec->theme = THEME_PUBR;
         else if (!strcmp(t, "few"))             spec->theme = THEME_FEW;
         else return fail(p, "theme `%s()` is not implemented; supported: theme_gray, "
                             "theme_bw, theme_minimal, theme_classic, theme_void, theme_linedraw, "
-                            "theme_light, theme_dark, theme_pubr, theme_few", name);
+                            "theme_light, theme_dark, theme_few", name);
         return expect(p, ')');
     }
     return fail(p, "`%s()` is not implemented; supported: aes(), geom_point(), "
@@ -558,7 +557,7 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
     P p = {src, err};
     memset(spec, 0, sizeof *spec);
     spec->fill.kind = FILL_VIRIDIS;              /* default heatmap fill */
-    spec->theme = THEME_MINIMAL;                 /* default theme (override memset 0) */
+    /* default theme = THEME_GRAY (enum 0, the memset default) */
 
     /* leading data term, unless the first term is a function call (track
      * mode starts with region()/coverage() — no top-level data file) */

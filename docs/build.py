@@ -64,8 +64,7 @@ SECTIONS = [
 # skips gg for "theme-*" slugs, so the build needs no ggpubr/ggthemes).
 _THBASE = "data/mtcars.csv + aes(wt, mpg, colour=factor(cyl)) + geom_point()"
 _THEMES = [("bw", ""), ("minimal", ""), ("classic", ""), ("void", ""),
-           ("linedraw", ""), ("light", ""), ("dark", ""),
-           ("pubr", "requires ggpubr"), ("few", "requires ggthemes")]
+           ("linedraw", ""), ("light", ""), ("dark", ""), ("few", "requires ggthemes")]
 SECTIONS.append(("Themes", [
     (f"theme-{t}", f"theme_{t}", f"{_THBASE} + theme_{t}()",
      (f"# {note}\n" if note else "")
@@ -151,13 +150,15 @@ def sections(src):
         for (slug, title, cp, rc) in variants:
             i += 1
             cards.append(card_html(i, slug, title, cp, rc, src))
-        out.append('''    <section class="sect">
+        out.append('''    <section class="sect collapsed">
       <div class="sep"></div>
-      <h2 class="sect__title">{}</h2>
+      <button class="sect__title" aria-expanded="false">
+        <span class="caret" aria-hidden="true">&#9656;</span>{}<span class="sect__n">{}</span>
+      </button>
       <div class="cards">
 {}
       </div>
-    </section>'''.format(esc(sec_title), "\n".join(cards)))
+    </section>'''.format(esc(sec_title), len(variants), "\n".join(cards)))
     return "\n".join(out)
 
 STYLE = """<style>
@@ -191,7 +192,15 @@ STYLE = """<style>
   main.scroll{flex:1 1 auto;min-height:0;overflow-y:auto;padding:20px 0 60px;}
   .sect{margin:0;}
   .sep{height:1px;background:var(--line);margin:20px 0 7px;}   /* sits just above the title */
-  .sect__title{font-family:var(--head);font-weight:600;font-size:1.05rem;color:var(--ink);margin:0 0 14px;}
+  .sect__title{display:flex;align-items:center;gap:9px;width:100%;text-align:left;background:none;
+               border:0;cursor:pointer;padding:2px 0;font-family:var(--head);font-weight:600;
+               font-size:1.05rem;color:var(--ink);margin:0 0 14px;}
+  .sect__title .caret{color:var(--accent);font-size:.72em;transition:transform .15s ease;}
+  .sect:not(.collapsed) .sect__title .caret{transform:rotate(90deg);}
+  .sect__title .sect__n{font-family:var(--head);font-weight:600;font-size:.68rem;color:var(--muted);
+                        background:var(--bg);border:1px solid var(--line);border-radius:99px;padding:1px 8px;}
+  .sect.collapsed .sect__title{margin-bottom:0;}
+  .sect.collapsed .cards{display:none;}
   .smallprint{color:var(--muted);font-size:.76rem;margin:24px 0 0;}
   .smallprint a{color:var(--accent);text-decoration:none;}
   .smallprint a:hover{text-decoration:underline;}
@@ -322,6 +331,14 @@ __SECTIONS__
 (function () {
   var cells = [].slice.call(document.querySelectorAll('.cell'));
 
+  // --- foldable sections (folded by default) ---
+  [].slice.call(document.querySelectorAll('.sect__title')).forEach(function (b) {
+    b.addEventListener('click', function () {
+      var collapsed = b.closest('.sect').classList.toggle('collapsed');
+      b.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    });
+  });
+
   // --- code drop-down (push panel) ---
   var drawer = document.getElementById('drawer'),
       dBody  = document.getElementById('drawerBody'),
@@ -408,8 +425,8 @@ GEOMS = ["point", "line", "col", "bar", "histogram", "boxplot", "rect", "segment
 SCALES = ["x / y log10", "genome x", "colour hue", "colour gradient", "gradient2", "discrete x / y"]
 POSITIONS = ["stack", "dodge", "dodge2"]
 MODES = ["scatter / grammar", "heatmap + clustering", "genomic tracks"]
-THEMES_CHIPS = ["minimal", "gray", "bw", "classic", "void", "linedraw",
-                "light", "dark", "pubr", "few"]
+THEMES_CHIPS = ["gray", "bw", "minimal", "classic", "void", "linedraw",
+                "light", "dark", "few"]
 
 FONTS = ('<link rel="preconnect" href="https://fonts.googleapis.com">'
          '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
@@ -520,7 +537,7 @@ cinderplot 'data.csv
         <div class="panel__body">
           <ul class="feat">
             <li><span class="d"></span><div><b>Small &amp; fast.</b> <span>One C11 binary, Cairo output. Milliseconds per figure, no runtime.</span></div></li>
-            <li><span class="d"></span><div><b>Familiar grammar.</b> <span>aes, geoms, scales, legends and themes inspired by ggplot2 — clean <code>theme_minimal</code> default, <code>theme_bw</code>/<code>classic</code>/<code>void</code> and more on tap.</span></div></li>
+            <li><span class="d"></span><div><b>Familiar grammar.</b> <span>aes, geoms, scales, legends and themes inspired by ggplot2 — reproduces <code>theme_gray</code> by default, with <code>theme_bw</code>/<code>minimal</code>/<code>classic</code>/<code>void</code> and more.</span></div></li>
             <li><span class="d"></span><div><b>Vector out.</b> <span>PDF or SVG chosen by file extension. Publication-ready, no rasterisation.</span></div></li>
           </ul>
         </div>
