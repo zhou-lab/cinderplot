@@ -207,7 +207,7 @@ STYLE = """<style>
        font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased;
        height:100vh;display:flex;flex-direction:column;overflow:hidden;}
   a{color:inherit;}
-  .wrap{max-width:1080px;margin:0 auto;padding:0 24px;}
+  .wrap{max-width:none;margin:0;padding:0 28px;}   /* gallery fills the display */
   header.site{flex:0 0 auto;background:var(--bg);border-bottom:1px solid var(--line);}
   header.site .wrap{display:flex;align-items:center;gap:12px;height:56px;}
   .mark{display:flex;align-items:center;gap:8px;text-decoration:none;color:var(--ink);
