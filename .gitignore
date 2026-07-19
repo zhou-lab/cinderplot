@@ -3,3 +3,7 @@ src/*.o
 *.pdf
 *.png
 .DS_Store
+
+# local, uncommitted scratch
+TODO.md
+CLAUDE.md

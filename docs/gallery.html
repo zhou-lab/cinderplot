@@ -3,333 +3,416 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Scatterplot — cinderplot gallery</title>
+<title>cinderplot gallery</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap">
 <style>
-  :root {
-    --ground:#FBFAF8; --card:#F4F0EA; --ink:#221D1A; --muted:#6E645D;
-    --line:#E7E1D9; --ember:#D6532A; --ember-soft:rgba(214,83,42,.12);
-    --code-ink:#EFE9E2; --code-dim:#C9A98F;
-    --sans: system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;
-    --mono: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  :root{
+    --accent:#0a5bb5; --accent-hover:#084a96; --accent-bright:#2f86ff; --accent-deep:#06223f;
+    --accent-soft:#dce8f7; --accent-tint:#eef4fb;
+    --ink:#0b1220; --body:#3a4658; --muted:#6b7688; --line:#e6eaf0; --bg:#ffffff; --bg-soft:#eef1f6;
+    --code-ink:#e7eef7; --code-dim:#7fa8d8;
+    --font:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --head:"Space Grotesk",var(--font); --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --radius:10px; --shadow:0 1px 2px rgba(11,18,32,.05),0 4px 14px rgba(11,18,32,.05);
   }
-  @media (prefers-color-scheme: dark) { :root {
-    --ground:#16120F; --card:#201A16; --ink:#F1EBE3; --muted:#A89C93;
-    --line:#302822; --ember:#F0693B; --ember-soft:rgba(240,105,59,.16); --code-dim:#C9A98F; } }
-  :root[data-theme="light"] {
-    --ground:#FBFAF8; --card:#F4F0EA; --ink:#221D1A; --muted:#6E645D;
-    --line:#E7E1D9; --ember:#D6532A; --ember-soft:rgba(214,83,42,.12); --code-dim:#C9A98F; }
-  :root[data-theme="dark"] {
-    --ground:#16120F; --card:#201A16; --ink:#F1EBE3; --muted:#A89C93;
-    --line:#302822; --ember:#F0693B; --ember-soft:rgba(240,105,59,.16); --code-dim:#C9A98F; }
-  * { box-sizing:border-box; }
-  body { margin:0; background:var(--ground); color:var(--ink); font-family:var(--sans);
-         font-size:16px; line-height:1.6; -webkit-font-smoothing:antialiased; }
-  .wrap { max-width:1080px; margin:0 auto; padding:0 24px; }
-  header.site { border-bottom:1px solid var(--line); }
-  header.site .wrap { display:flex; align-items:center; gap:10px; height:56px; }
-  .mark { font-family:var(--mono); font-weight:600; font-size:15px; display:flex; align-items:center; gap:8px;
-          color:var(--ink); text-decoration:none; }
-  .ember { width:10px; height:10px; border-radius:2px; background:var(--ember); box-shadow:0 0 10px var(--ember); }
-  .mark .sub { color:var(--muted); font-weight:400; }
-  .nav { margin-left:auto; display:flex; gap:20px; font-family:var(--mono); font-size:13px; }
-  .nav a { color:var(--muted); text-decoration:none; }
-  .nav a:hover, .nav a.active { color:var(--ember); }
-  main { padding:44px 0 96px; }
-  .eyebrow { font-family:var(--mono); font-size:12px; letter-spacing:.14em; text-transform:uppercase;
-             color:var(--ember); margin:0 0 14px; }
-  h1 { font-size:38px; line-height:1.08; letter-spacing:-.025em; margin:0 0 14px; text-wrap:balance; }
-  .lede { color:var(--muted); font-size:19px; line-height:1.5; margin:0 0 26px; max-width:66ch; }
-  .lede b { color:var(--ink); font-weight:600; }
-  .toolbar { display:flex; align-items:center; gap:12px; margin:0 0 22px; }
-  .toolbar .lbl { font-family:var(--mono); font-size:12px; letter-spacing:.03em; color:var(--muted); }
-  .tabs { display:inline-flex; gap:3px; padding:3px; background:var(--card);
-          border:1px solid var(--line); border-radius:9px; }
-  .tab { font-family:var(--mono); font-size:12px; color:var(--muted); background:transparent; border:0;
-         padding:5px 13px; border-radius:6px; cursor:pointer; transition:background .15s ease, color .15s ease; }
-  .tab:hover { color:var(--ink); }
-  .tab.active { background:var(--ember); color:#fff; }
-  .cards { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; }
-  @media (max-width:900px){ .cards{ grid-template-columns:repeat(2,1fr); } }
-  @media (max-width:520px){ .cards{ grid-template-columns:1fr; } }
-  .card { margin:0; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--card);
-          transition:border-color .18s ease, transform .18s ease; }
-  .card:hover { border-color:var(--ember); transform:translateY(-2px); }
-  .stage { position:relative; background:#fff; outline:none; }
-  .stage img { display:block; width:100%; height:auto; }
-  .stage img[hidden] { display:none; }
-  .overlay { position:absolute; inset:0; padding:12px; background:rgba(24,18,14,.9);
-             opacity:0; transition:opacity .16s ease; pointer-events:none;
-             display:flex; align-items:center; }
-  .stage:hover .overlay, .stage:focus-visible .overlay { opacity:1; pointer-events:auto; }
-  .overlay pre { margin:0; width:100%; color:var(--code-ink); font-family:var(--mono);
-                 font-size:10.5px; line-height:1.5; white-space:pre-wrap; word-break:break-word; }
-  .overlay pre[hidden] { display:none; }
-  .overlay .c { color:var(--code-dim); }
-  figcaption { font-family:var(--mono); font-size:12px; color:var(--ink); padding:9px 12px;
-               border-top:1px solid var(--line); background:var(--ground); }
-  .note { border-left:3px solid var(--ember); background:var(--card); padding:14px 18px;
-          border-radius:0 10px 10px 0; margin:34px 0 0; }
-  .note b { color:var(--ember); }
-  .hero-cta { display:flex; gap:12px; flex-wrap:wrap; margin:6px 0 8px; }
-  .btn { font-family:var(--mono); font-size:13px; text-decoration:none; padding:9px 16px; border-radius:8px;
-         border:1px solid var(--line); color:var(--ink); background:var(--card); transition:border-color .15s ease; }
-  .btn:hover { border-color:var(--ember); }
-  .btn.primary { background:var(--ember); color:#fff; border-color:var(--ember); }
-  pre.code { background:#16120F; color:var(--code-ink); font-family:var(--mono); font-size:13px;
-             padding:16px 18px; border-radius:10px; overflow:auto; margin:22px 0; }
-  pre.code .c { color:var(--code-dim); }
-  .feature-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:30px 0 0; }
-  @media (max-width:760px){ .feature-grid{ grid-template-columns:1fr; } }
-  .feature { border:1px solid var(--line); border-radius:12px; padding:18px 20px; background:var(--card); }
-  .feature h3 { margin:0 0 6px; font-size:15px; }
-  .feature p { margin:0; color:var(--muted); font-size:14px; }
-  footer { color:var(--muted); font-family:var(--mono); font-size:12.5px; border-top:1px solid var(--line);
-           margin-top:40px; padding-top:20px; }
-  footer a { color:var(--ember); text-decoration:none; }
-  .stage:focus-visible { outline:2px solid var(--ember); outline-offset:-2px; }
-  @media (prefers-reduced-motion: reduce){ .card{ transition:none; } .card:hover{ transform:none; } }
+  *{box-sizing:border-box;}
+  /* app shell: header + drawer are fixed rows; only .scroll scrolls, so the
+     drawer sits OUTSIDE the figures' scrollbar and stays put as they scroll. */
+  html,body{height:100%;}
+  body{margin:0;background:var(--bg-soft);color:var(--body);font-family:var(--font);
+       font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased;
+       height:100vh;display:flex;flex-direction:column;overflow:hidden;}
+  a{color:inherit;}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px;}
+  header.site{flex:0 0 auto;background:var(--bg);border-bottom:1px solid var(--line);}
+  header.site .wrap{display:flex;align-items:center;gap:12px;height:56px;}
+  .mark{display:flex;align-items:center;gap:8px;text-decoration:none;color:var(--ink);
+        font-family:var(--head);font-weight:700;font-size:1.1rem;letter-spacing:-.02em;}
+  .mark .sq{width:12px;height:12px;border-radius:3px;background:var(--accent);}
+  .mark .sub{color:var(--muted);font-weight:500;font-size:.85rem;}
+  .nav{margin-left:auto;display:flex;gap:18px;font-family:var(--head);font-weight:500;font-size:.85rem;}
+  .nav a{color:var(--muted);text-decoration:none;transition:color .15s;}
+  .nav a:hover,.nav a.active{color:var(--accent);}
+  main.scroll{flex:1 1 auto;min-height:0;overflow-y:auto;padding:20px 0 60px;}
+  .sect{margin:0;}
+  .sep{height:1px;background:var(--line);margin:20px 0 7px;}   /* sits just above the title */
+  .sect__title{font-family:var(--head);font-weight:600;font-size:1.05rem;color:var(--ink);margin:0 0 14px;}
+  .smallprint{color:var(--muted);font-size:.76rem;margin:24px 0 0;}
+  .smallprint a{color:var(--accent);text-decoration:none;}
+  .smallprint a:hover{text-decoration:underline;}
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(212px,1fr));gap:16px;}
+  .cell{position:relative;margin:0;cursor:pointer;}
+  .thumb{position:relative;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#fff;
+         box-shadow:var(--shadow);transition:border-color .15s,transform .15s;}
+  .thumb img{display:block;width:100%;height:auto;}
+  .cell:hover .thumb,.cell:focus-visible .thumb{border-color:var(--accent);transform:translateY(-2px);}
+  .cell.on .thumb{border-color:var(--accent);}
+  .zoom{position:absolute;top:8px;right:8px;z-index:2;width:26px;height:26px;padding:0;border:0;
+        border-radius:6px;background:rgba(6,34,63,.72);color:#fff;cursor:zoom-in;
+        display:flex;align-items:center;justify-content:center;opacity:0;
+        -webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);transition:opacity .15s,background .15s;}
+  .zoom svg{width:15px;height:15px;}
+  .cell:hover .zoom,.cell:focus-within .zoom,.zoom:focus-visible{opacity:1;}
+  .zoom:hover{background:var(--accent);}
+  /* lightbox — full-screen maximized figure viewer with prev/next */
+  .lb{position:fixed;inset:0;z-index:100;background:rgba(6,18,32,.94);
+      -webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);
+      display:none;align-items:center;justify-content:center;}
+  .lb.on{display:flex;}
+  .lb__bar{position:fixed;top:0;left:0;right:0;height:56px;display:flex;align-items:center;
+           justify-content:space-between;padding:0 14px 0 22px;background:linear-gradient(rgba(0,0,0,.4),transparent);}
+  .lb__count{color:#cdd9ea;font-family:var(--head);font-weight:600;font-size:.9rem;}
+  .lb__tools{display:flex;align-items:center;gap:2px;}
+  .lb__close{background:none;border:0;color:#fff;font-size:2rem;line-height:1;cursor:pointer;width:44px;height:44px;
+             border-radius:9px;display:flex;align-items:center;justify-content:center;}
+  .lb__zoom{background:none;border:0;color:#fff;cursor:pointer;width:40px;height:40px;border-radius:9px;
+            display:flex;align-items:center;justify-content:center;}
+  .lb__zoom svg{width:20px;height:20px;}
+  .lb__close:hover,.lb__zoom:hover{background:rgba(255,255,255,.14);}
+  .lb__fig{margin:0;display:flex;align-items:center;justify-content:center;padding:64px 7vw 88px;}
+  .lb__img{max-width:86vw;max-height:76vh;object-fit:contain;border-radius:10px;background:#fff;
+           box-shadow:0 24px 70px rgba(0,0,0,.55);cursor:zoom-in;}
+  /* zoomed: image grows past fit and the figure area scrolls to pan */
+  .lb.zoomed .lb__fig{overflow:auto;align-items:flex-start;justify-content:center;}
+  .lb.zoomed .lb__img{max-width:none;max-height:none;width:165vw;cursor:zoom-out;}
+  .lb__nav{position:fixed;top:50%;transform:translateY(-50%);background:rgba(255,255,255,.1);border:0;color:#fff;
+           font-size:1.9rem;line-height:1;width:50px;height:50px;border-radius:50%;cursor:pointer;
+           display:flex;align-items:center;justify-content:center;transition:background .15s;}
+  .lb__nav:hover{background:rgba(255,255,255,.26);}
+  .lb__prev{left:18px;}.lb__next{right:18px;}
+  .lb__foot{position:fixed;left:0;right:0;bottom:0;padding:1rem 16px .95rem;text-align:center;
+            background:linear-gradient(transparent,rgba(0,0,0,.5) 40%);}
+  .lb__cap{color:#e4ecf7;font-family:var(--head);font-weight:500;font-size:.9rem;}
+  @media (max-width:560px){.lb__img{max-width:94vw;max-height:66vh;}
+                           .lb__nav{width:42px;height:42px;font-size:1.5rem;}.lb__prev{left:6px;}.lb__next{right:6px;}}
+  .cell:focus-visible{outline:none;}
+  .cell:focus-visible .thumb{outline:2px solid var(--accent);outline-offset:2px;}
+  figcaption{font-family:var(--head);font-weight:500;font-size:.8rem;color:var(--ink);padding:8px 2px 0;}
+  figcaption .num{color:var(--accent);font-weight:700;margin-right:6px;}
+  /* click-to-open panel in PUSH mode: it sits in the normal flow just under the
+     header and animates its height, so the grid slides down instead of being
+     covered. (overlay mode would float on top; this reflows the page.) */
+  .drawer{flex:0 0 auto;overflow:hidden;max-height:0;transition:max-height .28s cubic-bezier(.4,0,.2,1);}
+  .drawer.open{max-height:52vh;}
+  /* panel sizes to its content; 52vh is only the cap (body scrolls past it) */
+  .drawer__panel{max-height:52vh;display:flex;flex-direction:column;color:var(--code-ink);
+                 background:rgba(6,34,63,.96);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);
+                 border-bottom:1px solid rgba(255,255,255,.12);box-shadow:0 18px 40px rgba(6,18,32,.28);}
+  .drawer__bar{display:flex;align-items:center;gap:10px;padding:13px 22px;
+               border-bottom:1px solid rgba(255,255,255,.1);flex:0 0 auto;}
+  .drawer__title{font-family:var(--head);font-weight:600;font-size:.95rem;color:#fff;}
+  .drawer__hint{font-size:.72rem;color:#8ba1c2;}
+  .drawer__close{margin-left:auto;background:none;border:0;color:#c2d3ea;font-size:24px;line-height:1;
+                 cursor:pointer;padding:0 4px;}
+  .drawer__close:hover{color:#fff;}
+  .drawer__body{flex:1 1 auto;min-height:0;overflow:auto;padding:18px 22px;
+                display:grid;grid-template-columns:1fr 1fr;gap:22px;align-content:start;}
+  @media (max-width:760px){.drawer.open{max-height:62vh;}.drawer__panel{max-height:62vh;}
+                           .drawer__body{grid-template-columns:1fr;}}
+  .snip .k{display:block;font-family:var(--head);font-weight:600;font-size:.64rem;letter-spacing:.09em;
+           text-transform:uppercase;color:var(--accent-bright);margin-bottom:7px;}
+  .snip pre{margin:0;font-family:var(--mono);font-size:12.5px;line-height:1.6;color:var(--code-ink);
+            white-space:pre;overflow-x:auto;}
+  footer{color:var(--muted);font-family:var(--head);font-size:.8rem;border-top:1px solid var(--line);
+         margin-top:44px;padding-top:18px;}
+  footer a{color:var(--accent);text-decoration:none;}
+  @media (prefers-reduced-motion:reduce){.thumb,.drawer{transition:none;}}
 </style>
 </head>
 <body>
 <header class="site">
   <div class="wrap">
-    <a class="mark" href="index.html"><span class="ember"></span>cinderplot</a>
-    <nav class="nav"><a href="index.html">Home</a><a href="gallery.html" class="active">Gallery</a><a href="https://github.com/zhou-lab/cinderplot">GitHub</a></nav>
+    <a class="mark" href="index.html"><span class="sq"></span>cinderplot <span class="sub">/ gallery</span></a>
+    <nav class="nav"><a href="index.html">Overview</a><a href="gallery.html" class="active">Gallery</a><a href="https://github.com/zhou-lab/cinderplot">GitHub</a></nav>
   </div>
 </header>
-<main>
-  <div class="wrap">
-    <p class="eyebrow">Gallery › Scatterplot</p>
-    <h1>Scatterplot</h1>
-    <p class="lede">
-      The scatterplot, drawn a dozen ways — grouped, coloured, log-scaled, across datasets. Every figure is
-      rendered by <b>cinderplot</b> straight from a CSV, no R at plot time. <b>Hover any plot for the command;</b>
-      flip the toggle to see the R original it reproduces.
-    </p>
-    <div class="toolbar">
-      <span class="lbl">drawn with</span>
-      <div class="tabs" role="tablist" aria-label="Drawn with">
-        <button class="tab active" data-t="cp" role="tab" aria-selected="true">cinderplot</button>
-        <button class="tab" data-t="r" role="tab" aria-selected="false">R · ggplot2</button>
-      </div>
+<div class="drawer" id="drawer" aria-hidden="true" role="region" aria-label="Figure code">
+  <div class="drawer__panel">
+    <div class="drawer__bar">
+      <span class="drawer__title" id="drawerTitle"></span>
+      <span class="drawer__hint">cinderplot command &amp; the R original</span>
+      <button class="drawer__close" id="drawerClose" aria-label="Close code panel">&times;</button>
     </div>
-    <div class="cards">
-      <figure class="card">
-        <div class="stage" tabindex="0" aria-label="Basic scatterplot; hover or focus for code">
-          <img data-v="cp" src="figs/basic-cp.svg" alt="Basic — cinderplot">
-          <img data-v="r" src="figs/basic-gg.png" alt="Basic — ggplot2" hidden>
-          <div class="overlay">
-            <pre data-v="cp"><span class="c"># cinderplot</span>
-cinderplot &#x27;data/mtcars.csv
-  + aes(wt, mpg)
-  + geom_point()&#x27; \
-  -o out.svg</pre>
-            <pre data-v="r"><span class="c"># R + ggplot2</span>
-ggplot(mtcars, aes(wt, mpg)) + geom_point()</pre>
-          </div>
-        </div>
-        <figcaption>Basic</figcaption>
-      </figure>
-      <figure class="card">
-        <div class="stage" tabindex="0" aria-label="Custom colour scatterplot; hover or focus for code">
-          <img data-v="cp" src="figs/custom-cp.svg" alt="Custom colour — cinderplot">
-          <img data-v="r" src="figs/custom-gg.png" alt="Custom colour — ggplot2" hidden>
-          <div class="overlay">
-            <pre data-v="cp"><span class="c"># cinderplot</span>
-cinderplot &#x27;data/mtcars.csv
-  + aes(wt, mpg)
-  + geom_point(color=&quot;#69b3a2&quot;)&#x27; \
-  -o out.svg</pre>
-            <pre data-v="r"><span class="c"># R + ggplot2</span>
-ggplot(mtcars, aes(wt, mpg)) + geom_point(color = &quot;#69b3a2&quot;)</pre>
-          </div>
-        </div>
-        <figcaption>Custom colour</figcaption>
-      </figure>
-      <figure class="card">
-        <div class="stage" tabindex="0" aria-label="Colour by group scatterplot; hover or focus for code">
-          <img data-v="cp" src="figs/group-cyl-cp.svg" alt="Colour by group — cinderplot">
-          <img data-v="r" src="figs/group-cyl-gg.png" alt="Colour by group — ggplot2" hidden>
-          <div class="overlay">
-            <pre data-v="cp"><span class="c"># cinderplot</span>
-cinderplot &#x27;data/mtcars.csv
+    <div class="drawer__body" id="drawerBody"></div>
+  </div>
+</div>
+<main class="scroll">
+  <div class="wrap">
+    <section class="sect">
+      <div class="sep"></div>
+      <h2 class="sect__title">Scatterplots</h2>
+      <div class="cards">
+        <figure class="cell" tabindex="0" role="button" aria-label="Figure 1: Colour by group — show code" data-title="1 · Colour by group">
+          <div class="thumb"><button class="zoom" data-i="0" aria-label="Maximize figure 1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/group-cyl-cp.svg" alt="Colour by group — cinderplot"></div>
+          <figcaption><span class="num">1</span>Colour by group</figcaption>
+          <template class="code">
+            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
   + aes(wt, mpg, colour=factor(cyl))
   + geom_point()&#x27; \
-  -o out.svg</pre>
-            <pre data-v="r"><span class="c"># R + ggplot2</span>
-ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) + geom_point()</pre>
-          </div>
-        </div>
-        <figcaption>Colour by group</figcaption>
-      </figure>
-      <figure class="card">
-        <div class="stage" tabindex="0" aria-label="Groups, other axes scatterplot; hover or focus for code">
-          <img data-v="cp" src="figs/group-gear-cp.svg" alt="Groups, other axes — cinderplot">
-          <img data-v="r" src="figs/group-gear-gg.png" alt="Groups, other axes — ggplot2" hidden>
-          <div class="overlay">
-            <pre data-v="cp"><span class="c"># cinderplot</span>
-cinderplot &#x27;data/mtcars.csv
-  + aes(hp, mpg, colour=factor(gear))
-  + geom_point()&#x27; \
-  -o out.svg</pre>
-            <pre data-v="r"><span class="c"># R + ggplot2</span>
-ggplot(mtcars, aes(hp, mpg, colour = factor(gear))) + geom_point()</pre>
-          </div>
-        </div>
-        <figcaption>Groups, other axes</figcaption>
-      </figure>
-      <figure class="card">
-        <div class="stage" tabindex="0" aria-label="Continuous colour scatterplot; hover or focus for code">
-          <img data-v="cp" src="figs/continuous-cp.svg" alt="Continuous colour — cinderplot">
-          <img data-v="r" src="figs/continuous-gg.png" alt="Continuous colour — ggplot2" hidden>
-          <div class="overlay">
-            <pre data-v="cp"><span class="c"># cinderplot</span>
-cinderplot &#x27;data/mtcars.csv
-  + aes(wt, mpg, colour=hp)
-  + geom_point()
-  + scale_colour_gradient(low=&quot;#132b43&quot;, high=&quot;#56b1f7&quot;)&#x27; \
-  -o out.svg</pre>
-            <pre data-v="r"><span class="c"># R + ggplot2</span>
-ggplot(mtcars, aes(wt, mpg, colour = hp)) + geom_point() +
-  scale_colour_gradient(low = &quot;#132b43&quot;, high = &quot;#56b1f7&quot;)</pre>
-          </div>
-        </div>
-        <figcaption>Continuous colour</figcaption>
-      </figure>
-      <figure class="card">
-        <div class="stage" tabindex="0" aria-label="Log x-axis scatterplot; hover or focus for code">
-          <img data-v="cp" src="figs/logx-cp.svg" alt="Log x-axis — cinderplot">
-          <img data-v="r" src="figs/logx-gg.png" alt="Log x-axis — ggplot2" hidden>
-          <div class="overlay">
-            <pre data-v="cp"><span class="c"># cinderplot</span>
-cinderplot &#x27;data/mtcars.csv
-  + aes(hp, mpg)
-  + geom_point()
-  + scale_x_log10()&#x27; \
-  -o out.svg</pre>
-            <pre data-v="r"><span class="c"># R + ggplot2</span>
-ggplot(mtcars, aes(hp, mpg)) + geom_point() + scale_x_log10()</pre>
-          </div>
-        </div>
-        <figcaption>Log x-axis</figcaption>
-      </figure>
-      <figure class="card">
-        <div class="stage" tabindex="0" aria-label="Iris · sepals scatterplot; hover or focus for code">
-          <img data-v="cp" src="figs/iris-sepal-cp.svg" alt="Iris · sepals — cinderplot">
-          <img data-v="r" src="figs/iris-sepal-gg.png" alt="Iris · sepals — ggplot2" hidden>
-          <div class="overlay">
-            <pre data-v="cp"><span class="c"># cinderplot</span>
-cinderplot &#x27;data/iris.csv
-  + aes(Sepal.Length, Sepal.Width, colour=Species)
-  + geom_point()&#x27; \
-  -o out.svg</pre>
-            <pre data-v="r"><span class="c"># R + ggplot2</span>
-ggplot(iris, aes(Sepal.Length, Sepal.Width, colour = Species)) + geom_point()</pre>
-          </div>
-        </div>
-        <figcaption>Iris · sepals</figcaption>
-      </figure>
-      <figure class="card">
-        <div class="stage" tabindex="0" aria-label="Iris · petals scatterplot; hover or focus for code">
-          <img data-v="cp" src="figs/iris-petal-cp.svg" alt="Iris · petals — cinderplot">
-          <img data-v="r" src="figs/iris-petal-gg.png" alt="Iris · petals — ggplot2" hidden>
-          <div class="overlay">
-            <pre data-v="cp"><span class="c"># cinderplot</span>
-cinderplot &#x27;data/iris.csv
-  + aes(Petal.Length, Petal.Width, colour=Species)
-  + geom_point()&#x27; \
-  -o out.svg</pre>
-            <pre data-v="r"><span class="c"># R + ggplot2</span>
-ggplot(iris, aes(Petal.Length, Petal.Width, colour = Species)) + geom_point()</pre>
-          </div>
-        </div>
-        <figcaption>Iris · petals</figcaption>
-      </figure>
-      <figure class="card">
-        <div class="stage" tabindex="0" aria-label="Old Faithful scatterplot; hover or focus for code">
-          <img data-v="cp" src="figs/faithful-cp.svg" alt="Old Faithful — cinderplot">
-          <img data-v="r" src="figs/faithful-gg.png" alt="Old Faithful — ggplot2" hidden>
-          <div class="overlay">
-            <pre data-v="cp"><span class="c"># cinderplot</span>
-cinderplot &#x27;data/faithful.csv
-  + aes(waiting, eruptions)
-  + geom_point()&#x27; \
-  -o out.svg</pre>
-            <pre data-v="r"><span class="c"># R + ggplot2</span>
-ggplot(faithful, aes(waiting, eruptions)) + geom_point()</pre>
-          </div>
-        </div>
-        <figcaption>Old Faithful</figcaption>
-      </figure>
-      <figure class="card">
-        <div class="stage" tabindex="0" aria-label="Fiji earthquakes scatterplot; hover or focus for code">
-          <img data-v="cp" src="figs/quakes-cp.svg" alt="Fiji earthquakes — cinderplot">
-          <img data-v="r" src="figs/quakes-gg.png" alt="Fiji earthquakes — ggplot2" hidden>
-          <div class="overlay">
-            <pre data-v="cp"><span class="c"># cinderplot</span>
-cinderplot &#x27;data/quakes.csv
+  -o out.svg</pre></div>
+            <div class="snip"><span class="k">R · ggplot2</span><pre>ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) + geom_point()</pre></div>
+          </template>
+        </figure>
+        <figure class="cell" tabindex="0" role="button" aria-label="Figure 2: Continuous colour scale — show code" data-title="2 · Continuous colour scale">
+          <div class="thumb"><button class="zoom" data-i="1" aria-label="Maximize figure 2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/quakes-cp.svg" alt="Continuous colour scale — cinderplot"></div>
+          <figcaption><span class="num">2</span>Continuous colour scale</figcaption>
+          <template class="code">
+            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/quakes.csv
   + aes(long, lat, colour=mag)
   + geom_point()
   + scale_colour_gradient(low=&quot;#132b43&quot;, high=&quot;#56b1f7&quot;)&#x27; \
-  -o out.svg</pre>
-            <pre data-v="r"><span class="c"># R + ggplot2</span>
-ggplot(quakes, aes(long, lat, colour = mag)) + geom_point() +
-  scale_colour_gradient(low = &quot;#132b43&quot;, high = &quot;#56b1f7&quot;)</pre>
-          </div>
-        </div>
-        <figcaption>Fiji earthquakes</figcaption>
-      </figure>
-      <figure class="card">
-        <div class="stage" tabindex="0" aria-label="Diamonds (2k sample) scatterplot; hover or focus for code">
-          <img data-v="cp" src="figs/diamonds-cp.svg" alt="Diamonds (2k sample) — cinderplot">
-          <img data-v="r" src="figs/diamonds-gg.png" alt="Diamonds (2k sample) — ggplot2" hidden>
-          <div class="overlay">
-            <pre data-v="cp"><span class="c"># cinderplot</span>
-cinderplot &#x27;data/diamonds_sample.csv
+  -o out.svg</pre></div>
+            <div class="snip"><span class="k">R · ggplot2</span><pre>ggplot(quakes, aes(long, lat, colour = mag)) + geom_point() +
+  scale_colour_gradient(low = &quot;#132b43&quot;, high = &quot;#56b1f7&quot;)</pre></div>
+          </template>
+        </figure>
+        <figure class="cell" tabindex="0" role="button" aria-label="Figure 3: Colour by category — show code" data-title="3 · Colour by category">
+          <div class="thumb"><button class="zoom" data-i="2" aria-label="Maximize figure 3"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/diamonds-cp.svg" alt="Colour by category — cinderplot"></div>
+          <figcaption><span class="num">3</span>Colour by category</figcaption>
+          <template class="code">
+            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/diamonds_sample.csv
   + aes(carat, price, colour=cut)
   + geom_point()&#x27; \
-  -o out.svg</pre>
-            <pre data-v="r"><span class="c"># R + ggplot2</span>
-# diamonds, a 2000-row sample
-ggplot(diamonds, aes(carat, price, colour = cut)) + geom_point()</pre>
-          </div>
-        </div>
-        <figcaption>Diamonds (2k sample)</figcaption>
-      </figure>
-      <figure class="card">
-        <div class="stage" tabindex="0" aria-label="Cars: speed vs dist scatterplot; hover or focus for code">
-          <img data-v="cp" src="figs/cars-cp.svg" alt="Cars: speed vs dist — cinderplot">
-          <img data-v="r" src="figs/cars-gg.png" alt="Cars: speed vs dist — ggplot2" hidden>
-          <div class="overlay">
-            <pre data-v="cp"><span class="c"># cinderplot</span>
-cinderplot &#x27;data/cars.csv
-  + aes(speed, dist)
-  + geom_point()&#x27; \
-  -o out.svg</pre>
-            <pre data-v="r"><span class="c"># R + ggplot2</span>
-ggplot(cars, aes(speed, dist)) + geom_point()</pre>
-          </div>
-        </div>
-        <figcaption>Cars: speed vs dist</figcaption>
-      </figure>
-    </div>
-    <div class="note"><b>Same figures, no R.</b> cinderplot reproduces ggplot2's <code>theme_gray</code> —
-      panel, gridlines, hue palette, axis breaks, legends — from one C binary that reads the CSV and writes
-      PDF or SVG in milliseconds.</div>
-    <footer>data: cinderplot-examples/data &nbsp;·&nbsp; rebuild: docs/build.py &nbsp;·&nbsp;
+  -o out.svg</pre></div>
+            <div class="snip"><span class="k">R · ggplot2</span><pre># diamonds, a 2000-row sample
+ggplot(diamonds, aes(carat, price, colour = cut)) + geom_point()</pre></div>
+          </template>
+        </figure>
+        <figure class="cell" tabindex="0" role="button" aria-label="Figure 4: Log-scaled x-axis — show code" data-title="4 · Log-scaled x-axis">
+          <div class="thumb"><button class="zoom" data-i="3" aria-label="Maximize figure 4"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/logx-cp.svg" alt="Log-scaled x-axis — cinderplot"></div>
+          <figcaption><span class="num">4</span>Log-scaled x-axis</figcaption>
+          <template class="code">
+            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
+  + aes(hp, mpg)
+  + geom_point()
+  + scale_x_log10(limits=c(10,1000))
+  + ylim(0, 50)&#x27; \
+  -o out.svg</pre></div>
+            <div class="snip"><span class="k">R · ggplot2</span><pre>ggplot(mtcars, aes(hp, mpg)) + geom_point() +
+  scale_x_log10(breaks = trans_breaks(&quot;log10&quot;, function(x) 10^x),
+                labels = trans_format(&quot;log10&quot;, math_format(10^.x)),
+                limits = c(10, 1000)) +
+  annotation_logticks(sides = &quot;b&quot;) + ylim(0, 50)</pre></div>
+          </template>
+        </figure>
+      </div>
+    </section>
+    <section class="sect">
+      <div class="sep"></div>
+      <h2 class="sect__title">Themes</h2>
+      <div class="cards">
+        <figure class="cell" tabindex="0" role="button" aria-label="Figure 5: theme_bw — show code" data-title="5 · theme_bw">
+          <div class="thumb"><button class="zoom" data-i="4" aria-label="Maximize figure 5"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-bw-cp.svg" alt="theme_bw — cinderplot"></div>
+          <figcaption><span class="num">5</span>theme_bw</figcaption>
+          <template class="code">
+            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
+  + aes(wt, mpg, colour=factor(cyl))
+  + geom_point()
+  + theme_bw()&#x27; \
+  -o out.svg</pre></div>
+            <div class="snip"><span class="k">R · ggplot2</span><pre>ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) + geom_point() + theme_bw()</pre></div>
+          </template>
+        </figure>
+        <figure class="cell" tabindex="0" role="button" aria-label="Figure 6: theme_minimal — show code" data-title="6 · theme_minimal">
+          <div class="thumb"><button class="zoom" data-i="5" aria-label="Maximize figure 6"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-minimal-cp.svg" alt="theme_minimal — cinderplot"></div>
+          <figcaption><span class="num">6</span>theme_minimal</figcaption>
+          <template class="code">
+            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
+  + aes(wt, mpg, colour=factor(cyl))
+  + geom_point()
+  + theme_minimal()&#x27; \
+  -o out.svg</pre></div>
+            <div class="snip"><span class="k">R · ggplot2</span><pre>ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) + geom_point() + theme_minimal()</pre></div>
+          </template>
+        </figure>
+        <figure class="cell" tabindex="0" role="button" aria-label="Figure 7: theme_classic — show code" data-title="7 · theme_classic">
+          <div class="thumb"><button class="zoom" data-i="6" aria-label="Maximize figure 7"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-classic-cp.svg" alt="theme_classic — cinderplot"></div>
+          <figcaption><span class="num">7</span>theme_classic</figcaption>
+          <template class="code">
+            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
+  + aes(wt, mpg, colour=factor(cyl))
+  + geom_point()
+  + theme_classic()&#x27; \
+  -o out.svg</pre></div>
+            <div class="snip"><span class="k">R · ggplot2</span><pre>ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) + geom_point() + theme_classic()</pre></div>
+          </template>
+        </figure>
+        <figure class="cell" tabindex="0" role="button" aria-label="Figure 8: theme_void — show code" data-title="8 · theme_void">
+          <div class="thumb"><button class="zoom" data-i="7" aria-label="Maximize figure 8"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-void-cp.svg" alt="theme_void — cinderplot"></div>
+          <figcaption><span class="num">8</span>theme_void</figcaption>
+          <template class="code">
+            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
+  + aes(wt, mpg, colour=factor(cyl))
+  + geom_point()
+  + theme_void()&#x27; \
+  -o out.svg</pre></div>
+            <div class="snip"><span class="k">R · ggplot2</span><pre>ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) + geom_point() + theme_void()</pre></div>
+          </template>
+        </figure>
+        <figure class="cell" tabindex="0" role="button" aria-label="Figure 9: theme_linedraw — show code" data-title="9 · theme_linedraw">
+          <div class="thumb"><button class="zoom" data-i="8" aria-label="Maximize figure 9"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-linedraw-cp.svg" alt="theme_linedraw — cinderplot"></div>
+          <figcaption><span class="num">9</span>theme_linedraw</figcaption>
+          <template class="code">
+            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
+  + aes(wt, mpg, colour=factor(cyl))
+  + geom_point()
+  + theme_linedraw()&#x27; \
+  -o out.svg</pre></div>
+            <div class="snip"><span class="k">R · ggplot2</span><pre>ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) + geom_point() + theme_linedraw()</pre></div>
+          </template>
+        </figure>
+        <figure class="cell" tabindex="0" role="button" aria-label="Figure 10: theme_light — show code" data-title="10 · theme_light">
+          <div class="thumb"><button class="zoom" data-i="9" aria-label="Maximize figure 10"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-light-cp.svg" alt="theme_light — cinderplot"></div>
+          <figcaption><span class="num">10</span>theme_light</figcaption>
+          <template class="code">
+            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
+  + aes(wt, mpg, colour=factor(cyl))
+  + geom_point()
+  + theme_light()&#x27; \
+  -o out.svg</pre></div>
+            <div class="snip"><span class="k">R · ggplot2</span><pre>ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) + geom_point() + theme_light()</pre></div>
+          </template>
+        </figure>
+        <figure class="cell" tabindex="0" role="button" aria-label="Figure 11: theme_dark — show code" data-title="11 · theme_dark">
+          <div class="thumb"><button class="zoom" data-i="10" aria-label="Maximize figure 11"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-dark-cp.svg" alt="theme_dark — cinderplot"></div>
+          <figcaption><span class="num">11</span>theme_dark</figcaption>
+          <template class="code">
+            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
+  + aes(wt, mpg, colour=factor(cyl))
+  + geom_point()
+  + theme_dark()&#x27; \
+  -o out.svg</pre></div>
+            <div class="snip"><span class="k">R · ggplot2</span><pre>ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) + geom_point() + theme_dark()</pre></div>
+          </template>
+        </figure>
+        <figure class="cell" tabindex="0" role="button" aria-label="Figure 12: theme_pubr — show code" data-title="12 · theme_pubr">
+          <div class="thumb"><button class="zoom" data-i="11" aria-label="Maximize figure 12"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-pubr-cp.svg" alt="theme_pubr — cinderplot"></div>
+          <figcaption><span class="num">12</span>theme_pubr</figcaption>
+          <template class="code">
+            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
+  + aes(wt, mpg, colour=factor(cyl))
+  + geom_point()
+  + theme_pubr()&#x27; \
+  -o out.svg</pre></div>
+            <div class="snip"><span class="k">R · ggplot2</span><pre># requires ggpubr
+ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) + geom_point() + theme_pubr()</pre></div>
+          </template>
+        </figure>
+        <figure class="cell" tabindex="0" role="button" aria-label="Figure 13: theme_few — show code" data-title="13 · theme_few">
+          <div class="thumb"><button class="zoom" data-i="12" aria-label="Maximize figure 13"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-few-cp.svg" alt="theme_few — cinderplot"></div>
+          <figcaption><span class="num">13</span>theme_few</figcaption>
+          <template class="code">
+            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
+  + aes(wt, mpg, colour=factor(cyl))
+  + geom_point()
+  + theme_few()&#x27; \
+  -o out.svg</pre></div>
+            <div class="snip"><span class="k">R · ggplot2</span><pre># requires ggthemes
+ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) + geom_point() + theme_few()</pre></div>
+          </template>
+        </figure>
+      </div>
+    </section>
+    <p class="smallprint">Datasets used in these examples (mtcars, quakes, diamonds, …) are available from the
+      <a href="https://github.com/zhou-lab/cinderplot-examples">cinderplot-examples</a> repository.</p>
+    <footer>Every figure rendered by cinderplot straight from a CSV · click a figure for its code, or ⛶ to enlarge ·
       <a href="https://github.com/zhou-lab/cinderplot">github.com/zhou-lab/cinderplot</a></footer>
   </div>
 </main>
+<div class="lb" id="lb" aria-hidden="true" role="dialog" aria-label="Figure viewer">
+  <div class="lb__bar">
+    <span class="lb__count" id="lbCount"></span>
+    <div class="lb__tools">
+      <button class="lb__zoom" id="lbZoom" aria-label="Zoom in"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button>
+      <button class="lb__close" id="lbClose" aria-label="Close viewer">&times;</button>
+    </div>
+  </div>
+  <figure class="lb__fig"><img class="lb__img" id="lbImg" alt=""></figure>
+  <button class="lb__nav lb__prev" id="lbPrev" aria-label="Previous figure">&#8249;</button>
+  <button class="lb__nav lb__next" id="lbNext" aria-label="Next figure">&#8250;</button>
+  <div class="lb__foot"><span class="lb__cap" id="lbCap"></span></div>
+</div>
 <script>
 (function () {
-  var tabs = [].slice.call(document.querySelectorAll('.tab'));
-  var items = [].slice.call(document.querySelectorAll('[data-v]'));
-  function set(v) {
-    items.forEach(function (el) { el.hidden = (el.dataset.v !== v); });
-    tabs.forEach(function (b) { var on = b.dataset.t === v;
-      b.classList.toggle('active', on); b.setAttribute('aria-selected', on ? 'true' : 'false'); });
+  var cells = [].slice.call(document.querySelectorAll('.cell'));
+
+  // --- code drop-down (push panel) ---
+  var drawer = document.getElementById('drawer'),
+      dBody  = document.getElementById('drawerBody'),
+      dTitle = document.getElementById('drawerTitle'),
+      current = null;
+  function closeDrawer() {
+    drawer.classList.remove('open');
+    drawer.setAttribute('aria-hidden', 'true');
+    if (current) current.classList.remove('on');
+    current = null;
   }
-  tabs.forEach(function (b) { b.addEventListener('click', function () { set(b.dataset.t); }); });
+  function openDrawer(cell) {
+    if (current === cell) { closeDrawer(); return; }   // click same figure -> close
+    if (current) current.classList.remove('on');
+    dBody.innerHTML = '';
+    dBody.appendChild(cell.querySelector('template.code').content.cloneNode(true));
+    dTitle.textContent = cell.getAttribute('data-title') || '';
+    cell.classList.add('on');
+    current = cell;
+    drawer.classList.add('open');
+    drawer.setAttribute('aria-hidden', 'false');
+  }
+  cells.forEach(function (c) {
+    c.addEventListener('click', function (e) {
+      if (e.target.closest('.zoom')) return;           // zoom button handles itself
+      openDrawer(c);
+    });
+    c.addEventListener('keydown', function (e) {
+      if (e.target !== c) return;                       // ignore the inner zoom button
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDrawer(c); }
+    });
+  });
+  document.getElementById('drawerClose').addEventListener('click', closeDrawer);
+
+  // --- lightbox (maximize) ---
+  var figs = cells.map(function (c) {
+    return { src: c.querySelector('.thumb img').src, cap: c.getAttribute('data-title') || '' };
+  });
+  var lb = document.getElementById('lb'), lbImg = document.getElementById('lbImg'),
+      lbCap = document.getElementById('lbCap'), lbCount = document.getElementById('lbCount'),
+      lbZoom = document.getElementById('lbZoom'), cur = 0;
+  function setZoom(on) {
+    lb.classList.toggle('zoomed', on);
+    lbZoom.setAttribute('aria-label', on ? 'Zoom out' : 'Zoom in');
+    if (!on && lb.querySelector('.lb__fig')) lb.querySelector('.lb__fig').scrollTo(0, 0);
+  }
+  function show(i) {
+    cur = (i + figs.length) % figs.length;
+    setZoom(false);                                    // reset zoom when navigating
+    lbImg.src = figs[cur].src; lbImg.alt = figs[cur].cap;
+    lbCap.textContent = figs[cur].cap;
+    lbCount.textContent = (cur + 1) + ' / ' + figs.length;
+  }
+  function openLB(i) { show(i); lb.classList.add('on'); lb.setAttribute('aria-hidden', 'false'); }
+  function closeLB() { lb.classList.remove('on'); lb.setAttribute('aria-hidden', 'true'); }
+  [].slice.call(document.querySelectorAll('.zoom')).forEach(function (b) {
+    b.addEventListener('click', function (e) { e.stopPropagation(); openLB(+b.getAttribute('data-i')); });
+  });
+  document.getElementById('lbPrev').addEventListener('click', function () { show(cur - 1); });
+  document.getElementById('lbNext').addEventListener('click', function () { show(cur + 1); });
+  document.getElementById('lbClose').addEventListener('click', closeLB);
+  lbZoom.addEventListener('click', function (e) { e.stopPropagation(); setZoom(!lb.classList.contains('zoomed')); });
+  lbImg.addEventListener('click', function (e) { e.stopPropagation(); setZoom(!lb.classList.contains('zoomed')); });
+  lb.addEventListener('click', function (e) {
+    if (e.target === lb) closeLB();
+    else if (e.target.classList.contains('lb__fig') && !lb.classList.contains('zoomed')) closeLB();
+  });
+
+  document.addEventListener('keydown', function (e) {
+    if (lb.classList.contains('on')) {
+      if (e.key === 'Escape') closeLB();
+      else if (e.key === 'ArrowLeft') show(cur - 1);
+      else if (e.key === 'ArrowRight') show(cur + 1);
+      return;
+    }
+    if (e.key === 'Escape') closeDrawer();
+  });
 })();
 </script>
 </body>
