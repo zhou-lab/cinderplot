@@ -390,11 +390,12 @@ static int parse_term(P *p, PlotSpec *spec) {
     else if (!strcmp(name, "geom_bar")) gt = GEOM_BAR;
     else if (!strcmp(name, "geom_segment")) gt = GEOM_SEGMENT;
     else if (!strcmp(name, "geom_rect")) gt = GEOM_RECT;
+    else if (!strcmp(name, "geom_density")) gt = GEOM_DENSITY;
     else is_geom = 0;
     if (is_geom) {
         if (spec->nlayers == MAX_LAYERS) return fail(p, "too many layers", "");
         Layer *l = &spec->layers[spec->nlayers++];
-        l->type = gt; l->bins = 30;
+        l->type = gt; l->bins = 30; l->adjust = 1;   /* adjust default = 1 (density) */
         skip_ws(p);
         if (gt == GEOM_HISTOGRAM && *p->s != ')') {
             char *key = ident(p);
@@ -427,6 +428,12 @@ static int parse_term(P *p, PlotSpec *spec) {
                 } else if (se && !strcmp(key, "y")) {
                     l->ycol = ident(p);
                     if (!l->ycol) return fail(p, "y= expects a column name", "");
+                } else if (gt == GEOM_DENSITY && !strcmp(key, "bw")) {
+                    l->bw = strtod(p->s, (char **)&p->s);
+                    if (l->bw <= 0) return fail(p, "geom_density(bw=...) must be > 0", "");
+                } else if (gt == GEOM_DENSITY && !strcmp(key, "adjust")) {
+                    l->adjust = strtod(p->s, (char **)&p->s);
+                    if (l->adjust <= 0) return fail(p, "geom_density(adjust=...) must be > 0", "");
                 } else return fail(p, "layer option `%s` not implemented", key);
                 skip_ws(p);
                 if (*p->s == ',') { p->s++; skip_ws(p); }
@@ -597,15 +604,16 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
     }
     if (spec->nlayers == 0)
         return fail(&p, "no geom given; add e.g. + geom_point()", "");
-    int nstat = 0;   /* count stats (histogram, bar) compute y themselves */
+    int nstat = 0;   /* stats (histogram, bar, density) compute y themselves */
     for (int i = 0; i < spec->nlayers; i++)
-        if (spec->layers[i].type == GEOM_HISTOGRAM || spec->layers[i].type == GEOM_BAR) nstat++;
+        if (spec->layers[i].type == GEOM_HISTOGRAM || spec->layers[i].type == GEOM_BAR
+            || spec->layers[i].type == GEOM_DENSITY) nstat++;
     if (nstat && nstat != spec->nlayers)
-        return fail(&p, "geom_histogram()/geom_bar() cannot be combined with other geoms yet", "");
+        return fail(&p, "geom_histogram()/geom_bar()/geom_density() cannot be combined with other geoms yet", "");
     if (!spec->x.col)
         return fail(&p, "aes() must map x", "");
     if (nstat && spec->y.col)
-        return fail(&p, "geom_histogram()/geom_bar() compute y (count); do not map y", "");
+        return fail(&p, "geom_histogram()/geom_bar()/geom_density() compute y; do not map y", "");
     if (!nstat && !spec->y.col)
         return fail(&p, "aes() must map y", "");
     return 0;

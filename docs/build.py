@@ -57,6 +57,11 @@ SECTIONS = [
          '                limits = c(10, 1000)) +\n'
          '  annotation_logticks(sides = "b") + ylim(0, 50)'),
     ]),
+    ("Distributions", [
+        ("density", "Kernel density (KDE)",
+         "data/gm12878_betas.tsv + aes(beta) + geom_density()",
+         "# GM12878 methylation betas (bimodal)\nggplot(betas, aes(beta)) + geom_density()"),
+    ]),
 ]
 
 # Themes showcase: the same scatter under each theme. cinderplot renders these
@@ -80,6 +85,7 @@ DATASETS = [
     ("mtcars",   "data/mtcars.csv",          None),
     ("quakes",   "data/quakes.csv",          "quakes"),
     ("diamonds", "data/diamonds_sample.csv", "{set.seed(42); diamonds[sample(nrow(diamonds), 2000), ]}"),
+    ("betas",    "data/gm12878_betas.tsv",   None),   # GM12878 methylation betas (TSV)
 ]
 
 def render():
@@ -102,7 +108,8 @@ def render():
     # 1. ggplot references via one R script (pdf device; no cairo/X11 needed)
     r = ["suppressMessages({library(ggplot2); library(scales)})"]
     for var, csv, _e in DATASETS:
-        r.append(f"{var} <- read.csv('{csv}')")
+        rd = "read.delim" if csv.endswith(".tsv") else "read.csv"
+        r.append(f"{var} <- {rd}('{csv}')")
     for slug, _t, _cp, rc in VARIANTS:
         if slug.startswith("theme-"):
             continue                      # themes: cinderplot figure only, no gg

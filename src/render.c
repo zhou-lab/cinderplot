@@ -233,7 +233,7 @@ static Col stain_color(const char *s) {
 int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 double w_pt, double h_pt, char *err) {
     /* ---- layer summary ---- */
-    int haspoint = 0, hasline = 0, hascol = 0, nhist = 0, hasbox = 0, hasbar = 0;
+    int haspoint = 0, hasline = 0, hascol = 0, nhist = 0, hasbox = 0, hasbar = 0, hasdens = 0;
     for (int i = 0; i < spec->nlayers; i++) {
         if (spec->layers[i].type == GEOM_POINT) haspoint = 1;
         if (spec->layers[i].type == GEOM_LINE) hasline = 1;
@@ -241,6 +241,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         if (spec->layers[i].type == GEOM_HISTOGRAM) nhist++;
         if (spec->layers[i].type == GEOM_BOXPLOT) hasbox = 1;
         if (spec->layers[i].type == GEOM_BAR) hasbar = 1;
+        if (spec->layers[i].type == GEOM_DENSITY) hasdens = 1;
     }
 
     /* ---- resolve columns ---- */
@@ -257,6 +258,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     }
     if (disc_x && nhist) {
         sprintf(err, "geom_histogram() needs a continuous x"); return -1;
+    }
+    if (disc_x && hasdens) {
+        sprintf(err, "geom_density() needs a continuous x"); return -1;
     }
     if (hasbox && !disc_x) {
         sprintf(err, "geom_boxplot() needs a discrete x; use aes(x=factor(%s), ...)", spec->x.col);
@@ -479,6 +483,62 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             }
     }
 
+    /* ---- stat_density: Gaussian KDE per (panel, colour group), bandwidth
+     * nrd0 (Silverman), evaluated at DENS_N points over [min-3bw, max+3bw]
+     * (ggplot's cut=3). The x-scale stays on the data range (ggplot-style). --- */
+#define DENS_N 512
+    int densg = cf ? cf->nlev : 1;
+    double *dens_x = NULL, *dens_y = NULL, dens_max = 0;
+    if (hasdens) {
+        const Layer *densl = NULL;
+        for (int li = 0; li < spec->nlayers; li++)
+            if (spec->layers[li].type == GEOM_DENSITY) densl = &spec->layers[li];
+        dens_x = malloc((size_t)npan * densg * DENS_N * sizeof(double));
+        dens_y = malloc((size_t)npan * densg * DENS_N * sizeof(double));
+        double *buf = malloc((size_t)df->nrow * sizeof(double));
+        for (int p = 0; p < npan; p++)
+            for (int gg = 0; gg < densg; gg++) {
+                int n = 0;
+                for (int r = 0; r < df->nrow; r++)
+                    if (use[r] && (!ff || ff->idx[r] == p) && (!cf || cf->idx[r] == gg))
+                        buf[n++] = TXR(r);
+                size_t base = ((size_t)(p * densg + gg)) * DENS_N;
+                if (n < 2) {
+                    for (int j = 0; j < DENS_N; j++) { dens_x[base+j] = txmin; dens_y[base+j] = 0; }
+                    continue;
+                }
+                double mean = 0;
+                for (int i = 0; i < n; i++) mean += buf[i];
+                mean /= n;
+                double var = 0;
+                for (int i = 0; i < n; i++) { double d = buf[i] - mean; var += d * d; }
+                var /= (n - 1);
+                double sd = sqrt(var);
+                qsort(buf, n, sizeof(double), cmp_double);
+                double iqr = quantile7(buf, n, 0.75) - quantile7(buf, n, 0.25);
+                double lo = fmin(sd, iqr / 1.349);          /* R's bw.nrd0 */
+                if (lo <= 0) lo = sd > 0 ? sd : (fabs(buf[0]) > 0 ? fabs(buf[0]) : 1);
+                double bw = (densl->bw > 0 ? densl->bw : 0.9 * lo * pow((double)n, -0.2))
+                          * densl->adjust;               /* bw= override, x adjust= */
+                if (bw <= 0) bw = 1e-6;
+                /* eval over [min-3bw, max+3bw] (cut=3); the curve is clipped to
+                 * the data-range panel at draw time, matching ggplot */
+                double xlo = buf[0] - 3 * bw, xhi = buf[n-1] + 3 * bw;
+                double inv = 1.0 / ((double)n * bw * sqrt(2 * M_PI));
+                for (int j = 0; j < DENS_N; j++) {
+                    double xj = xlo + (xhi - xlo) * j / (DENS_N - 1), s = 0;
+                    for (int i = 0; i < n; i++) {
+                        double u = (xj - buf[i]) / bw;
+                        s += exp(-0.5 * u * u);
+                    }
+                    double d = s * inv;
+                    dens_x[base+j] = xj; dens_y[base+j] = d;
+                    if (d > dens_max) dens_max = d;
+                }
+            }
+        free(buf);
+    }
+
     /* ---- y scale training ---- */
     double tymin = 1e300, tymax = -1e300;
     if (nhist) {
@@ -492,6 +552,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             }
     } else if (hasbar) {
         tymin = 0; tymax = spec->log_y ? log10((double)barmax) : (double)barmax;
+    } else if (hasdens) {
+        tymin = 0; tymax = dens_max;
     } else {
         for (int r = 0; r < df->nrow; r++) {
             if (!use[r]) continue;
@@ -524,7 +586,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     }
     /* warn about data outside the limits: cinderplot clips such points to the
      * panel (ggplot drops them). Report the count like ggplot's "Removed N". */
-    if ((spec->has_xlim || spec->has_ylim) && !nhist && !hasbar) {
+    if ((spec->has_xlim || spec->has_ylim) && !nhist && !hasbar && !hasdens) {
         int nout = 0;
         for (int r = 0; r < df->nrow; r++) {
             if (!use[r]) continue;
@@ -680,7 +742,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     double striph = ff ? labh + 2 * STRIP_PAD : 0;
 
     const char *xtitle = spec->lab_x ? spec->lab_x : genome_x ? "" : spec->x.expr;
-    const char *ytitle = spec->lab_y ? spec->lab_y : (nhist || hasbar ? "count" : spec->y.expr);
+    const char *ytitle = spec->lab_y ? spec->lab_y
+                       : nhist || hasbar ? "count" : hasdens ? "density" : spec->y.expr;
 
     Col *pal = NULL;
     GTable *leg = NULL;
@@ -809,6 +872,21 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     g->x1 = NPCX(hs->start + (b + 1) * hs->width);
                     g->y0 = base;
                     g->y1 = NPCY(spec->log_y ? log10((double)cnt) : (double)cnt);
+                }
+            } else if (gt == GEOM_DENSITY) {
+                for (int gg = 0; gg < densg; gg++) {
+                    size_t bse = ((size_t)(p * densg + gg)) * DENS_N;
+                    double *px = malloc(DENS_N * sizeof(double));
+                    double *py = malloc(DENS_N * sizeof(double));
+                    for (int j = 0; j < DENS_N; j++) {
+                        px[j] = NPCX(dens_x[bse+j]);
+                        py[j] = NPCY(dens_y[bse+j]);
+                    }
+                    g = gt_add(T, G_POLYLINE, R, C, R, C);
+                    g->n = DENS_N; g->px = px; g->py = py;
+                    g->col = spec->layers[li].has_color ? spec->layers[li].color
+                           : cf ? pal[gg] : C_BLACK;
+                    g->lw = lw_pt(0.5); g->clip = 1;
                 }
             } else if (gt == GEOM_COL) {
                 double base = spec->log_y ? 0.0 : NPCY(0.0);

@@ -172,13 +172,14 @@ cairo_surface_t *cp_surface_create(const char *out, double w_pt, double h_pt);
 typedef struct { char *col; int is_factor; char *expr; } AesEntry; /* col NULL = unset */
 
 typedef enum { GEOM_POINT, GEOM_LINE, GEOM_COL, GEOM_HISTOGRAM, GEOM_BOXPLOT, GEOM_BAR,
-               GEOM_SEGMENT, GEOM_RECT } GeomType;
+               GEOM_SEGMENT, GEOM_RECT, GEOM_DENSITY } GeomType;
 typedef struct {
     GeomType type;
     int bins;
     char *data;          /* per-layer data file (NULL = inherit) */
     char *ycol;          /* per-layer y column override (NULL = inherit) */
     Col color; int has_color;   /* constant layer colour override */
+    double bw, adjust;          /* geom_density: bandwidth (0 = nrd0) x adjust */
 } Layer;
 #define MAX_LAYERS 8
 
