@@ -438,7 +438,33 @@ static int parse_term(P *p, PlotSpec *spec) {
         return 0;
     }
     if (!strcmp(name, "scale_x_log10") || !strcmp(name, "scale_y_log10")) {
-        if (name[6] == 'x') spec->log_x = 1; else spec->log_y = 1;
+        int isx = (name[6] == 'x');
+        if (isx) spec->log_x = 1; else spec->log_y = 1;
+        skip_ws(p);
+        while (*p->s != ')') {                        /* optional limits=c(lo, hi) */
+            char *key = ident(p);
+            if (!key || expect(p, '=')) return fail(p, "bad scale_*_log10 argument", "");
+            skip_ws(p);
+            if (strcmp(key, "limits")) return fail(p, "scale_*_log10 option `%s` not implemented (only limits=)", key);
+            if (p->s[0] == 'c' && p->s[1] == '(') p->s += 2;
+            else return fail(p, "limits= expects c(lo, hi)", "");
+            double lo = strtod(p->s, (char **)&p->s);
+            skip_ws(p); if (*p->s == ',') p->s++;
+            double hi = strtod(p->s, (char **)&p->s);
+            skip_ws(p); if (*p->s == ')') p->s++;
+            if (isx) { spec->xlim_lo = lo; spec->xlim_hi = hi; spec->has_xlim = 1; }
+            else     { spec->ylim_lo = lo; spec->ylim_hi = hi; spec->has_ylim = 1; }
+            skip_ws(p);
+            if (*p->s == ',') { p->s++; skip_ws(p); }
+        }
+        return expect(p, ')');
+    }
+    if (!strcmp(name, "xlim") || !strcmp(name, "ylim")) {   /* xlim(lo, hi) / ylim(lo, hi) */
+        double lo = strtod(p->s, (char **)&p->s);
+        skip_ws(p); if (*p->s == ',') p->s++; skip_ws(p);
+        double hi = strtod(p->s, (char **)&p->s);
+        if (name[0] == 'x') { spec->xlim_lo = lo; spec->xlim_hi = hi; spec->has_xlim = 1; }
+        else                { spec->ylim_lo = lo; spec->ylim_hi = hi; spec->has_ylim = 1; }
         return expect(p, ')');
     }
     if (!strcmp(name, "scale_x_genome")) {
@@ -503,9 +529,27 @@ static int parse_term(P *p, PlotSpec *spec) {
         if (!spec->facet_var) return fail(p, "expected a column name after ~", "");
         return expect(p, ')');
     }
+    if (!strncmp(name, "theme_", 6)) {           /* no-arg theme selector */
+        const char *t = name + 6;
+        if      (!strcmp(t, "gray") || !strcmp(t, "grey")) spec->theme = THEME_GRAY;
+        else if (!strcmp(t, "bw"))              spec->theme = THEME_BW;
+        else if (!strcmp(t, "minimal"))         spec->theme = THEME_MINIMAL;
+        else if (!strcmp(t, "classic"))         spec->theme = THEME_CLASSIC;
+        else if (!strcmp(t, "void"))            spec->theme = THEME_VOID;
+        else if (!strcmp(t, "linedraw"))        spec->theme = THEME_LINEDRAW;
+        else if (!strcmp(t, "light"))           spec->theme = THEME_LIGHT;
+        else if (!strcmp(t, "dark"))            spec->theme = THEME_DARK;
+        else if (!strcmp(t, "pubr"))            spec->theme = THEME_PUBR;
+        else if (!strcmp(t, "few"))             spec->theme = THEME_FEW;
+        else return fail(p, "theme `%s()` is not implemented; supported: theme_gray, "
+                            "theme_bw, theme_minimal, theme_classic, theme_void, theme_linedraw, "
+                            "theme_light, theme_dark, theme_pubr, theme_few", name);
+        return expect(p, ')');
+    }
     return fail(p, "`%s()` is not implemented; supported: aes(), geom_point(), "
                    "geom_line(), geom_col(), geom_histogram(), geom_boxplot(), geom_bar(), labs(), "
-                   "facet_wrap(~var), scale_x_log10(), scale_y_log10(), "
+                   "facet_wrap(~var), scale_x_log10(), scale_y_log10(), xlim(), ylim(), "
+                   "theme_bw()/theme_minimal()/theme_classic()/..., "
                    "heatmap(), annotation(), legend(), scale_fill_*(), "
                    "region(), coverage(), interval(), genes(), arcs()", name);
 }
@@ -514,6 +558,7 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
     P p = {src, err};
     memset(spec, 0, sizeof *spec);
     spec->fill.kind = FILL_VIRIDIS;              /* default heatmap fill */
+    spec->theme = THEME_MINIMAL;                 /* default theme (override memset 0) */
 
     /* leading data term, unless the first term is a function call (track
      * mode starts with region()/coverage() — no top-level data file) */

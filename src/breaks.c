@@ -95,71 +95,24 @@ void fmt_break(double v, int decimals, char *buf) {
     sprintf(buf, "%.*f", decimals, v);
 }
 
-/* log10 scale majors, following scales::breaks_log(n = 5):
- * integer powers of 10 thinned by `by = (ceil-floor)/n + 1` (decremented
- * until >= 3 land in range); label format follows R's vector-format width
- * heuristic (scientific 1e-03 iff a common fixed format would be wider).
- * If powers alone can't give 3 breaks, densify per-decade with {1,5} then
- * {1,2,5}; inside a fraction of a decade, fall back to linear extended
- * breaks on the untransformed range. */
+/* log10 scale majors: integer powers of ten within the range, labelled 10^k
+ * (rendered with a superscript exponent by the axis renderer). This is the
+ * scientific-notation style (R's trans_breaks("log10", 10^x) + math_format);
+ * cinderplot uses it as the default for scale_x/y_log10, deviating from
+ * ggplot's default value labels. The 1..9 x 10^k structure is shown by the
+ * log tick marks (see log_ticks/log_minors in render.c). Many decades are
+ * thinned so labels stay legible. Labels are "10^k" for the renderer to split. */
 int log10_breaks(double tlo, double thi, double *tmaj, char **labs, int max_out) {
-    int klo = (int)floor(tlo), khi = (int)ceil(thi);
-    if (khi > klo) {
-        int by = (khi - klo) / 5 + 1;
-        for (; by > 1; by--) {
-            int cnt = 0;
-            for (int k = klo; k <= khi; k += by)
-                if (k >= tlo - 1e-9 && k <= thi + 1e-9) cnt++;
-            if (cnt >= 3) break;
-        }
-        int n = 0, kmin = 0, kmax = 0;
-        for (int k = klo; k <= khi; k += by)
-            if (k >= tlo - 1e-9 && k <= thi + 1e-9) {
-                if (!n || k < kmin) kmin = k;
-                if (!n || k > kmax) kmax = k;
-                n++;
-            }
-        if (n >= 3 && n <= max_out) {
-            int dec = kmin < 0 ? -kmin : 0;
-            int fixedw = (kmax > 0 ? kmax + 1 : 1) + (dec ? dec + 1 : 0);
-            n = 0;
-            for (int k = klo; k <= khi && n < max_out; k += by)
-                if (k >= tlo - 1e-9 && k <= thi + 1e-9) {
-                    tmaj[n] = k;
-                    labs[n] = malloc(32);
-                    if (fixedw > 5) sprintf(labs[n], "1e%+03d", k);
-                    else fmt_break(pow(10, k), dec, labs[n]);
-                    n++;
-                }
-            return n;
-        }
-    }
-    static const double sets[2][3] = {{1, 5, 0}, {1, 2, 5}};
-    static const int setn[2] = {2, 3};
-    for (int s = 0; s < 2; s++) {
-        int n = 0;
-        for (int k = (int)floor(tlo) - 1; k <= (int)ceil(thi) + 1 && n < max_out; k++)
-            for (int i = 0; i < setn[s] && n < max_out; i++) {
-                double t = k + log10(sets[s][i]);
-                if (t >= tlo - 1e-9 && t <= thi + 1e-9) {
-                    tmaj[n] = t;
-                    labs[n] = malloc(32);
-                    fmt_num(sets[s][i] * pow(10, k), labs[n]);
-                    n++;
-                }
-            }
-        if (n >= 3) return n;
-        while (n-- > 0) free(labs[n]);
-    }
-    double br[16];
-    int nb = extended_breaks(pow(10, tlo), pow(10, thi), 5, br, 16), n = 0;
-    for (int i = 0; i < nb && n < max_out; i++) {
-        if (br[i] <= 0) continue;
-        double t = log10(br[i]);
-        if (t < tlo - 1e-9 || t > thi + 1e-9) continue;
-        tmaj[n] = t;
-        labs[n] = malloc(32);
-        fmt_num(br[i], labs[n]);
+    int klo = (int)ceil(tlo - 1e-9), khi = (int)floor(thi + 1e-9);
+    int ndec = khi - klo + 1;
+    if (ndec < 1) return 0;                    /* no whole decade in range */
+    int by = 1;
+    if (ndec > 7) by = (ndec - 1) / 6 + 1;     /* thin crowded multi-decade axes */
+    int n = 0;
+    for (int k = klo; k <= khi && n < max_out; k += by) {
+        tmaj[n] = k;
+        labs[n] = malloc(16);
+        sprintf(labs[n], "10^%d", k);
         n++;
     }
     return n;

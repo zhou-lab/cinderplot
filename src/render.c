@@ -28,7 +28,7 @@ static double font_h(cairo_t *cr, double size) {
     return fe.ascent + fe.descent;
 }
 
-static GTable *build_legend(cairo_t *cr, const char *title, const Factor *f,
+static GTable *build_legend(cairo_t *cr, const Theme *th, const char *title, const Factor *f,
                             const Col *pal, int haspoint, int hasline, int hasbox) {
     GTable *t = calloc(1, sizeof(GTable));
     double label_w = 0;
@@ -58,7 +58,7 @@ static GTable *build_legend(cairo_t *cr, const char *title, const Factor *f,
     static const double half = 0.5;
     for (int i = 0; i < f->nlev; i++) {
         int r = 2 + 2 * i;
-        g = gt_add(t, G_RECT, r, 0, r, 0); g->col = C_KEYBG;
+        if (th->key_bg_on) { g = gt_add(t, G_RECT, r, 0, r, 0); g->col = th->key_bg; }
         if (hasbox) {
             g = gt_add(t, G_RECT, r, 0, r, 0);
             g->col = pal[i]; g->sub = 1;
@@ -145,6 +145,19 @@ static int make_minors(const double *maj, int nmaj, double lo, double hi, double
         double m = i < 0 ? maj[0] - gap / 2 : maj[i] + gap / 2;
         if (m >= lo && m <= hi) out[n++] = m;
     }
+    return n;
+}
+
+/* log10 minor breaks: d x 10^k for d in 2..9, in transformed (log10) space,
+ * filtered to [lo, hi] — the characteristic log grid. Majors are drawn on top,
+ * so a minor coinciding with a major is simply covered. */
+static int log_minors(double lo, double hi, double *out, int max_out) {
+    int n = 0;
+    for (int k = (int)floor(lo) - 1; k <= (int)ceil(hi) + 1 && n < max_out; k++)
+        for (int d = 2; d <= 9 && n < max_out; d++) {
+            double t = k + log10((double)d);
+            if (t >= lo - 1e-9 && t <= hi + 1e-9) out[n++] = t;
+        }
     return n;
 }
 
@@ -498,6 +511,39 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     }
     if (tymax == tymin) { tymin -= 0.5; tymax += 0.5; }
 
+    /* user axis limits (xlim/ylim or scale_*_log10(limits=)): override the
+     * data-driven range with the requested domain (log10-transformed when the
+     * axis is log). Default expansion is applied below as usual. */
+    if (spec->has_xlim && !disc_x && !genome_x) {
+        txmin = spec->log_x ? log10(spec->xlim_lo) : spec->xlim_lo;
+        txmax = spec->log_x ? log10(spec->xlim_hi) : spec->xlim_hi;
+    }
+    if (spec->has_ylim) {
+        tymin = spec->log_y ? log10(spec->ylim_lo) : spec->ylim_lo;
+        tymax = spec->log_y ? log10(spec->ylim_hi) : spec->ylim_hi;
+    }
+    /* warn about data outside the limits: cinderplot clips such points to the
+     * panel (ggplot drops them). Report the count like ggplot's "Removed N". */
+    if ((spec->has_xlim || spec->has_ylim) && !nhist && !hasbar) {
+        int nout = 0;
+        for (int r = 0; r < df->nrow; r++) {
+            if (!use[r]) continue;
+            int out = 0;
+            if (spec->has_xlim && !disc_x && !genome_x) {
+                double t = TXR(r);
+                if (t < txmin - 1e-9 || t > txmax + 1e-9) out = 1;
+            }
+            if (spec->has_ylim && yc) {
+                double t = TY(yc->num[r]);
+                if (t < tymin - 1e-9 || t > tymax + 1e-9) out = 1;
+            }
+            nout += out;
+        }
+        if (nout)
+            fprintf(stderr, "cinderplot: warning: %d point%s outside the axis limits "
+                    "(clipped to the panel)\n", nout, nout == 1 ? "" : "s");
+    }
+
     /* ---- expansion + breaks. Discrete x uses ggplot's additive 0.6 on
      * each side; continuous uses 5% of the range. ---- */
     double x0, x1;
@@ -554,8 +600,34 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     for (int i = 0; i < nxbr; i++) xnpc[i] = NPCX(xbr[i]);
     for (int i = 0; i < nybr; i++) ynpc[i] = NPCY(ybr[i]);
     double xmin_br[32], ymin_br[32];
-    int nxmin = (disc_x || genome_x) ? 0 : make_minors(xbr, nxbr, x0, x1, xmin_br);
-    int nymin = make_minors(ybr, nybr, y0, y1, ymin_br);
+    int nxmin = (disc_x || genome_x) ? 0
+              : spec->log_x ? log_minors(x0, x1, xmin_br, 32)
+              : make_minors(xbr, nxbr, x0, x1, xmin_br);
+    int nymin = spec->log_y ? log_minors(y0, y1, ymin_br, 32)
+              : make_minors(ybr, nybr, y0, y1, ymin_br);
+
+    /* log tick marks (annotation_logticks style): 1..9 x 10^k on the axis,
+     * medium length at 5, short at 2,3,4,6,7,8,9 (decades are the major ticks) */
+    double xlt_pos[64], xlt_len[64]; int xlt_n = 0;
+    double ylt_pos[64], ylt_len[64]; int ylt_n = 0;
+    if (spec->log_x)
+        for (int k = (int)floor(x0) - 1; k <= (int)ceil(x1) + 1 && xlt_n < 64; k++)
+            for (int d = 2; d <= 9 && xlt_n < 64; d++) {
+                double t = k + log10((double)d);
+                if (t >= x0 - 1e-9 && t <= x1 + 1e-9) {
+                    xlt_pos[xlt_n] = NPCX(t);
+                    xlt_len[xlt_n] = (d == 5 ? 0.66 : 0.4) * TICK_LEN; xlt_n++;
+                }
+            }
+    if (spec->log_y)
+        for (int k = (int)floor(y0) - 1; k <= (int)ceil(y1) + 1 && ylt_n < 64; k++)
+            for (int d = 2; d <= 9 && ylt_n < 64; d++) {
+                double t = k + log10((double)d);
+                if (t >= y0 - 1e-9 && t <= y1 + 1e-9) {
+                    ylt_pos[ylt_n] = NPCY(t);
+                    ylt_len[ylt_n] = (d == 5 ? 0.66 : 0.4) * TICK_LEN; ylt_n++;
+                }
+            }
 
     /* ---- geom_col bar width: 0.9 x min gap between distinct x ---- */
     double colw = 0.9;
@@ -597,10 +669,11 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     cairo_t *cr = cairo_create(surf);
     cairo_select_font_face(cr, FONT_FAMILY, CAIRO_FONT_SLANT_NORMAL,
                            CAIRO_FONT_WEIGHT_NORMAL);
+    const Theme *th = &THEMES[spec->theme];   /* active theme (THEME_GRAY = default) */
 
     double ylab_w = 0;
     for (int i = 0; i < nybr; i++) {
-        double w = text_w(cr, SZ_AXIS_TEXT, ylabs[i]);
+        double w = cp_label_w(cr, SZ_AXIS_TEXT, ylabs[i]);   /* superscript-aware */
         if (w > ylab_w) ylab_w = w;
     }
     double labh = font_h(cr, SZ_AXIS_TEXT), baseh = font_h(cr, SZ_BASE);
@@ -615,7 +688,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     if (cf) {
         pal = malloc(cf->nlev * sizeof(Col));
         hue_palette(cf->nlev, pal);
-        leg = build_legend(cr, col_title, cf, pal, haspoint,
+        leg = build_legend(cr, th, col_title, cf, pal, haspoint,
                            hasline || hasseg, hasbox || hasbar || hasrect);
     } else if (cont_col) {
         leg = build_colorbar_legend(cr, col_title, &cscale, cdmin, cdmax);
@@ -655,15 +728,17 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     Grob *g;
     if (spec->lab_title) {
         g = gt_add(T, G_TEXT, 1, PC(0), 1, PC(ncolp - 1));
-        g->str = spec->lab_title; g->size = SZ_TITLE; g->col = C_BLACK;
+        g->str = spec->lab_title; g->size = SZ_TITLE; g->col = th->title;
         g->tx = 0; g->ty = 1; g->hj = 0; g->va = V_TOP;
     }
-    g = gt_add(T, G_TEXT, r_axis + 2, PC(0), r_axis + 2, PC(ncolp - 1));
-    g->str = xtitle; g->size = SZ_BASE; g->col = C_BLACK;
-    g->tx = 0.5; g->ty = 1; g->hj = 0.5; g->va = V_TOP;
-    g = gt_add(T, G_TEXT, PR(0), 1, PR(nrowp - 1), 1);
-    g->str = ytitle; g->size = SZ_BASE; g->col = C_BLACK;
-    g->tx = 0.5; g->ty = 0.5; g->rot90 = 1;
+    if (th->axis_title_on) {
+        g = gt_add(T, G_TEXT, r_axis + 2, PC(0), r_axis + 2, PC(ncolp - 1));
+        g->str = xtitle; g->size = SZ_BASE; g->col = th->axis_title;
+        g->tx = 0.5; g->ty = 1; g->hj = 0.5; g->va = V_TOP;
+        g = gt_add(T, G_TEXT, PR(0), 1, PR(nrowp - 1), 1);
+        g->str = ytitle; g->size = SZ_BASE; g->col = th->axis_title;
+        g->tx = 0.5; g->ty = 0.5; g->rot90 = 1;
+    }
     if (leg) {
         g = gt_add(T, G_TABLE, SR(0), T->ncol - 2, PR(nrowp - 1), T->ncol - 2);
         g->child = leg;
@@ -675,32 +750,48 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         int R = PR(pr), C = PC(pc);
 
         if (ff) {
-            g = gt_add(T, G_RECT, SR(pr), C, SR(pr), C); g->col = C_STRIP;
+            if (th->strip_bg_on) { g = gt_add(T, G_RECT, SR(pr), C, SR(pr), C); g->col = th->strip_bg; }
             g = gt_add(T, G_TEXT, SR(pr), C, SR(pr), C);
-            g->str = ff->levels[p]; g->size = SZ_AXIS_TEXT; g->col = C_STRIPTXT;
+            g->str = ff->levels[p]; g->size = SZ_AXIS_TEXT; g->col = th->strip_text;
             g->tx = 0.5; g->ty = 0.5; g->hj = 0.5; g->va = V_INKCENTER;
         }
 
-        g = gt_add(T, G_RECT, R, C, R, C); g->col = C_PANEL;
-        for (int i = 0; i < nxmin; i++) {
-            g = gt_add(T, G_LINE, R, C, R, C);
-            g->col = C_WHITE; g->lw = lw_pt(0.25); g->clip = 1;
-            g->x0 = g->x1 = NPCX(xmin_br[i]); g->y0 = 0; g->y1 = 1;
+        if (th->panel_bg_on) { g = gt_add(T, G_RECT, R, C, R, C); g->col = th->panel_bg; }
+        if (th->grid_minor_on) {
+            for (int i = 0; i < nxmin; i++) {
+                g = gt_add(T, G_LINE, R, C, R, C);
+                g->col = th->grid_minor; g->lw = lw_pt(th->grid_minor_lw); g->clip = 1;
+                g->x0 = g->x1 = NPCX(xmin_br[i]); g->y0 = 0; g->y1 = 1;
+            }
+            for (int i = 0; i < nymin; i++) {
+                g = gt_add(T, G_LINE, R, C, R, C);
+                g->col = th->grid_minor; g->lw = lw_pt(th->grid_minor_lw); g->clip = 1;
+                g->y0 = g->y1 = NPCY(ymin_br[i]); g->x0 = 0; g->x1 = 1;
+            }
         }
-        for (int i = 0; i < nymin; i++) {
-            g = gt_add(T, G_LINE, R, C, R, C);
-            g->col = C_WHITE; g->lw = lw_pt(0.25); g->clip = 1;
-            g->y0 = g->y1 = NPCY(ymin_br[i]); g->x0 = 0; g->x1 = 1;
+        if (th->grid_major_on) {
+            for (int i = 0; i < nxbr; i++) {
+                g = gt_add(T, G_LINE, R, C, R, C);
+                g->col = th->grid_major; g->lw = lw_pt(th->grid_major_lw); g->clip = 1;
+                g->x0 = g->x1 = xnpc[i]; g->y0 = 0; g->y1 = 1;
+            }
+            for (int i = 0; i < nybr; i++) {
+                g = gt_add(T, G_LINE, R, C, R, C);
+                g->col = th->grid_major; g->lw = lw_pt(th->grid_major_lw); g->clip = 1;
+                g->y0 = g->y1 = ynpc[i]; g->x0 = 0; g->x1 = 1;
+            }
         }
-        for (int i = 0; i < nxbr; i++) {
-            g = gt_add(T, G_LINE, R, C, R, C);
-            g->col = C_WHITE; g->lw = lw_pt(0.5); g->clip = 1;
-            g->x0 = g->x1 = xnpc[i]; g->y0 = 0; g->y1 = 1;
+        if (th->border_on) {                          /* bw / linedraw / light / few */
+            g = gt_add(T, G_RECT, R, C, R, C);
+            g->col = th->border; g->stroke = 1; g->lw = lw_pt(th->border_lw);
         }
-        for (int i = 0; i < nybr; i++) {
-            g = gt_add(T, G_LINE, R, C, R, C);
-            g->col = C_WHITE; g->lw = lw_pt(0.5); g->clip = 1;
-            g->y0 = g->y1 = ynpc[i]; g->x0 = 0; g->x1 = 1;
+        if (th->axis_line_on) {                       /* classic / pubr */
+            g = gt_add(T, G_LINE, R, C, R, C);        /* bottom */
+            g->col = th->axis_line; g->lw = lw_pt(th->axis_line_lw);
+            g->x0 = 0; g->x1 = 1; g->y0 = g->y1 = 0;
+            g = gt_add(T, G_LINE, R, C, R, C);        /* left */
+            g->col = th->axis_line; g->lw = lw_pt(th->axis_line_lw);
+            g->y0 = 0; g->y1 = 1; g->x0 = g->x1 = 0;
         }
 
         /* layers, in spec order */
@@ -956,6 +1047,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         if (pc == 0) {
             g = gt_add(T, G_AXIS_Y, R, 3, R, 3);
             g->n = nybr; g->py = ynpc; g->labels = ylabs;
+            g->mtpos = ylt_pos; g->mtlen = ylt_len; g->mtn = ylt_n;
+            g->axis_styled = 1; g->tick_col = th->tick; g->hide_ticks = !th->tick_on;
+            g->text_col = th->axis_text; g->hide_text = !th->axis_text_on;
         }
     }
 
@@ -967,7 +1061,12 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         else
             g = gt_add(T, G_AXIS_X, PR(rb) + 1, PC(c), PR(rb + 1), PC(c));
         if (genome_x) { g->n = gax_n; g->px = gax_pos; g->labels = gax_lab; }
-        else { g->n = nxbr; g->px = xnpc; g->labels = xlabs; }
+        else {
+            g->n = nxbr; g->px = xnpc; g->labels = xlabs;
+            g->mtpos = xlt_pos; g->mtlen = xlt_len; g->mtn = xlt_n;
+        }
+        g->axis_styled = 1; g->tick_col = th->tick; g->hide_ticks = !th->tick_on;
+        g->text_col = th->axis_text; g->hide_text = !th->axis_text_on;
     }
 
     /* ---- go ---- */

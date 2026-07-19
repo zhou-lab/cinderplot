@@ -17,6 +17,40 @@ cairo_surface_t *cp_surface_create(const char *out, double w_pt, double h_pt) {
 
 static void set_col(cairo_t *cr, Col c) { cairo_set_source_rgb(cr, c.r, c.g, c.b); }
 
+/* An axis label of the form "10^k" renders "10" full size then a smaller,
+ * raised exponent. cp_label_w measures the rendered advance (used for both
+ * centring and y-axis width reservation); draw_label draws it left-anchored
+ * at baseline (bx, by). Plain labels (no '^') pass straight through. */
+#define SUP_SCALE 0.72
+#define SUP_RISE  0.34
+double cp_label_w(cairo_t *cr, double size, const char *s) {
+    cairo_set_font_size(cr, size);
+    const char *car = strchr(s, '^');
+    cairo_text_extents_t e;
+    if (!car) { cairo_text_extents(cr, s, &e); return e.x_advance; }
+    char base[32]; int bl = (int)(car - s); if (bl > 31) bl = 31;
+    memcpy(base, s, bl); base[bl] = 0;
+    cairo_text_extents(cr, base, &e);
+    double w = e.x_advance;
+    cairo_set_font_size(cr, size * SUP_SCALE);
+    cairo_text_extents(cr, car + 1, &e);
+    cairo_set_font_size(cr, size);
+    return w + e.x_advance;
+}
+static void draw_label(cairo_t *cr, double bx, double by, double size, const char *s) {
+    const char *car = strchr(s, '^');
+    cairo_set_font_size(cr, size);
+    if (!car) { cairo_move_to(cr, bx, by); cairo_show_text(cr, s); return; }
+    char base[32]; int bl = (int)(car - s); if (bl > 31) bl = 31;
+    memcpy(base, s, bl); base[bl] = 0;
+    cairo_text_extents_t e; cairo_text_extents(cr, base, &e);
+    cairo_move_to(cr, bx, by); cairo_show_text(cr, base);
+    cairo_set_font_size(cr, size * SUP_SCALE);
+    cairo_move_to(cr, bx + e.x_advance, by - size * SUP_RISE);
+    cairo_show_text(cr, car + 1);
+    cairo_set_font_size(cr, size);
+}
+
 Grob *gt_add(GTable *t, GType type, int r0, int c0, int r1, int c1) {
     if (t->ngrobs == t->cap) {
         t->cap = t->cap ? t->cap * 2 : 64;
@@ -154,41 +188,57 @@ void gt_render(GTable *t, cairo_t *cr) {
             cairo_font_extents_t fe;
             cairo_set_font_size(cr, SZ_AXIS_TEXT);
             cairo_font_extents(cr, &fe);
-            set_col(cr, C_TICK);
-            cairo_set_line_width(cr, lw_pt(0.5));
-            for (int i = 0; i < g->n; i++) {
-                cairo_move_to(cr, DX(g->px[i]), ry);
-                cairo_line_to(cr, DX(g->px[i]), ry + TICK_LEN);
+            if (!g->hide_ticks) {
+                set_col(cr, g->axis_styled ? g->tick_col : C_TICK);
+                cairo_set_line_width(cr, lw_pt(0.5));
+                for (int i = 0; i < g->n; i++) {
+                    cairo_move_to(cr, DX(g->px[i]), ry);
+                    cairo_line_to(cr, DX(g->px[i]), ry + TICK_LEN);
+                }
+                for (int i = 0; i < g->mtn; i++) {          /* log minor ticks */
+                    cairo_move_to(cr, DX(g->mtpos[i]), ry);
+                    cairo_line_to(cr, DX(g->mtpos[i]), ry + g->mtlen[i]);
+                }
+                cairo_stroke(cr);
             }
-            cairo_stroke(cr);
-            set_col(cr, C_AXTXT);
-            for (int i = 0; i < g->n; i++) {
-                cairo_text_extents_t e;
-                cairo_text_extents(cr, g->labels[i], &e);
-                cairo_move_to(cr, DX(g->px[i]) - e.x_advance / 2,
-                              ry + TICK_LEN + TXT_GAP + fe.ascent);
-                cairo_show_text(cr, g->labels[i]);
+            if (!g->hide_text) {
+                set_col(cr, g->axis_styled ? g->text_col : C_AXTXT);
+                for (int i = 0; i < g->n; i++) {
+                    double w = cp_label_w(cr, SZ_AXIS_TEXT, g->labels[i]);
+                    draw_label(cr, DX(g->px[i]) - w / 2,
+                               ry + TICK_LEN + TXT_GAP + fe.ascent, SZ_AXIS_TEXT, g->labels[i]);
+                }
             }
             break;
         }
         case G_AXIS_Y: {
             /* ticks + right-aligned labels anchored to the RIGHT edge */
             cairo_set_font_size(cr, SZ_AXIS_TEXT);
-            set_col(cr, C_TICK);
-            cairo_set_line_width(cr, lw_pt(0.5));
             double right = rx + rw;
-            for (int i = 0; i < g->n; i++) {
-                cairo_move_to(cr, right - TICK_LEN, DY(g->py[i]));
-                cairo_line_to(cr, right, DY(g->py[i]));
+            if (!g->hide_ticks) {
+                set_col(cr, g->axis_styled ? g->tick_col : C_TICK);
+                cairo_set_line_width(cr, lw_pt(0.5));
+                for (int i = 0; i < g->n; i++) {
+                    cairo_move_to(cr, right - TICK_LEN, DY(g->py[i]));
+                    cairo_line_to(cr, right, DY(g->py[i]));
+                }
+                for (int i = 0; i < g->mtn; i++) {          /* log minor ticks */
+                    cairo_move_to(cr, right - g->mtlen[i], DY(g->mtpos[i]));
+                    cairo_line_to(cr, right, DY(g->mtpos[i]));
+                }
+                cairo_stroke(cr);
             }
-            cairo_stroke(cr);
-            set_col(cr, C_AXTXT);
+            if (g->hide_text) break;
+            set_col(cr, g->axis_styled ? g->text_col : C_AXTXT);
             for (int i = 0; i < g->n; i++) {
+                const char *s = g->labels[i], *car = strchr(s, '^');
+                char base[32];
+                if (car) { int bl = (int)(car - s); if (bl > 31) bl = 31; memcpy(base, s, bl); base[bl] = 0; }
                 cairo_text_extents_t e;
-                cairo_text_extents(cr, g->labels[i], &e);
-                cairo_move_to(cr, right - TICK_LEN - TXT_GAP - e.x_advance,
-                              DY(g->py[i]) - e.height / 2 - e.y_bearing);
-                cairo_show_text(cr, g->labels[i]);
+                cairo_text_extents(cr, car ? base : s, &e);   /* vertical metrics from the "10" part */
+                double w = cp_label_w(cr, SZ_AXIS_TEXT, s);
+                draw_label(cr, right - TICK_LEN - TXT_GAP - w,
+                           DY(g->py[i]) - e.height / 2 - e.y_bearing, SZ_AXIS_TEXT, s);
             }
             break;
         }

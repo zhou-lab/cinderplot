@@ -8,7 +8,9 @@
 
 typedef struct { double r, g, b; } Col;
 
-/* ---------- theme: ggplot2 theme_gray, base_size 11 (units: PDF pt) ---- */
+/* ---------- base style constants (ggplot2 theme_gray values, base_size 11,
+ * units: PDF pt). These define the theme_gray preset; the DEFAULT theme is
+ * theme_minimal (set in dsl_parse). See THEMES[] below for all themes. ------ */
 /* ggplot linewidth u -> lwd = u * 2.845276 in 1/96", -> pt */
 static inline double lw_pt(double u) { return u * 2.845276 * 72.0 / 96.0; }
 
@@ -33,6 +35,46 @@ static const Col C_BLACK  = {0, 0, 0};
 static const Col C_KEYBG  = {0.949, 0.949, 0.949};   /* grey95 */
 static const Col C_STRIP  = {0.851, 0.851, 0.851};   /* grey85 */
 static const Col C_STRIPTXT = {0.102, 0.102, 0.102}; /* grey10 */
+
+/* ---------- selectable themes (ggplot2 / ggthemes / ggpubr) --------------
+ * A theme is pure data: colours + on/off flags + raw ggplot linewidth units
+ * (lw_pt() applied at draw time so this table stays a constant literal).
+ * THEME_GRAY reproduces ggplot2's grey theme; the DEFAULT is THEME_MINIMAL
+ * (set in dsl_parse). All themes use greys/white/black, so no new deps. */
+typedef struct {
+    Col panel_bg;   int panel_bg_on;
+    Col grid_major; double grid_major_lw; int grid_major_on;
+    Col grid_minor; double grid_minor_lw; int grid_minor_on;
+    Col border;     double border_lw;     int border_on;
+    Col axis_line;  double axis_line_lw;  int axis_line_on;
+    Col tick;       int tick_on;
+    Col axis_text;  int axis_text_on;
+    Col axis_title; int axis_title_on;
+    Col title;
+    Col strip_bg;   int strip_bg_on; Col strip_text;
+    Col key_bg;     int key_bg_on;
+} Theme;
+
+typedef enum { THEME_GRAY, THEME_BW, THEME_MINIMAL, THEME_CLASSIC, THEME_VOID,
+               THEME_LINEDRAW, THEME_LIGHT, THEME_DARK, THEME_PUBR, THEME_FEW } ThemeType;
+
+#define GY(v) {v, v, v}
+/* fields: panel,on | gridMaj,lw,on | gridMin,lw,on | border,lw,on |
+ *         axisLine,lw,on | tick,on | axisText,on | axisTitle,on | title |
+ *         strip,on,stripText | key,on   (greyNN = NN/100) */
+static const Theme THEMES[] = {
+/*GRAY    */ { GY(0.922),1, GY(1),0.5,1, GY(1),0.25,1, GY(0.2),0.5,0, GY(0),0.5,0, GY(0.2),1, GY(0.302),1, GY(0),1, GY(0), GY(0.851),1,GY(0.102), GY(0.949),1 },
+/*BW      */ { GY(1),1, GY(0.922),0.5,1, GY(0.922),0.25,1, GY(0.2),0.5,1, GY(0),0.5,0, GY(0.2),1, GY(0.302),1, GY(0),1, GY(0), GY(0.851),1,GY(0.102), GY(1),1 },
+/*MINIMAL */ { GY(1),0, GY(0.922),0.5,1, GY(0.922),0.25,1, GY(0.2),0.5,0, GY(0),0.5,0, GY(0.2),0, GY(0.302),1, GY(0),1, GY(0), GY(0.851),0,GY(0.102), GY(0.949),0 },
+/*CLASSIC */ { GY(1),1, GY(1),0.5,0, GY(1),0.25,0, GY(0.2),0.5,0, GY(0),0.5,1, GY(0),1, GY(0.302),1, GY(0),1, GY(0), GY(1),0,GY(0.102), GY(1),1 },
+/*VOID    */ { GY(1),0, GY(1),0.5,0, GY(1),0.25,0, GY(0.2),0.5,0, GY(0),0.5,0, GY(0.2),0, GY(0.302),0, GY(0),0, GY(0), GY(0.851),0,GY(0.102), GY(0.949),0 },
+/*LINEDRAW*/ { GY(1),1, GY(0),0.1,1, GY(0),0.05,1, GY(0),0.1,1, GY(0),0.5,0, GY(0),1, GY(0.302),1, GY(0),1, GY(0), GY(0),1,GY(1), GY(1),1 },
+/*LIGHT   */ { GY(1),1, GY(0.87),0.5,1, GY(0.87),0.25,1, GY(0.7),0.25,1, GY(0),0.5,0, GY(0.7),1, GY(0.302),1, GY(0),1, GY(0), GY(0.7),1,GY(1), GY(1),1 },
+/*DARK    */ { GY(0.5),1, GY(0.42),0.5,1, GY(0.42),0.25,1, GY(0.2),0.5,0, GY(0),0.5,0, GY(0.2),1, GY(0.302),1, GY(0),1, GY(0), GY(0.15),1,GY(0.9), GY(1),1 },
+/*PUBR    */ { GY(1),1, GY(1),0.5,0, GY(1),0.25,0, GY(0.2),0.5,0, GY(0),0.5,1, GY(0),1, GY(0),1, GY(0),1, GY(0), GY(1),0,GY(0), GY(1),1 },
+/*FEW     */ { GY(1),1, GY(1),0.5,0, GY(1),0.25,0, GY(0.302),0.5,1, GY(0),0.5,0, GY(0.302),1, GY(0.302),1, GY(0.302),1, GY(0.302), GY(1),0,GY(0.302), GY(1),1 },
+};
+#undef GY
 
 /* ---------- breaks.c: extended Wilkinson labeling ---------- */
 int extended_breaks(double dmin, double dmax, int m, double *out, int max_out);
@@ -101,6 +143,9 @@ typedef struct {
     int n;                                     /* points / axis breaks */
     const double *px, *py; const Col *pcol; double radius;
     char **labels;                             /* axis tick labels */
+    const double *mtpos, *mtlen; int mtn;      /* minor axis ticks (log): npc pos + length (pt) */
+    Col tick_col, text_col;                    /* G_AXIS_*: themed colours (opt-in) */
+    int axis_styled, hide_ticks, hide_text;    /* 0 = legacy C_TICK/C_AXTXT (heatmap/tracks) */
     GTable *child;
     unsigned char *img; int img_w, img_h;      /* G_IMAGE: ARGB32 buffer */
 } Grob;
@@ -118,6 +163,8 @@ double gt_fixed_w(const GTable *t);
 double gt_fixed_h(const GTable *t);
 void gt_resolve(GTable *t, double x, double y, double w, double h);
 void gt_render(GTable *t, cairo_t *cr);
+/* Rendered advance of an axis label, accounting for "10^k" superscripts. */
+double cp_label_w(cairo_t *cr, double size, const char *s);
 
 /* Create the output surface, choosing the backend from the file extension:
  * ".svg" -> SVG, anything else (".pdf") -> PDF. Dimensions in points. */
@@ -180,6 +227,9 @@ typedef struct {
     Layer layers[MAX_LAYERS];
     int nlayers;
     int log_x, log_y;
+    double xlim_lo, xlim_hi, ylim_lo, ylim_hi;   /* user axis limits (data space) */
+    int has_xlim, has_ylim;                       /* xlim()/ylim() or scale_*_log10(limits=) */
+    ThemeType theme;                              /* theme_*(); THEME_GRAY = 0 = default */
     char *facet_var;
     char *lab_title, *lab_x, *lab_y, *lab_colour, *lab_fill;
     /* matrix mode */
