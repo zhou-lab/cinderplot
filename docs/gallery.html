@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scatterplot — cinderplot gallery</title>
+<style>
+  :root {
+    --ground:#FBFAF8; --card:#F4F0EA; --ink:#221D1A; --muted:#6E645D;
+    --line:#E7E1D9; --ember:#D6532A; --ember-soft:rgba(214,83,42,.12);
+    --code-ink:#EFE9E2; --code-dim:#C9A98F;
+    --sans: system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;
+    --mono: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme: dark) { :root {
+    --ground:#16120F; --card:#201A16; --ink:#F1EBE3; --muted:#A89C93;
+    --line:#302822; --ember:#F0693B; --ember-soft:rgba(240,105,59,.16); --code-dim:#C9A98F; } }
+  :root[data-theme="light"] {
+    --ground:#FBFAF8; --card:#F4F0EA; --ink:#221D1A; --muted:#6E645D;
+    --line:#E7E1D9; --ember:#D6532A; --ember-soft:rgba(214,83,42,.12); --code-dim:#C9A98F; }
+  :root[data-theme="dark"] {
+    --ground:#16120F; --card:#201A16; --ink:#F1EBE3; --muted:#A89C93;
+    --line:#302822; --ember:#F0693B; --ember-soft:rgba(240,105,59,.16); --code-dim:#C9A98F; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--ground); color:var(--ink); font-family:var(--sans);
+         font-size:16px; line-height:1.6; -webkit-font-smoothing:antialiased; }
+  .wrap { max-width:1080px; margin:0 auto; padding:0 24px; }
+  header.site { border-bottom:1px solid var(--line); }
+  header.site .wrap { display:flex; align-items:center; gap:10px; height:56px; }
+  .mark { font-family:var(--mono); font-weight:600; font-size:15px; display:flex; align-items:center; gap:8px;
+          color:var(--ink); text-decoration:none; }
+  .ember { width:10px; height:10px; border-radius:2px; background:var(--ember); box-shadow:0 0 10px var(--ember); }
+  .mark .sub { color:var(--muted); font-weight:400; }
+  .nav { margin-left:auto; display:flex; gap:20px; font-family:var(--mono); font-size:13px; }
+  .nav a { color:var(--muted); text-decoration:none; }
+  .nav a:hover, .nav a.active { color:var(--ember); }
+  main { padding:44px 0 96px; }
+  .eyebrow { font-family:var(--mono); font-size:12px; letter-spacing:.14em; text-transform:uppercase;
+             color:var(--ember); margin:0 0 14px; }
+  h1 { font-size:38px; line-height:1.08; letter-spacing:-.025em; margin:0 0 14px; text-wrap:balance; }
+  .lede { color:var(--muted); font-size:19px; line-height:1.5; margin:0 0 26px; max-width:66ch; }
+  .lede b { color:var(--ink); font-weight:600; }
+  .toolbar { display:flex; align-items:center; gap:12px; margin:0 0 22px; }
+  .toolbar .lbl { font-family:var(--mono); font-size:12px; letter-spacing:.03em; color:var(--muted); }
+  .tabs { display:inline-flex; gap:3px; padding:3px; background:var(--card);
+          border:1px solid var(--line); border-radius:9px; }
+  .tab { font-family:var(--mono); font-size:12px; color:var(--muted); background:transparent; border:0;
+         padding:5px 13px; border-radius:6px; cursor:pointer; transition:background .15s ease, color .15s ease; }
+  .tab:hover { color:var(--ink); }
+  .tab.active { background:var(--ember); color:#fff; }
+  .cards { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; }
+  @media (max-width:900px){ .cards{ grid-template-columns:repeat(2,1fr); } }
+  @media (max-width:520px){ .cards{ grid-template-columns:1fr; } }
+  .card { margin:0; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:var(--card);
+          transition:border-color .18s ease, transform .18s ease; }
+  .card:hover { border-color:var(--ember); transform:translateY(-2px); }
+  .stage { position:relative; background:#fff; outline:none; }
+  .stage img { display:block; width:100%; height:auto; }
+  .stage img[hidden] { display:none; }
+  .overlay { position:absolute; inset:0; padding:12px; background:rgba(24,18,14,.9);
+             opacity:0; transition:opacity .16s ease; pointer-events:none;
+             display:flex; align-items:center; }
+  .stage:hover .overlay, .stage:focus-visible .overlay { opacity:1; pointer-events:auto; }
+  .overlay pre { margin:0; width:100%; color:var(--code-ink); font-family:var(--mono);
+                 font-size:10.5px; line-height:1.5; white-space:pre-wrap; word-break:break-word; }
+  .overlay pre[hidden] { display:none; }
+  .overlay .c { color:var(--code-dim); }
+  figcaption { font-family:var(--mono); font-size:12px; color:var(--ink); padding:9px 12px;
+               border-top:1px solid var(--line); background:var(--ground); }
+  .note { border-left:3px solid var(--ember); background:var(--card); padding:14px 18px;
+          border-radius:0 10px 10px 0; margin:34px 0 0; }
+  .note b { color:var(--ember); }
+  .hero-cta { display:flex; gap:12px; flex-wrap:wrap; margin:6px 0 8px; }
+  .btn { font-family:var(--mono); font-size:13px; text-decoration:none; padding:9px 16px; border-radius:8px;
+         border:1px solid var(--line); color:var(--ink); background:var(--card); transition:border-color .15s ease; }
+  .btn:hover { border-color:var(--ember); }
+  .btn.primary { background:var(--ember); color:#fff; border-color:var(--ember); }
+  pre.code { background:#16120F; color:var(--code-ink); font-family:var(--mono); font-size:13px;
+             padding:16px 18px; border-radius:10px; overflow:auto; margin:22px 0; }
+  pre.code .c { color:var(--code-dim); }
+  .feature-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin:30px 0 0; }
+  @media (max-width:760px){ .feature-grid{ grid-template-columns:1fr; } }
+  .feature { border:1px solid var(--line); border-radius:12px; padding:18px 20px; background:var(--card); }
+  .feature h3 { margin:0 0 6px; font-size:15px; }
+  .feature p { margin:0; color:var(--muted); font-size:14px; }
+  footer { color:var(--muted); font-family:var(--mono); font-size:12.5px; border-top:1px solid var(--line);
+           margin-top:40px; padding-top:20px; }
+  footer a { color:var(--ember); text-decoration:none; }
+  .stage:focus-visible { outline:2px solid var(--ember); outline-offset:-2px; }
+  @media (prefers-reduced-motion: reduce){ .card{ transition:none; } .card:hover{ transform:none; } }
+</style>
+</head>
+<body>
+<header class="site">
+  <div class="wrap">
+    <a class="mark" href="index.html"><span class="ember"></span>cinderplot</a>
+    <nav class="nav"><a href="index.html">Home</a><a href="gallery.html" class="active">Gallery</a><a href="https://github.com/zhou-lab/cinderplot">GitHub</a></nav>
+  </div>
+</header>
+<main>
+  <div class="wrap">
+    <p class="eyebrow">Gallery › Scatterplot</p>
+    <h1>Scatterplot</h1>
+    <p class="lede">
+      The scatterplot, drawn a dozen ways — grouped, coloured, log-scaled, across datasets. Every figure is
+      rendered by <b>cinderplot</b> straight from a CSV, no R at plot time. <b>Hover any plot for the command;</b>
+      flip the toggle to see the R original it reproduces.
+    </p>
+    <div class="toolbar">
+      <span class="lbl">drawn with</span>
+      <div class="tabs" role="tablist" aria-label="Drawn with">
+        <button class="tab active" data-t="cp" role="tab" aria-selected="true">cinderplot</button>
+        <button class="tab" data-t="r" role="tab" aria-selected="false">R · ggplot2</button>
+      </div>
+    </div>
+    <div class="cards">
+      <figure class="card">
+        <div class="stage" tabindex="0" aria-label="Basic scatterplot; hover or focus for code">
+          <img data-v="cp" src="figs/basic-cp.svg" alt="Basic — cinderplot">
+          <img data-v="r" src="figs/basic-gg.png" alt="Basic — ggplot2" hidden>
+          <div class="overlay">
+            <pre data-v="cp"><span class="c"># cinderplot</span>
+cinderplot &#x27;data/mtcars.csv
+  + aes(wt, mpg)
+  + geom_point()&#x27; \
+  -o out.svg</pre>
+            <pre data-v="r"><span class="c"># R + ggplot2</span>
+ggplot(mtcars, aes(wt, mpg)) + geom_point()</pre>
+          </div>
+        </div>
+        <figcaption>Basic</figcaption>
+      </figure>
+      <figure class="card">
+        <div class="stage" tabindex="0" aria-label="Custom colour scatterplot; hover or focus for code">
+          <img data-v="cp" src="figs/custom-cp.svg" alt="Custom colour — cinderplot">
+          <img data-v="r" src="figs/custom-gg.png" alt="Custom colour — ggplot2" hidden>
+          <div class="overlay">
+            <pre data-v="cp"><span class="c"># cinderplot</span>
+cinderplot &#x27;data/mtcars.csv
+  + aes(wt, mpg)
+  + geom_point(color=&quot;#69b3a2&quot;)&#x27; \
+  -o out.svg</pre>
+            <pre data-v="r"><span class="c"># R + ggplot2</span>
+ggplot(mtcars, aes(wt, mpg)) + geom_point(color = &quot;#69b3a2&quot;)</pre>
+          </div>
+        </div>
+        <figcaption>Custom colour</figcaption>
+      </figure>
+      <figure class="card">
+        <div class="stage" tabindex="0" aria-label="Colour by group scatterplot; hover or focus for code">
+          <img data-v="cp" src="figs/group-cyl-cp.svg" alt="Colour by group — cinderplot">
+          <img data-v="r" src="figs/group-cyl-gg.png" alt="Colour by group — ggplot2" hidden>
+          <div class="overlay">
+            <pre data-v="cp"><span class="c"># cinderplot</span>
+cinderplot &#x27;data/mtcars.csv
+  + aes(wt, mpg, colour=factor(cyl))
+  + geom_point()&#x27; \
+  -o out.svg</pre>
+            <pre data-v="r"><span class="c"># R + ggplot2</span>
+ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) + geom_point()</pre>
+          </div>
+        </div>
+        <figcaption>Colour by group</figcaption>
+      </figure>
+      <figure class="card">
+        <div class="stage" tabindex="0" aria-label="Groups, other axes scatterplot; hover or focus for code">
+          <img data-v="cp" src="figs/group-gear-cp.svg" alt="Groups, other axes — cinderplot">
+          <img data-v="r" src="figs/group-gear-gg.png" alt="Groups, other axes — ggplot2" hidden>
+          <div class="overlay">
+            <pre data-v="cp"><span class="c"># cinderplot</span>
+cinderplot &#x27;data/mtcars.csv
+  + aes(hp, mpg, colour=factor(gear))
+  + geom_point()&#x27; \
+  -o out.svg</pre>
+            <pre data-v="r"><span class="c"># R + ggplot2</span>
+ggplot(mtcars, aes(hp, mpg, colour = factor(gear))) + geom_point()</pre>
+          </div>
+        </div>
+        <figcaption>Groups, other axes</figcaption>
+      </figure>
+      <figure class="card">
+        <div class="stage" tabindex="0" aria-label="Continuous colour scatterplot; hover or focus for code">
+          <img data-v="cp" src="figs/continuous-cp.svg" alt="Continuous colour — cinderplot">
+          <img data-v="r" src="figs/continuous-gg.png" alt="Continuous colour — ggplot2" hidden>
+          <div class="overlay">
+            <pre data-v="cp"><span class="c"># cinderplot</span>
+cinderplot &#x27;data/mtcars.csv
+  + aes(wt, mpg, colour=hp)
+  + geom_point()
+  + scale_colour_gradient(low=&quot;#132b43&quot;, high=&quot;#56b1f7&quot;)&#x27; \
+  -o out.svg</pre>
+            <pre data-v="r"><span class="c"># R + ggplot2</span>
+ggplot(mtcars, aes(wt, mpg, colour = hp)) + geom_point() +
+  scale_colour_gradient(low = &quot;#132b43&quot;, high = &quot;#56b1f7&quot;)</pre>
+          </div>
+        </div>
+        <figcaption>Continuous colour</figcaption>
+      </figure>
+      <figure class="card">
+        <div class="stage" tabindex="0" aria-label="Log x-axis scatterplot; hover or focus for code">
+          <img data-v="cp" src="figs/logx-cp.svg" alt="Log x-axis — cinderplot">
+          <img data-v="r" src="figs/logx-gg.png" alt="Log x-axis — ggplot2" hidden>
+          <div class="overlay">
+            <pre data-v="cp"><span class="c"># cinderplot</span>
+cinderplot &#x27;data/mtcars.csv
+  + aes(hp, mpg)
+  + geom_point()
+  + scale_x_log10()&#x27; \
+  -o out.svg</pre>
+            <pre data-v="r"><span class="c"># R + ggplot2</span>
+ggplot(mtcars, aes(hp, mpg)) + geom_point() + scale_x_log10()</pre>
+          </div>
+        </div>
+        <figcaption>Log x-axis</figcaption>
+      </figure>
+      <figure class="card">
+        <div class="stage" tabindex="0" aria-label="Iris · sepals scatterplot; hover or focus for code">
+          <img data-v="cp" src="figs/iris-sepal-cp.svg" alt="Iris · sepals — cinderplot">
+          <img data-v="r" src="figs/iris-sepal-gg.png" alt="Iris · sepals — ggplot2" hidden>
+          <div class="overlay">
+            <pre data-v="cp"><span class="c"># cinderplot</span>
+cinderplot &#x27;data/iris.csv
+  + aes(Sepal.Length, Sepal.Width, colour=Species)
+  + geom_point()&#x27; \
+  -o out.svg</pre>
+            <pre data-v="r"><span class="c"># R + ggplot2</span>
+ggplot(iris, aes(Sepal.Length, Sepal.Width, colour = Species)) + geom_point()</pre>
+          </div>
+        </div>
+        <figcaption>Iris · sepals</figcaption>
+      </figure>
+      <figure class="card">
+        <div class="stage" tabindex="0" aria-label="Iris · petals scatterplot; hover or focus for code">
+          <img data-v="cp" src="figs/iris-petal-cp.svg" alt="Iris · petals — cinderplot">
+          <img data-v="r" src="figs/iris-petal-gg.png" alt="Iris · petals — ggplot2" hidden>
+          <div class="overlay">
+            <pre data-v="cp"><span class="c"># cinderplot</span>
+cinderplot &#x27;data/iris.csv
+  + aes(Petal.Length, Petal.Width, colour=Species)
+  + geom_point()&#x27; \
+  -o out.svg</pre>
+            <pre data-v="r"><span class="c"># R + ggplot2</span>
+ggplot(iris, aes(Petal.Length, Petal.Width, colour = Species)) + geom_point()</pre>
+          </div>
+        </div>
+        <figcaption>Iris · petals</figcaption>
+      </figure>
+      <figure class="card">
+        <div class="stage" tabindex="0" aria-label="Old Faithful scatterplot; hover or focus for code">
+          <img data-v="cp" src="figs/faithful-cp.svg" alt="Old Faithful — cinderplot">
+          <img data-v="r" src="figs/faithful-gg.png" alt="Old Faithful — ggplot2" hidden>
+          <div class="overlay">
+            <pre data-v="cp"><span class="c"># cinderplot</span>
+cinderplot &#x27;data/faithful.csv
+  + aes(waiting, eruptions)
+  + geom_point()&#x27; \
+  -o out.svg</pre>
+            <pre data-v="r"><span class="c"># R + ggplot2</span>
+ggplot(faithful, aes(waiting, eruptions)) + geom_point()</pre>
+          </div>
+        </div>
+        <figcaption>Old Faithful</figcaption>
+      </figure>
+      <figure class="card">
+        <div class="stage" tabindex="0" aria-label="Fiji earthquakes scatterplot; hover or focus for code">
+          <img data-v="cp" src="figs/quakes-cp.svg" alt="Fiji earthquakes — cinderplot">
+          <img data-v="r" src="figs/quakes-gg.png" alt="Fiji earthquakes — ggplot2" hidden>
+          <div class="overlay">
+            <pre data-v="cp"><span class="c"># cinderplot</span>
+cinderplot &#x27;data/quakes.csv
+  + aes(long, lat, colour=mag)
+  + geom_point()
+  + scale_colour_gradient(low=&quot;#132b43&quot;, high=&quot;#56b1f7&quot;)&#x27; \
+  -o out.svg</pre>
+            <pre data-v="r"><span class="c"># R + ggplot2</span>
+ggplot(quakes, aes(long, lat, colour = mag)) + geom_point() +
+  scale_colour_gradient(low = &quot;#132b43&quot;, high = &quot;#56b1f7&quot;)</pre>
+          </div>
+        </div>
+        <figcaption>Fiji earthquakes</figcaption>
+      </figure>
+      <figure class="card">
+        <div class="stage" tabindex="0" aria-label="Diamonds (2k sample) scatterplot; hover or focus for code">
+          <img data-v="cp" src="figs/diamonds-cp.svg" alt="Diamonds (2k sample) — cinderplot">
+          <img data-v="r" src="figs/diamonds-gg.png" alt="Diamonds (2k sample) — ggplot2" hidden>
+          <div class="overlay">
+            <pre data-v="cp"><span class="c"># cinderplot</span>
+cinderplot &#x27;data/diamonds_sample.csv
+  + aes(carat, price, colour=cut)
+  + geom_point()&#x27; \
+  -o out.svg</pre>
+            <pre data-v="r"><span class="c"># R + ggplot2</span>
+# diamonds, a 2000-row sample
+ggplot(diamonds, aes(carat, price, colour = cut)) + geom_point()</pre>
+          </div>
+        </div>
+        <figcaption>Diamonds (2k sample)</figcaption>
+      </figure>
+      <figure class="card">
+        <div class="stage" tabindex="0" aria-label="Cars: speed vs dist scatterplot; hover or focus for code">
+          <img data-v="cp" src="figs/cars-cp.svg" alt="Cars: speed vs dist — cinderplot">
+          <img data-v="r" src="figs/cars-gg.png" alt="Cars: speed vs dist — ggplot2" hidden>
+          <div class="overlay">
+            <pre data-v="cp"><span class="c"># cinderplot</span>
+cinderplot &#x27;data/cars.csv
+  + aes(speed, dist)
+  + geom_point()&#x27; \
+  -o out.svg</pre>
+            <pre data-v="r"><span class="c"># R + ggplot2</span>
+ggplot(cars, aes(speed, dist)) + geom_point()</pre>
+          </div>
+        </div>
+        <figcaption>Cars: speed vs dist</figcaption>
+      </figure>
+    </div>
+    <div class="note"><b>Same figures, no R.</b> cinderplot reproduces ggplot2's <code>theme_gray</code> —
+      panel, gridlines, hue palette, axis breaks, legends — from one C binary that reads the CSV and writes
+      PDF or SVG in milliseconds.</div>
+    <footer>data: cinderplot-examples/data &nbsp;·&nbsp; rebuild: docs/build.py &nbsp;·&nbsp;
+      <a href="https://github.com/zhou-lab/cinderplot">github.com/zhou-lab/cinderplot</a></footer>
+  </div>
+</main>
+<script>
+(function () {
+  var tabs = [].slice.call(document.querySelectorAll('.tab'));
+  var items = [].slice.call(document.querySelectorAll('[data-v]'));
+  function set(v) {
+    items.forEach(function (el) { el.hidden = (el.dataset.v !== v); });
+    tabs.forEach(function (b) { var on = b.dataset.t === v;
+      b.classList.toggle('active', on); b.setAttribute('aria-selected', on ? 'true' : 'false'); });
+  }
+  tabs.forEach(function (b) { b.addEventListener('click', function () { set(b.dataset.t); }); });
+})();
+</script>
+</body>
+</html>

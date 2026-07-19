@@ -1,0 +1,6 @@
+_preview.html
+_gen/
+
+# the root .gitignore excludes *.png; the pre-rendered ggplot2 reference
+# figures are part of the published site, so keep them tracked
+!figs/*.png

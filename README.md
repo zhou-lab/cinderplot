@@ -8,6 +8,8 @@ The project is an early prototype. Its current plotting grammar is inspired by
 ggplot2, but Cinderplot is an independent implementation rather than a drop-in
 replacement.
 
+**Documentation & gallery:** https://zhou-lab.github.io/cinderplot/
+
 ## Install
 
 From the `zhou-lab` conda channel:
@@ -47,7 +49,8 @@ separate repo, [cinderplot-examples](https://github.com/zhou-lab/cinderplot-exam
 
 - `include/` — public interfaces
 - `src/` — implementation and CLI entry point
-- `docs/` — design notes and reference material
+- `docs/` — the documentation site (GitHub Pages source); rebuild with `python3 docs/build.py`
+- `notes/` — design notes and reference material
 
 ## License
 
