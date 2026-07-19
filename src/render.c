@@ -646,8 +646,12 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         int nb = extended_breaks(x0, x1, 5, xbr, 16), n = 0;
         for (int i = 0; i < nb; i++) if (xbr[i] >= x0 && xbr[i] <= x1) xbr[n++] = xbr[i];
         nxbr = n;
-        int dec = axis_decimals(xbr, nxbr);
-        for (int i = 0; i < nxbr; i++) { xlabs[i] = malloc(32); fmt_break(xbr[i], dec, xlabs[i]); }
+        int dec = axis_decimals(xbr, nxbr), pdec = dec - 2 < 0 ? 0 : dec - 2;
+        for (int i = 0; i < nxbr; i++) {
+            xlabs[i] = malloc(32);
+            if (spec->x_pct) sprintf(xlabs[i], "%.*f%%", pdec, xbr[i] * 100);
+            else fmt_break(xbr[i], dec, xlabs[i]);
+        }
     }
     if (spec->log_y) {
         nybr = log10_breaks(y0, y1, ybr, ylabs, 16);
@@ -655,8 +659,12 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         int nb = extended_breaks(y0, y1, 5, ybr, 16), n = 0;
         for (int i = 0; i < nb; i++) if (ybr[i] >= y0 && ybr[i] <= y1) ybr[n++] = ybr[i];
         nybr = n;
-        int dec = axis_decimals(ybr, nybr);
-        for (int i = 0; i < nybr; i++) { ylabs[i] = malloc(32); fmt_break(ybr[i], dec, ylabs[i]); }
+        int dec = axis_decimals(ybr, nybr), pdec = dec - 2 < 0 ? 0 : dec - 2;
+        for (int i = 0; i < nybr; i++) {
+            ylabs[i] = malloc(32);
+            if (spec->y_pct) sprintf(ylabs[i], "%.*f%%", pdec, ybr[i] * 100);
+            else fmt_break(ybr[i], dec, ylabs[i]);
+        }
     }
     double *xnpc = malloc(nxbr * sizeof(double)), *ynpc = malloc(nybr * sizeof(double));
     for (int i = 0; i < nxbr; i++) xnpc[i] = NPCX(xbr[i]);

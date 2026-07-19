@@ -59,8 +59,10 @@ SECTIONS = [
     ]),
     ("Distributions", [
         ("density", "Kernel density (KDE)",
-         "data/gm12878_betas.tsv + aes(beta) + geom_density()",
-         "# GM12878 methylation betas (bimodal)\nggplot(betas, aes(beta)) + geom_density()"),
+         "data/gm12878_betas.tsv + aes(beta) + geom_density() + scale_x_continuous(labels=percent)",
+         "# GM12878 methylation betas (bimodal)\n"
+         "ggplot(betas, aes(beta)) + geom_density() +\n"
+         "  scale_x_continuous(labels = scales::percent)"),
     ]),
 ]
 
@@ -429,7 +431,7 @@ __SECTIONS__
 # Landing-page content (compact, info-rich, lab-website style). Only the
 # landing uses this; the gallery keeps STYLE/header() above.
 GEOMS = ["point", "line", "col", "bar", "histogram", "boxplot", "rect", "segment", "raster"]
-SCALES = ["x / y log10", "genome x", "colour hue", "colour gradient", "gradient2", "discrete x / y"]
+SCALES = ["x / y log10", "percent labels", "genome x", "colour hue", "colour gradient", "gradient2", "discrete x / y"]
 POSITIONS = ["stack", "dodge", "dodge2"]
 MODES = ["scatter / grammar", "heatmap + clustering", "genomic tracks"]
 THEMES_CHIPS = ["gray", "bw", "minimal", "classic", "void", "linedraw",

@@ -219,10 +219,12 @@ ggplot(diamonds, aes(carat, price, colour = cut)) + geom_point()</pre></div>
           <template class="code">
             <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/gm12878_betas.tsv
   + aes(beta)
-  + geom_density()&#x27; \
+  + geom_density()
+  + scale_x_continuous(labels=percent)&#x27; \
   -o out.svg</pre></div>
             <div class="snip"><span class="k">R · ggplot2</span><pre># GM12878 methylation betas (bimodal)
-ggplot(betas, aes(beta)) + geom_density()</pre></div>
+ggplot(betas, aes(beta)) + geom_density() +
+  scale_x_continuous(labels = scales::percent)</pre></div>
           </template>
         </figure>
       </div>

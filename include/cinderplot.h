@@ -228,6 +228,7 @@ typedef struct {
     int log_x, log_y;
     double xlim_lo, xlim_hi, ylim_lo, ylim_hi;   /* user axis limits (data space) */
     int has_xlim, has_ylim;                       /* xlim()/ylim() or scale_*_log10(limits=) */
+    int x_pct, y_pct;                             /* scale_*_continuous(labels=percent) */
     ThemeType theme;                              /* theme_*(); THEME_GRAY = 0 = default */
     char *facet_var;
     char *lab_title, *lab_x, *lab_y, *lab_colour, *lab_fill;

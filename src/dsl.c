@@ -466,6 +466,34 @@ static int parse_term(P *p, PlotSpec *spec) {
         }
         return expect(p, ')');
     }
+    if (!strcmp(name, "scale_x_continuous") || !strcmp(name, "scale_y_continuous")) {
+        int isx = (name[6] == 'x');
+        skip_ws(p);
+        while (*p->s != ')') {                        /* labels=percent, limits=c(lo,hi) */
+            char *key = ident(p);
+            if (!key || expect(p, '=')) return fail(p, "bad scale_*_continuous argument", "");
+            skip_ws(p);
+            if (!strcmp(key, "labels")) {
+                char *v = ident(p);
+                if (!v) return fail(p, "labels= expects percent", "");
+                if (!strcmp(v, "percent") || !strcmp(v, "scales_percent")) {
+                    if (isx) spec->x_pct = 1; else spec->y_pct = 1;
+                } else return fail(p, "labels=%s not implemented; supported: percent", v);
+            } else if (!strcmp(key, "limits")) {
+                if (p->s[0] == 'c' && p->s[1] == '(') p->s += 2;
+                else return fail(p, "limits= expects c(lo, hi)", "");
+                double lo = strtod(p->s, (char **)&p->s);
+                skip_ws(p); if (*p->s == ',') p->s++;
+                double hi = strtod(p->s, (char **)&p->s);
+                skip_ws(p); if (*p->s == ')') p->s++;
+                if (isx) { spec->xlim_lo = lo; spec->xlim_hi = hi; spec->has_xlim = 1; }
+                else     { spec->ylim_lo = lo; spec->ylim_hi = hi; spec->has_ylim = 1; }
+            } else return fail(p, "scale_*_continuous option `%s` not implemented (labels=percent, limits=)", key);
+            skip_ws(p);
+            if (*p->s == ',') { p->s++; skip_ws(p); }
+        }
+        return expect(p, ')');
+    }
     if (!strcmp(name, "xlim") || !strcmp(name, "ylim")) {   /* xlim(lo, hi) / ylim(lo, hi) */
         double lo = strtod(p->s, (char **)&p->s);
         skip_ws(p); if (*p->s == ',') p->s++; skip_ws(p);
