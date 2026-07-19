@@ -57,6 +57,35 @@ SECTIONS = [
          '                limits = c(10, 1000)) +\n'
          '  annotation_logticks(sides = "b") + ylim(0, 50)'),
     ]),
+    ("Annotations", [
+        # the geoms & scales added most recently: reference lines, text labels,
+        # a manual discrete palette, and multi-line titles via labs().
+        ("reflines", "Reference lines",
+         'data/mtcars.csv + aes(wt, mpg) + geom_point()'
+         ' + geom_abline(slope=-5, intercept=37, color="#c0392b")'
+         ' + geom_hline(yintercept=20, color="#7f8c8d")',
+         'ggplot(mtcars, aes(wt, mpg)) + geom_point() +\n'
+         '  geom_abline(slope = -5, intercept = 37, colour = "#c0392b") +\n'
+         '  geom_hline(yintercept = 20, colour = "#7f8c8d")'),
+        ("textlabels", "Repelled text labels",
+         "data/mtcars.csv + aes(wt, mpg, label=model) + geom_point() + geom_text_repel(size=2.6)",
+         "# mtcars model names, ggrepel-style placement\n"
+         "library(ggrepel)\n"
+         "ggplot(mtcars, aes(wt, mpg, label = rownames(mtcars))) +\n"
+         "  geom_point() + geom_text_repel(size = 2.6)"),
+        ("manualcol", "Manual colour scale",
+         'data/mtcars.csv + aes(wt, mpg, colour=factor(cyl)) + geom_point()'
+         ' + scale_colour_manual(values=c("4"="#1b9e77","6"="#d95f02","8"="#7570b3"))',
+         'ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) + geom_point() +\n'
+         '  scale_colour_manual(values = c("4"="#1b9e77","6"="#d95f02","8"="#7570b3"))'),
+        ("labs", "Titles & captions",
+         'data/mtcars.csv + aes(hp, mpg, colour=factor(cyl)) + geom_point()'
+         ' + labs(title="Fuel economy", subtitle="lower is thirstier",'
+         ' caption="source: mtcars", colour="cylinders")',
+         'ggplot(mtcars, aes(hp, mpg, colour = factor(cyl))) + geom_point() +\n'
+         '  labs(title = "Fuel economy", subtitle = "lower is thirstier",\n'
+         '       caption = "source: mtcars", colour = "cylinders")'),
+    ]),
     ("Distributions", [
         ("density", "Kernel density (KDE)",
          "data/gm12878_betas.tsv + aes(beta) + geom_density() + scale_x_continuous(labels=percent)",
@@ -98,16 +127,17 @@ VARIANTS = [v for _title, vs in SECTIONS for v in vs]   # flat list for render()
 # R datasets to export to <examples>/data/ so cinderplot and ggplot read
 # identical rows. varname (used in ggplot code), csv path, R expr (None = exists)
 DATASETS = [
-    ("mtcars",   "data/mtcars.csv",          None),
+    ("mtcars",   "data/mtcars.csv",          "cbind(model = rownames(mtcars), mtcars)"),
     ("quakes",   "data/quakes.csv",          "quakes"),
     ("diamonds", "data/diamonds_sample.csv", "{set.seed(42); diamonds[sample(nrow(diamonds), 2000), ]}"),
     ("betas",    "data/gm12878_betas.tsv",   None),   # GM12878 methylation betas (TSV)
 ]
 
 def no_gg(slug):
-    """Slugs whose R reference isn't ggplot2, so render() skips the gg PNG:
-    theme showcases (same ggplot), and the heatmap (ComplexHeatmap)."""
-    return slug.startswith("theme-") or slug == "heatmap"
+    """Slugs whose R reference needs a non-base package, so render() skips the
+    gg PNG: theme showcases (same ggplot), the heatmap (ComplexHeatmap), and the
+    repelled labels (ggrepel)."""
+    return slug.startswith("theme-") or slug in ("heatmap", "textlabels")
 
 def render():
     if not EXAMPLES.is_dir():
@@ -449,8 +479,10 @@ __SECTIONS__
 
 # Landing-page content (compact, info-rich, lab-website style). Only the
 # landing uses this; the gallery keeps STYLE/header() above.
-GEOMS = ["point", "line", "col", "bar", "histogram", "boxplot", "rect", "segment", "raster"]
-SCALES = ["x / y log10", "percent labels", "genome x", "colour hue", "colour gradient", "gradient2", "discrete x / y"]
+GEOMS = ["point", "line", "col", "bar", "histogram", "boxplot", "density", "rect", "segment",
+         "raster", "text", "label", "text_repel", "hline", "vline", "abline"]
+SCALES = ["x / y log10", "percent labels", "genome x", "colour hue", "colour gradient",
+          "gradient2", "manual colours", "discrete x / y"]
 POSITIONS = ["stack", "dodge", "dodge2"]
 MODES = ["scatter / grammar", "heatmap + clustering", "genomic tracks"]
 THEMES_CHIPS = ["gray", "bw", "minimal", "classic", "void", "linedraw",
@@ -533,7 +565,7 @@ LANDING_BODY = """<main>
       <div class="hbrand"><span class="sq"></span>cinderplot</div>
       <p class="eyebrow">Grammar-inspired plotting in C</p>
       <h1>Publication-ready graphics from one small, fast binary.</h1>
-      <p>cinderplot turns a CSV into a PDF or SVG with a ggplot2-inspired grammar — panels, hue palettes,
+      <p>cinderplot turns a CSV into a PDF, SVG or PNG with a ggplot2-inspired grammar — panels, hue palettes,
          scales, legends — rendered by a single C binary with Cairo. No R, no Python at plot time.</p>
       <div class="cta">
         <a class="btn pri" href="gallery.html">See the gallery →</a>
@@ -543,7 +575,7 @@ LANDING_BODY = """<main>
         <div class="hstat"><b>__NGEOM__</b><span>geoms</span></div>
         <div class="hstat"><b>__NSCALE__</b><span>scales</span></div>
         <div class="hstat"><b>3</b><span>modes</span></div>
-        <div class="hstat"><b>PDF·SVG</b><span>vector output</span></div>
+        <div class="hstat"><b>PDF·SVG·PNG</b><span>output</span></div>
         <div class="hstat"><b>C11</b><span>+ Cairo</span></div>
       </div>
     </section>
@@ -566,7 +598,7 @@ cinderplot 'data.csv
           <ul class="feat">
             <li><span class="d"></span><div><b>Small &amp; fast.</b> <span>One C11 binary, Cairo output. Milliseconds per figure, no runtime.</span></div></li>
             <li><span class="d"></span><div><b>Familiar grammar.</b> <span>aes, geoms, scales, legends and themes inspired by ggplot2 — reproduces <code>theme_gray</code> by default, with <code>theme_bw</code>/<code>minimal</code>/<code>classic</code>/<code>void</code> and more.</span></div></li>
-            <li><span class="d"></span><div><b>Vector out.</b> <span>PDF or SVG chosen by file extension. Publication-ready, no rasterisation.</span></div></li>
+            <li><span class="d"></span><div><b>Vector or raster.</b> <span>PDF, SVG or PNG chosen by the output file extension (<code>--dpi</code> for PNG). Publication-ready.</span></div></li>
           </ul>
         </div>
       </section>

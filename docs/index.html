@@ -78,17 +78,17 @@
       <div class="hbrand"><span class="sq"></span>cinderplot</div>
       <p class="eyebrow">Grammar-inspired plotting in C</p>
       <h1>Publication-ready graphics from one small, fast binary.</h1>
-      <p>cinderplot turns a CSV into a PDF or SVG with a ggplot2-inspired grammar — panels, hue palettes,
+      <p>cinderplot turns a CSV into a PDF, SVG or PNG with a ggplot2-inspired grammar — panels, hue palettes,
          scales, legends — rendered by a single C binary with Cairo. No R, no Python at plot time.</p>
       <div class="cta">
         <a class="btn pri" href="gallery.html">See the gallery →</a>
         <a class="btn" href="https://github.com/zhou-lab/cinderplot">GitHub</a>
       </div>
       <div class="hstats">
-        <div class="hstat"><b>9</b><span>geoms</span></div>
-        <div class="hstat"><b>7</b><span>scales</span></div>
+        <div class="hstat"><b>16</b><span>geoms</span></div>
+        <div class="hstat"><b>8</b><span>scales</span></div>
         <div class="hstat"><b>3</b><span>modes</span></div>
-        <div class="hstat"><b>PDF·SVG</b><span>vector output</span></div>
+        <div class="hstat"><b>PDF·SVG·PNG</b><span>output</span></div>
         <div class="hstat"><b>C11</b><span>+ Cairo</span></div>
       </div>
     </section>
@@ -111,7 +111,7 @@ cinderplot 'data.csv
           <ul class="feat">
             <li><span class="d"></span><div><b>Small &amp; fast.</b> <span>One C11 binary, Cairo output. Milliseconds per figure, no runtime.</span></div></li>
             <li><span class="d"></span><div><b>Familiar grammar.</b> <span>aes, geoms, scales, legends and themes inspired by ggplot2 — reproduces <code>theme_gray</code> by default, with <code>theme_bw</code>/<code>minimal</code>/<code>classic</code>/<code>void</code> and more.</span></div></li>
-            <li><span class="d"></span><div><b>Vector out.</b> <span>PDF or SVG chosen by file extension. Publication-ready, no rasterisation.</span></div></li>
+            <li><span class="d"></span><div><b>Vector or raster.</b> <span>PDF, SVG or PNG chosen by the output file extension (<code>--dpi</code> for PNG). Publication-ready.</span></div></li>
           </ul>
         </div>
       </section>
@@ -120,8 +120,8 @@ cinderplot 'data.csv
       <div class="panel__head"><h2>Supported grammar</h2><span class="count">growing</span>
         <a class="r" href="gallery.html">see it drawn →</a></div>
       <div class="panel__body">
-        <div class="chipset"><p class="k">Geoms</p><div class="chips"><span class="chip">geom_point</span><span class="chip">geom_line</span><span class="chip">geom_col</span><span class="chip">geom_bar</span><span class="chip">geom_histogram</span><span class="chip">geom_boxplot</span><span class="chip">geom_rect</span><span class="chip">geom_segment</span><span class="chip">geom_raster</span></div></div>
-        <div class="chipset"><p class="k">Scales</p><div class="chips"><span class="chip">x / y log10</span><span class="chip">percent labels</span><span class="chip">genome x</span><span class="chip">colour hue</span><span class="chip">colour gradient</span><span class="chip">gradient2</span><span class="chip">discrete x / y</span></div></div>
+        <div class="chipset"><p class="k">Geoms</p><div class="chips"><span class="chip">geom_point</span><span class="chip">geom_line</span><span class="chip">geom_col</span><span class="chip">geom_bar</span><span class="chip">geom_histogram</span><span class="chip">geom_boxplot</span><span class="chip">geom_density</span><span class="chip">geom_rect</span><span class="chip">geom_segment</span><span class="chip">geom_raster</span><span class="chip">geom_text</span><span class="chip">geom_label</span><span class="chip">geom_text_repel</span><span class="chip">geom_hline</span><span class="chip">geom_vline</span><span class="chip">geom_abline</span></div></div>
+        <div class="chipset"><p class="k">Scales</p><div class="chips"><span class="chip">x / y log10</span><span class="chip">percent labels</span><span class="chip">genome x</span><span class="chip">colour hue</span><span class="chip">colour gradient</span><span class="chip">gradient2</span><span class="chip">manual colours</span><span class="chip">discrete x / y</span></div></div>
         <div class="chipset"><p class="k">Positions</p><div class="chips"><span class="chip">position_stack</span><span class="chip">position_dodge</span><span class="chip">position_dodge2</span></div></div>
         <div class="chipset"><p class="k">Modes</p><div class="chips"><span class="chip">scatter / grammar</span><span class="chip">heatmap + clustering</span><span class="chip">genomic tracks</span></div></div>
         <div class="chipset"><p class="k">Themes</p><div class="chips"><span class="chip">theme_gray</span><span class="chip">theme_bw</span><span class="chip">theme_minimal</span><span class="chip">theme_classic</span><span class="chip">theme_void</span><span class="chip">theme_linedraw</span><span class="chip">theme_light</span><span class="chip">theme_dark</span><span class="chip">theme_few</span></div></div>

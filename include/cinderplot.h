@@ -2,7 +2,7 @@
 #ifndef CINDERPLOT_H
 #define CINDERPLOT_H
 
-#define CINDERPLOT_VERSION "0.2.1"
+#define CINDERPLOT_VERSION "0.3.0"
 
 #include <cairo.h>
 
@@ -138,6 +138,7 @@ typedef struct {
     int stroke;                                /* G_RECT: stroke (lw) not fill */
     const char *str; double size, tx, ty, hj;  /* text, npc anchor */
     VAlign va; int rot90;
+    int text_box; Col box_fill, box_line;      /* G_TEXT: bg box (geom_label) */
     int n;                                     /* points / axis breaks */
     const double *px, *py; const Col *pcol; double radius;
     char **labels;                             /* axis tick labels */
@@ -165,14 +166,21 @@ void gt_render(GTable *t, cairo_t *cr);
 double cp_label_w(cairo_t *cr, double size, const char *s);
 
 /* Create the output surface, choosing the backend from the file extension:
- * ".svg" -> SVG, anything else (".pdf") -> PDF. Dimensions in points. */
+ * ".svg" -> SVG, ".png" -> raster image (at the current DPI), else PDF.
+ * Dimensions in points; PNG surfaces carry a device scale so callers keep
+ * drawing in points. */
 cairo_surface_t *cp_surface_create(const char *out, double w_pt, double h_pt);
+void cp_set_dpi(double dpi);                        /* PNG raster resolution (default 96) */
+/* Emit the finished surface: write_to_png for image surfaces, surface_finish
+ * for vector ones. Returns the resulting cairo status. */
+cairo_status_t cp_surface_emit(cairo_surface_t *surf, const char *out);
 
 /* ---------- dsl.c: verbatim ggplot subset ---------- */
 typedef struct { char *col; int is_factor; char *expr; } AesEntry; /* col NULL = unset */
 
 typedef enum { GEOM_POINT, GEOM_LINE, GEOM_COL, GEOM_HISTOGRAM, GEOM_BOXPLOT, GEOM_BAR,
-               GEOM_SEGMENT, GEOM_RECT, GEOM_DENSITY } GeomType;
+               GEOM_SEGMENT, GEOM_RECT, GEOM_DENSITY,
+               GEOM_HLINE, GEOM_VLINE, GEOM_ABLINE, GEOM_TEXT, GEOM_LABEL } GeomType;
 typedef struct {
     GeomType type;
     int bins;
@@ -180,6 +188,11 @@ typedef struct {
     char *ycol;          /* per-layer y column override (NULL = inherit) */
     Col color; int has_color;   /* constant layer colour override */
     double bw, adjust;          /* geom_density: bandwidth (0 = nrd0) x adjust */
+    double slope, intercept;    /* geom_abline; hline/vline store value in intercept */
+    int has_slope, has_intercept;
+    double txt_size;            /* geom_text/label font size (ggplot mm; 0 = default) */
+    int repel;                  /* geom_text_repel/geom_label_repel: force placement */
+    double nudge_x, nudge_y;    /* geom_text/label: constant offset (data units) */
 } Layer;
 #define MAX_LAYERS 8
 
@@ -220,6 +233,7 @@ typedef struct {
     char *data_path;
     AesEntry x, y, colour;          /* colour also accepts fill= */
     AesEntry xend, yend;            /* geom_segment endpoints */
+    AesEntry label;                 /* geom_text/geom_label label column */
     AesEntry chrom;                 /* genome scale: chromosome column */
     char *genome_seqinfo;           /* scale_x_genome: seqinfo TSV path */
     char *ideogram_path;            /* ideogram(): cytoband TSV path */
@@ -232,6 +246,10 @@ typedef struct {
     ThemeType theme;                              /* theme_*(); THEME_GRAY = 0 = default */
     char *facet_var;
     char *lab_title, *lab_x, *lab_y, *lab_colour, *lab_fill;
+    char *lab_subtitle, *lab_caption;             /* labs(subtitle=, caption=) */
+    /* scale_colour/fill_manual(values=): discrete palette override */
+    Col manual_cols[16]; char *manual_names[16];  /* names NULL = positional */
+    int n_manual, has_manual;
     /* matrix mode */
     HMObj hobjs[MAX_HMOBJS];
     int nhobjs;

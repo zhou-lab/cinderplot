@@ -16,8 +16,8 @@
 #include <string.h>
 
 static const char *USAGE =
-    "usage: cinderplot [DSL-expr | flags] [data.csv] [-o out.pdf|out.svg] [--size WxH] [--dump-spec]\n"
-    "         (output format is chosen from the -o extension: .svg -> SVG, else PDF)\n"
+    "usage: cinderplot [DSL-expr | flags] [data.csv] [-o out.pdf|.svg|.png] [--size WxH] [--dpi N] [--dump-spec]\n"
+    "         (output format is chosen from the -o extension: .svg -> SVG, .png -> PNG, else PDF)\n"
     "  DSL:   'data.csv + aes(x, y, colour=factor(g)) + geom_point()\n"
     "          + labs(title=\"...\") + facet_wrap(~g)'\n"
     "  flags: -x COL -y COL [-c COL] [-f COL] [-t TITLE] [-m point|line|col|histogram]\n"
@@ -52,7 +52,7 @@ int main(int argc, char **argv) {
     const char *out = "plot.pdf", *expr = NULL, *data = NULL;
     const char *fx = NULL, *fy = NULL, *fc = NULL, *ff = NULL, *ft = NULL;
     const char *fm = "point", *flog = NULL, *fregion = NULL;
-    double w_in = 6, h_in = 4;
+    double w_in = 6, h_in = 4, dpi = 96;
     int dump = 0;
 
     for (int i = 1; i < argc; i++) {
@@ -71,6 +71,13 @@ int main(int argc, char **argv) {
             if (sscanf(argv[++i], "%lfx%lf%c", &w_in, &h_in, &tail) != 2
                     || !isfinite(w_in) || !isfinite(h_in) || w_in <= 0 || h_in <= 0) {
                 fprintf(stderr, "cinderplot: bad --size, expected WxH in inches\n%s", USAGE);
+                return 1;
+            }
+        }
+        else if (!strcmp(a, "--dpi") && i + 1 < argc) {
+            dpi = atof(argv[++i]);
+            if (!(dpi > 0) || dpi > 2400) {
+                fprintf(stderr, "cinderplot: bad --dpi, expected 1..2400\n%s", USAGE);
                 return 1;
             }
         }
@@ -110,6 +117,7 @@ int main(int argc, char **argv) {
         expr = buf;
     }
     if (dump) printf("%s\n", expr);
+    cp_set_dpi(dpi);
 
     char err[256] = "";
     PlotSpec spec;

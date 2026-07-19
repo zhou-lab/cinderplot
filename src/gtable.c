@@ -8,11 +8,32 @@
 #include <string.h>
 #include <strings.h>   /* strcasecmp */
 
+static double g_dpi = 96;                       /* PNG raster resolution */
+void cp_set_dpi(double dpi) { if (dpi > 0) g_dpi = dpi; }
+
 cairo_surface_t *cp_surface_create(const char *out, double w_pt, double h_pt) {
     const char *dot = strrchr(out, '.');
     if (dot && strcasecmp(dot, ".svg") == 0)
         return cairo_svg_surface_create(out, w_pt, h_pt);
+    if (dot && strcasecmp(dot, ".png") == 0) {
+        double sc = g_dpi / 72.0;               /* points -> pixels */
+        int w = (int)(w_pt * sc + 0.5), h = (int)(h_pt * sc + 0.5);   /* round */
+        cairo_surface_t *s = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+        cairo_surface_set_device_scale(s, sc, sc);   /* keep drawing in points */
+        cairo_t *bg = cairo_create(s);          /* opaque white ground, like ggsave */
+        cairo_set_source_rgb(bg, 1, 1, 1); cairo_paint(bg); cairo_destroy(bg);
+        return s;
+    }
     return cairo_pdf_surface_create(out, w_pt, h_pt);
+}
+
+cairo_status_t cp_surface_emit(cairo_surface_t *surf, const char *out) {
+    if (cairo_surface_get_type(surf) == CAIRO_SURFACE_TYPE_IMAGE) {
+        cairo_surface_flush(surf);
+        return cairo_surface_write_to_png(surf, out);
+    }
+    cairo_surface_finish(surf);
+    return cairo_surface_status(surf);
 }
 
 static void set_col(cairo_t *cr, Col c) { cairo_set_source_rgb(cr, c.r, c.g, c.b); }
@@ -175,6 +196,16 @@ void gt_render(GTable *t, cairo_t *cr) {
                 case V_TOP:    by = DY(g->ty) + fe.ascent; break;
                 case V_BOTTOM: by = DY(g->ty) - fe.descent; break;
                 default:       by = DY(g->ty) - e.height / 2 - e.y_bearing; break;
+                }
+                if (g->text_box) {                 /* geom_label background box */
+                    double pad = g->size * 0.25;
+                    double lx = bx + e.x_bearing - pad, ly = by + e.y_bearing - pad;
+                    double lw = e.width + 2 * pad, lh = e.height + 2 * pad;
+                    cairo_rectangle(cr, lx, ly, lw, lh);
+                    set_col(cr, g->box_fill); cairo_fill_preserve(cr);
+                    set_col(cr, g->box_line); cairo_set_line_width(cr, lw_pt(0.25));
+                    cairo_stroke(cr);
+                    set_col(cr, g->col);
                 }
                 cairo_move_to(cr, bx, by);
             }

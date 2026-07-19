@@ -105,9 +105,10 @@ static int parse_aes(P *p, PlotSpec *spec) {
             else if (!strcmp(key, "xend") || !strcmp(key, "xmax")) e = &spec->xend;
             else if (!strcmp(key, "yend") || !strcmp(key, "ymax")) e = &spec->yend;
             else if (!strcmp(key, "chrom") || !strcmp(key, "chr")) e = &spec->chrom;
+            else if (!strcmp(key, "label")) e = &spec->label;
             else if (!strcmp(key, "colour") || !strcmp(key, "color")
                   || !strcmp(key, "fill")) e = &spec->colour;
-            else return fail(p, "aes(%s=...) is not implemented; supported: x, y, xend, yend, chrom, colour, fill", key);
+            else return fail(p, "aes(%s=...) is not implemented; supported: x, y, xend, yend, label, chrom, colour, fill", key);
             free(key);
         } else {
             p->s = save;                     /* positional: x then y */
@@ -132,11 +133,13 @@ static int parse_labs(P *p, PlotSpec *spec) {
         char *val = string_lit(p);
         if (!val) return fail(p, "labs(%s=...) expects a quoted string", key);
         if (!strcmp(key, "title")) spec->lab_title = val;
+        else if (!strcmp(key, "subtitle")) spec->lab_subtitle = val;
+        else if (!strcmp(key, "caption")) spec->lab_caption = val;
         else if (!strcmp(key, "x")) spec->lab_x = val;
         else if (!strcmp(key, "y")) spec->lab_y = val;
         else if (!strcmp(key, "colour") || !strcmp(key, "color")) spec->lab_colour = val;
         else if (!strcmp(key, "fill")) spec->lab_fill = val;
-        else return fail(p, "labs(%s=...) is not implemented; supported: title, x, y, colour, fill", key);
+        else return fail(p, "labs(%s=...) is not implemented; supported: title, subtitle, caption, x, y, colour, fill", key);
         free(key);
         skip_ws(p);
         if (*p->s == ',') { p->s++; continue; }
@@ -372,6 +375,53 @@ static int parse_grad_scale(P *p, FillScale *fs, const char *k, const char *fn) 
     return 0;
 }
 
+/* scale_(fill|colour)_manual(values=c(...)) — explicit discrete palette.
+ * Elements are quoted colours, optionally named:  c("red","blue") or
+ * c(setosa="red", virginica="#1b9e77"). Names map to factor levels; an
+ * unnamed list maps by level order. */
+static int parse_manual_scale(P *p, PlotSpec *spec, const char *fn) {
+    spec->n_manual = 0; spec->has_manual = 1;
+    skip_ws(p);
+    while (*p->s != ')') {
+        char *key = ident(p);
+        if (!key || expect(p, '=')) return fail(p, "%s expects values=c(...)", fn);
+        if (strcmp(key, "values"))
+            return fail(p, "scale_*_manual option `%s` not implemented (only values=)", key);
+        skip_ws(p);
+        if (p->s[0] == 'c' && p->s[1] == '(') p->s += 2;
+        else return fail(p, "values= expects c(\"#..\", ...)", "");
+        for (;;) {
+            skip_ws(p);
+            if (*p->s == ')') { p->s++; break; }
+            char *nm = NULL;
+            const char *save = p->s;
+            if (*p->s == '"') {                       /* "name" = "colour" ? */
+                char *s = string_lit(p); skip_ws(p);
+                if (*p->s == '=') { p->s++; nm = s; } else { free(s); p->s = save; }
+            } else {                                   /* name = "colour" ? */
+                char *id = ident(p); skip_ws(p);
+                if (id && *p->s == '=') { p->s++; nm = id; } else { free(id); p->s = save; }
+            }
+            char *cv = string_lit(p); Col c;
+            if (!cv || parse_color(cv, &c)) { free(nm); return fail(p, "bad colour in values=c(...)", ""); }
+            free(cv);
+            if (spec->n_manual < 16) {
+                spec->manual_cols[spec->n_manual] = c;
+                spec->manual_names[spec->n_manual] = nm;
+                spec->n_manual++;
+            } else free(nm);
+            skip_ws(p);
+            if (*p->s == ',') { p->s++; continue; }
+            if (*p->s == ')') { p->s++; break; }
+            return fail(p, "expected , or ) in values=c(...)", "");
+        }
+        skip_ws(p);
+        if (*p->s == ',') { p->s++; skip_ws(p); }
+    }
+    p->s++;                                            /* consume ')' */
+    return 0;
+}
+
 static int parse_term(P *p, PlotSpec *spec) {
     char *name = ident(p);
     if (!name) return fail(p, "expected a function call near \"%.20s\"", p->s);
@@ -379,9 +429,17 @@ static int parse_term(P *p, PlotSpec *spec) {
 
     if (!strcmp(name, "aes")) return parse_aes(p, spec);
     if (!strcmp(name, "labs")) return parse_labs(p, spec);
+    if (!strcmp(name, "xlab") || !strcmp(name, "ylab") || !strcmp(name, "ggtitle")) {
+        char *val = string_lit(p);
+        if (!val) return fail(p, "%s() expects a quoted string", name);
+        if (name[0] == 'x') spec->lab_x = val;
+        else if (name[0] == 'y') spec->lab_y = val;
+        else spec->lab_title = val;
+        return expect(p, ')');
+    }
 
     GeomType gt = GEOM_POINT;
-    int is_geom = 1;
+    int is_geom = 1, is_repel = 0;
     if (!strcmp(name, "geom_point")) gt = GEOM_POINT;
     else if (!strcmp(name, "geom_line")) gt = GEOM_LINE;
     else if (!strcmp(name, "geom_col")) gt = GEOM_COL;
@@ -391,11 +449,20 @@ static int parse_term(P *p, PlotSpec *spec) {
     else if (!strcmp(name, "geom_segment")) gt = GEOM_SEGMENT;
     else if (!strcmp(name, "geom_rect")) gt = GEOM_RECT;
     else if (!strcmp(name, "geom_density")) gt = GEOM_DENSITY;
+    else if (!strcmp(name, "geom_hline")) gt = GEOM_HLINE;
+    else if (!strcmp(name, "geom_vline")) gt = GEOM_VLINE;
+    else if (!strcmp(name, "geom_abline")) gt = GEOM_ABLINE;
+    else if (!strcmp(name, "geom_text")) gt = GEOM_TEXT;
+    else if (!strcmp(name, "geom_label")) gt = GEOM_LABEL;
+    else if (!strcmp(name, "geom_text_repel")) { gt = GEOM_TEXT; is_repel = 1; }
+    else if (!strcmp(name, "geom_label_repel")) { gt = GEOM_LABEL; is_repel = 1; }
     else is_geom = 0;
     if (is_geom) {
         if (spec->nlayers == MAX_LAYERS) return fail(p, "too many layers", "");
         Layer *l = &spec->layers[spec->nlayers++];
         l->type = gt; l->bins = 30; l->adjust = 1;   /* adjust default = 1 (density) */
+        l->slope = 1;                                /* geom_abline default slope */
+        l->repel = is_repel;
         skip_ws(p);
         if (gt == GEOM_HISTOGRAM && *p->s != ')') {
             char *key = ident(p);
@@ -434,6 +501,21 @@ static int parse_term(P *p, PlotSpec *spec) {
                 } else if (gt == GEOM_DENSITY && !strcmp(key, "adjust")) {
                     l->adjust = strtod(p->s, (char **)&p->s);
                     if (l->adjust <= 0) return fail(p, "geom_density(adjust=...) must be > 0", "");
+                } else if (gt == GEOM_HLINE && !strcmp(key, "yintercept")) {
+                    l->intercept = strtod(p->s, (char **)&p->s); l->has_intercept = 1;
+                } else if (gt == GEOM_VLINE && !strcmp(key, "xintercept")) {
+                    l->intercept = strtod(p->s, (char **)&p->s); l->has_intercept = 1;
+                } else if (gt == GEOM_ABLINE && !strcmp(key, "slope")) {
+                    l->slope = strtod(p->s, (char **)&p->s); l->has_slope = 1;
+                } else if (gt == GEOM_ABLINE && !strcmp(key, "intercept")) {
+                    l->intercept = strtod(p->s, (char **)&p->s); l->has_intercept = 1;
+                } else if ((gt == GEOM_TEXT || gt == GEOM_LABEL) && !strcmp(key, "size")) {
+                    l->txt_size = strtod(p->s, (char **)&p->s);
+                    if (l->txt_size <= 0) return fail(p, "geom_text(size=...) must be > 0", "");
+                } else if ((gt == GEOM_TEXT || gt == GEOM_LABEL) && !strcmp(key, "nudge_x")) {
+                    l->nudge_x = strtod(p->s, (char **)&p->s);
+                } else if ((gt == GEOM_TEXT || gt == GEOM_LABEL) && !strcmp(key, "nudge_y")) {
+                    l->nudge_y = strtod(p->s, (char **)&p->s);
                 } else return fail(p, "layer option `%s` not implemented", key);
                 skip_ws(p);
                 if (*p->s == ',') { p->s++; skip_ws(p); }
@@ -549,6 +631,9 @@ static int parse_term(P *p, PlotSpec *spec) {
         o->place.kind = PL_LEFT_OF;              /* default: row tree left */
         return parse_hm_args(p, o, 0);
     }
+    if (!strcmp(name, "scale_fill_manual") || !strcmp(name, "scale_colour_manual")
+        || !strcmp(name, "scale_color_manual"))
+        return parse_manual_scale(p, spec, name);
     if (!strncmp(name, "scale_fill_", 11))
         return parse_grad_scale(p, &spec->fill, name + 11, "scale_fill_");
     if (!strncmp(name, "scale_colour_", 13) || !strncmp(name, "scale_color_", 12)) {
@@ -581,9 +666,12 @@ static int parse_term(P *p, PlotSpec *spec) {
         return expect(p, ')');
     }
     return fail(p, "`%s()` is not implemented; supported: aes(), geom_point(), "
-                   "geom_line(), geom_col(), geom_histogram(), geom_boxplot(), geom_bar(), labs(), "
-                   "facet_wrap(~var), scale_x_log10(), scale_y_log10(), xlim(), ylim(), "
-                   "theme_bw()/theme_minimal()/theme_classic()/..., "
+                   "geom_line(), geom_col(), geom_histogram(), geom_boxplot(), geom_bar(), "
+                   "geom_density(), geom_hline(), geom_vline(), geom_abline(), "
+                   "geom_text()/geom_text_repel(), geom_label()/geom_label_repel(), "
+                   "labs()/xlab()/ylab()/ggtitle(), "
+                   "facet_wrap(~var), scale_x_log10(), scale_y_log10(), scale_*_continuous(), xlim(), ylim(), "
+                   "scale_*_manual(), theme_bw()/theme_minimal()/theme_classic()/..., "
                    "heatmap(), annotation(), legend(), scale_fill_*(), "
                    "region(), coverage(), interval(), genes(), arcs()", name);
 }
@@ -632,17 +720,23 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
     }
     if (spec->nlayers == 0)
         return fail(&p, "no geom given; add e.g. + geom_point()", "");
-    int nstat = 0;   /* stats (histogram, bar, density) compute y themselves */
-    for (int i = 0; i < spec->nlayers; i++)
-        if (spec->layers[i].type == GEOM_HISTOGRAM || spec->layers[i].type == GEOM_BAR
-            || spec->layers[i].type == GEOM_DENSITY) nstat++;
-    if (nstat && nstat != spec->nlayers)
-        return fail(&p, "geom_histogram()/geom_bar()/geom_density() cannot be combined with other geoms yet", "");
+    int nstat = 0, nref = 0;   /* stats compute y; reference lines are overlays */
+    for (int i = 0; i < spec->nlayers; i++) {
+        GeomType t = spec->layers[i].type;
+        if (t == GEOM_HISTOGRAM || t == GEOM_BAR || t == GEOM_DENSITY) nstat++;
+        else if (t == GEOM_HLINE || t == GEOM_VLINE || t == GEOM_ABLINE) nref++;
+    }
+    if (nstat && spec->nlayers - nstat - nref > 0)
+        return fail(&p, "geom_histogram()/geom_bar()/geom_density() cannot be combined with other data geoms yet", "");
     if (!spec->x.col)
         return fail(&p, "aes() must map x", "");
     if (nstat && spec->y.col)
         return fail(&p, "geom_histogram()/geom_bar()/geom_density() compute y; do not map y", "");
     if (!nstat && !spec->y.col)
         return fail(&p, "aes() must map y", "");
+    for (int i = 0; i < spec->nlayers; i++)
+        if ((spec->layers[i].type == GEOM_TEXT || spec->layers[i].type == GEOM_LABEL)
+            && !spec->label.col)
+            return fail(&p, "geom_text()/geom_label() need aes(label=...)", "");
     return 0;
 }

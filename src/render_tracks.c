@@ -253,8 +253,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
     gt_render(T, cr);
 
     cairo_destroy(cr);
-    cairo_surface_finish(surf);
-    cairo_status_t st = cairo_surface_status(surf);
+    cairo_status_t st = cp_surface_emit(surf, out);
     cairo_surface_destroy(surf);
     if (st != CAIRO_STATUS_SUCCESS) { sprintf(err, "cairo: %s", cairo_status_to_string(st)); return -1; }
     return 0;
