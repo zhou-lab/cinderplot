@@ -621,8 +621,7 @@ static int parse_term(P *p, PlotSpec *spec) {
 
     /* ---- track (locus-browser) mode ---- */
     if (!strcmp(name, "region")) {
-        spec->region = raw_token(p);       /* chr:start-end (bare or quoted) */
-        if (!spec->region) return fail(p, "region() expects chr:start-end", "");
+        spec->region = raw_token(p);       /* chr:start-end; empty => infer from matrix() */
         return expect(p, ')');
     }
     if (!strcmp(name, "coverage")) { TrackObj *o = trk_new(p, spec, TRK_COVERAGE); return o ? parse_trk_args(p, o) : -1; }

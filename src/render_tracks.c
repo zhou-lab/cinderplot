@@ -74,6 +74,9 @@ typedef struct {
     char **colid;      /* nc probe IDs (may be NULL entries) */
     char **rowname;    /* nr sample names */
     int *roword;       /* nr display order (cluster or identity) */
+    char *chrom;       /* chromosome (borrowed) — for region() inference */
+    long gbeg, gend;   /* min(beg), max(end) over probes — for region() inference */
+    int multichrom;    /* input spans >1 chromosome (inference is ambiguous) */
 } MatData;
 
 static MatData *read_matrix(const TrackObj *t, char *err) {
@@ -151,6 +154,20 @@ static MatData *read_matrix(const TrackObj *t, char *err) {
         free(ord); free(pp);
     }
     m->nr = nr; m->nc = nc;
+    /* genomic extent + chromosome, so region() can infer the window from here */
+    if (mf->nrow > 0) {
+        double lo = sc->num[0], hi = ec->num[0];
+        for (int r = 1; r < mf->nrow; r++) {
+            if (sc->num[r] < lo) lo = sc->num[r];
+            if (ec->num[r] > hi) hi = ec->num[r];
+        }
+        m->gbeg = (long)lo; m->gend = (long)hi;
+        if (chr_c && chr_c->type == COL_STR) {
+            m->chrom = chr_c->str[0];
+            for (int r = 1; r < mf->nrow; r++)
+                if (strcmp(chr_c->str[r], m->chrom)) { m->multichrom = 1; break; }
+        }
+    }
     m->roword = malloc(nr * sizeof(int));
     for (int r = 0; r < nr; r++) m->roword[r] = r;
     if (t->cluster && nr >= 2) {                      /* cluster the sample rows */
@@ -199,14 +216,40 @@ static GeneModel *load_genes(const char *data, const char *chrom, long rs, long 
 
 int render_tracks(const PlotSpec *spec, const char *out,
                   double w_pt, double h_pt, char *err) {
-    if (!spec->region) {
-        sprintf(err, "track mode needs a region: region(chr:start-end) or --region"); return -1;
-    }
-    char chrom[64]; long rstart, rend;
-    if (region_parse(spec->region, chrom, &rstart, &rend)) {
-        sprintf(err, "bad region `%s`; expected chr:start-end", spec->region); return -1;
-    }
     int ntr = spec->ntracks;
+
+    /* ---- pre-read matrix tracks: they size the sample-label column below, and
+     * an empty region() infers its window from the first one. ---- */
+    MatData *md[MAX_TRACKS] = {0};
+    int has_matrix = 0;
+    for (int i = 0; i < ntr; i++)
+        if (spec->tobjs[i].type == TRK_MATRIX) {
+            md[i] = read_matrix(&spec->tobjs[i], err);
+            if (!md[i]) return -1;
+            has_matrix = 1;
+        }
+
+    /* ---- resolve the region window: explicit chr:start-end, or inferred from a
+     * matrix track (5% pad each end) when region() is empty / omitted ---- */
+    char chrom[64]; long rstart, rend;
+    if (spec->region) {
+        if (region_parse(spec->region, chrom, &rstart, &rend)) {
+            sprintf(err, "bad region `%s`; expected chr:start-end", spec->region); return -1;
+        }
+    } else {
+        MatData *src = NULL;
+        for (int i = 0; i < ntr; i++) if (md[i]) { src = md[i]; break; }
+        if (!src) { sprintf(err, "region() needs coordinates or a matrix() track to infer from"); return -1; }
+        if (!src->chrom) { sprintf(err, "region() cannot infer: matrix has no chrom column; use region(chr:start-end)"); return -1; }
+        if (src->multichrom) { sprintf(err, "region() cannot infer: matrix spans multiple chromosomes; use region(chr:start-end)"); return -1; }
+        snprintf(chrom, sizeof chrom, "%s", src->chrom);
+        long pad = (long)((src->gend - src->gbeg) * 0.05 + 0.5);
+        if (pad < 1) pad = 1;
+        rstart = src->gbeg - pad; if (rstart < 0) rstart = 0;
+        rend = src->gend + pad;
+    }
+    char rgn_disp[96];
+    snprintf(rgn_disp, sizeof rgn_disp, "%s:%ld-%ld", chrom, rstart, rend);
     double x0 = rstart, x1 = rend;
 #define NPCX(v) (((v) - x0) / (x1 - x0))
 
@@ -235,17 +278,8 @@ int render_tracks(const PlotSpec *spec, const char *out,
         snprintf(xlab[nx - 1], 40, "%s", buf);
     }
 
-    /* ---- pre-read matrix tracks (needed to size the sample-label column) ----
-     * font levels within ~1.5x: title 9.5, medium SZ_AXIS_TEXT (8.8), small 6.5. */
+    /* font levels within ~1.5x: title 9.5, medium SZ_AXIS_TEXT (8.8), small 6.5. */
     double sz_title = 9.5, sz_samp = 6.5;             /* per-row sample/probe labels */
-    MatData *md[MAX_TRACKS] = {0};
-    int has_matrix = 0;
-    for (int i = 0; i < ntr; i++)
-        if (spec->tobjs[i].type == TRK_MATRIX) {
-            md[i] = read_matrix(&spec->tobjs[i], err);
-            if (!md[i]) return -1;
-            has_matrix = 1;
-        }
 
     /* widest gene label -> reserved right margin, so transcript names always fit
      * to the right of their model (no left-flip collisions at narrow widths) */
@@ -275,7 +309,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
                 if (w > labw) labw = w;
             }
     }
-    const char *title = spec->lab_title ? spec->lab_title : spec->region;
+    const char *title = spec->lab_title ? spec->lab_title : (spec->region ? spec->region : rgn_disp);
     double titleh = title ? font_h(cr, sz_title) : 0;
     double axh = font_h(cr, SZ_AXIS_TEXT);
     double lab_pad = HALF_LINE * 0.5;      /* row & column label -> heatmap gap (fixed pt) */

@@ -135,7 +135,7 @@ SECTIONS = [
         # models + probe->column map lines + a per-sample beta heatmap (parula).
         # Long/tidy betas (chrom beg end Probe_ID beta sample_name). R ref = sesame.
         ("region", "Region view (anchored heatmap)",
-         'region(chr20:44616522-44655233)'
+         'region()'
          f' + cytoband("{GENOMES}/cytoband.tsv.gz", height=0.5)'
          f' + genes("{GENOMES}/genes.bed.gz", height=1.5)'
          ' + matrix("data/region_betas_long.tsv", name="betas", cluster=samples, rownames=off, height=10)',
