@@ -298,7 +298,6 @@ def sections(src):
         for (slug, title, cp, rc) in variants:
             i += 1
             out.append(card_html(i, slug, title, cp, rc, src))
-    out.append('      ' + '<i class="fill" aria-hidden="true"></i>' * 10)  # keep last row uniform
     return '    <div class="stream">\n' + "\n".join(out) + '\n    </div>'
 
 STYLE = """<style>
@@ -333,29 +332,30 @@ STYLE = """<style>
   /* one continuous stream: cards flow across sections; each section label is an
      inline divider that grows to fill the rest of its row, so there are no
      per-section blocks and no ragged gaps between sections. */
-  .galtools{display:flex;justify-content:flex-end;margin:14px 0 -4px;}
+  .galtools{position:sticky;top:0;z-index:6;display:flex;justify-content:flex-end;
+    margin:0 0 -4px;padding:12px 0 8px;background:var(--bg);}
   .foldbtn{font-family:var(--head);font-weight:600;font-size:.72rem;letter-spacing:.04em;
-    color:var(--muted);background:none;border:1px solid var(--line);border-radius:7px;
-    padding:5px 13px;cursor:pointer;transition:color .15s,border-color .15s,background .15s;}
+    color:var(--muted);background:var(--bg);border:1px solid var(--line);border-radius:7px;
+    padding:5px 13px;cursor:pointer;box-shadow:var(--shadow);
+    transition:color .15s,border-color .15s,background .15s;}
   .foldbtn:hover{color:var(--accent);border-color:var(--accent);background:var(--accent-tint);}
-  .stream{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;margin-top:6px;}
-  .divider{flex:1000 1 auto;min-width:150px;display:flex;align-items:center;gap:9px;cursor:pointer;
-           align-self:center;padding:8px 0 6px;}
-  .divider .caret{color:var(--accent);font-size:.7em;transition:transform .15s ease;}
+  .stream{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:16px;align-items:start;margin-top:6px;}
+  /* section titles are card-sized tiles, so titles and figures align in one grid */
+  .divider{cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;
+           aspect-ratio:4 / 3;border:1px dashed var(--line);border-radius:10px;background:var(--bg-soft);
+           text-align:center;padding:12px;transition:border-color .15s,background .15s;}
+  .divider:hover{border-color:var(--accent);background:var(--accent-tint);}
+  .divider .caret{color:var(--accent);font-size:1.9rem;line-height:1;transition:transform .15s ease;}
   .divider[aria-expanded="true"] .caret{transform:rotate(90deg);}
-  .divider .d__label{font-family:var(--head);font-weight:600;font-size:.92rem;color:var(--ink);white-space:nowrap;}
+  .divider .d__label{font-family:var(--head);font-weight:600;font-size:1rem;color:var(--ink);}
   .divider:hover .d__label{color:var(--accent);}
-  .divider .d__n{font-family:var(--head);font-weight:600;font-size:.66rem;color:var(--muted);
-                 background:var(--bg);border:1px solid var(--line);border-radius:99px;padding:1px 8px;white-space:nowrap;}
-  .divider::after{content:"";flex:1 1 40px;height:1px;background:var(--line);}
+  .divider .d__n{font-family:var(--head);font-weight:600;font-size:.64rem;color:var(--muted);
+                 background:var(--bg);border:1px solid var(--line);border-radius:99px;padding:1px 8px;}
   .smallprint{color:var(--muted);font-size:.76rem;margin:24px 0 0;}
   .smallprint a{color:var(--accent);text-decoration:none;}
   .smallprint a:hover{text-decoration:underline;}
-  .cell{flex:1 1 210px;max-width:300px;min-width:170px;position:relative;margin:0;cursor:pointer;}
+  .cell{position:relative;margin:0;cursor:pointer;}
   .cell.hidden{display:none;}
-  /* invisible tail items keep the final row's cards the same width as full rows
-     (flex-grow would otherwise stretch a short last row) */
-  .stream .fill{flex:1 1 210px;max-width:300px;min-width:170px;height:0;margin:0;padding:0;border:0;}
   /* the figure fills the card (object-fit: cover): its constraining side scales
      to the card edge, the other side overflows and is clipped. */
   .thumb{position:relative;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#f5f6f8;
