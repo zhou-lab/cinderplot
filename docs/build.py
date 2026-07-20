@@ -293,9 +293,9 @@ def sections(src):
         for (slug, title, cp, rc) in variants:
             i += 1
             cards.append(card_html(i, slug, title, cp, rc, src))
-        out.append('''    <section class="sect collapsed">
+        out.append('''    <section class="sect">
       <div class="sep"></div>
-      <button class="sect__title" aria-expanded="false">
+      <button class="sect__title" aria-expanded="true">
         <span class="caret" aria-hidden="true">&#9656;</span>{}<span class="sect__n">{}</span>
       </button>
       <div class="cards">
@@ -344,6 +344,11 @@ STYLE = """<style>
                         background:var(--bg);border:1px solid var(--line);border-radius:99px;padding:1px 8px;}
   .sect.collapsed .sect__title{margin-bottom:0;}
   .sect.collapsed .cards{display:none;}
+  .galtools{display:flex;justify-content:flex-end;margin:14px 0 2px;}
+  .foldbtn{font-family:var(--head);font-weight:600;font-size:.72rem;letter-spacing:.04em;
+    color:var(--muted);background:none;border:1px solid var(--line);border-radius:7px;
+    padding:5px 13px;cursor:pointer;transition:color .15s,border-color .15s,background .15s;}
+  .foldbtn:hover{color:var(--accent);border-color:var(--accent);background:var(--accent-tint);}
   .smallprint{color:var(--muted);font-size:.76rem;margin:24px 0 0;}
   .smallprint a{color:var(--accent);text-decoration:none;}
   .smallprint a:hover{text-decoration:underline;}
@@ -459,6 +464,7 @@ GALLERY_BODY = """
 </div>
 <main class="scroll">
   <div class="wrap">
+    <div class="galtools"><button id="foldAll" class="foldbtn" type="button" aria-pressed="false">Fold all</button></div>
 __SECTIONS__
     <p class="smallprint">Datasets used in these examples (mtcars, quakes, diamonds, …) are available from the
       <a href="https://github.com/zhou-lab/cinderplot-examples">cinderplot-examples</a> repository.</p>
@@ -483,13 +489,36 @@ __SECTIONS__
 (function () {
   var cells = [].slice.call(document.querySelectorAll('.cell'));
 
-  // --- foldable sections (folded by default) ---
+  // --- foldable sections (expanded by default; a fold/unfold-all toggle) ---
+  var foldBtn = document.getElementById('foldAll');
+  function anyOpen() {
+    return [].slice.call(document.querySelectorAll('.sect')).some(function (s) {
+      return !s.classList.contains('collapsed');
+    });
+  }
+  function syncFoldBtn() {
+    if (!foldBtn) return;
+    var open = anyOpen();
+    foldBtn.textContent = open ? 'Fold all' : 'Unfold all';
+    foldBtn.setAttribute('aria-pressed', open ? 'false' : 'true');
+  }
   [].slice.call(document.querySelectorAll('.sect__title')).forEach(function (b) {
     b.addEventListener('click', function () {
       var collapsed = b.closest('.sect').classList.toggle('collapsed');
       b.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      syncFoldBtn();
     });
   });
+  if (foldBtn) foldBtn.addEventListener('click', function () {
+    var fold = anyOpen();                        // any open -> fold all; else unfold all
+    [].slice.call(document.querySelectorAll('.sect')).forEach(function (s) {
+      s.classList.toggle('collapsed', fold);
+      var t = s.querySelector('.sect__title');
+      if (t) t.setAttribute('aria-expanded', fold ? 'false' : 'true');
+    });
+    syncFoldBtn();
+  });
+  syncFoldBtn();
 
   // --- code drop-down (push panel) ---
   var drawer = document.getElementById('drawer'),
