@@ -28,7 +28,9 @@
   header.site .wrap{display:flex;align-items:center;gap:12px;height:56px;}
   .mark{display:flex;align-items:center;gap:8px;text-decoration:none;color:var(--ink);
         font-family:var(--head);font-weight:700;font-size:1.1rem;letter-spacing:-.02em;}
-  .mark .sq{width:12px;height:12px;border-radius:3px;background:var(--accent);}
+  .mark .sq{width:11px;height:11px;border-radius:50%;
+            background:radial-gradient(circle at 38% 32%,#ffe7c2,#ff9e4d 55%,#ff5a2a);
+            box-shadow:0 0 6px rgba(255,110,50,.55);}
   .mark .sub{color:var(--muted);font-weight:500;font-size:.85rem;}
   .nav{margin-left:auto;display:flex;gap:18px;font-family:var(--head);font-weight:500;font-size:.85rem;}
   .nav a{color:var(--muted);text-decoration:none;transition:color .15s;}

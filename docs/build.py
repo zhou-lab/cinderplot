@@ -323,7 +323,9 @@ STYLE = """<style>
   header.site .wrap{display:flex;align-items:center;gap:12px;height:56px;}
   .mark{display:flex;align-items:center;gap:8px;text-decoration:none;color:var(--ink);
         font-family:var(--head);font-weight:700;font-size:1.1rem;letter-spacing:-.02em;}
-  .mark .sq{width:12px;height:12px;border-radius:3px;background:var(--accent);}
+  .mark .sq{width:11px;height:11px;border-radius:50%;
+            background:radial-gradient(circle at 38% 32%,#ffe7c2,#ff9e4d 55%,#ff5a2a);
+            box-shadow:0 0 6px rgba(255,110,50,.55);}
   .mark .sub{color:var(--muted);font-weight:500;font-size:.85rem;}
   .nav{margin-left:auto;display:flex;gap:18px;font-family:var(--head);font-weight:500;font-size:.85rem;}
   .nav a{color:var(--muted);text-decoration:none;transition:color .15s;}
@@ -658,9 +660,19 @@ LANDING_STYLE = """<style>
   a{color:inherit;}
   .wrap{max-width:1000px;margin:0 auto;padding:0 24px;}
   main{padding:34px 0 56px;}
-  .hbrand{display:flex;align-items:center;gap:8px;font-family:var(--head);font-weight:700;
-          font-size:1.05rem;color:#fff;letter-spacing:-.02em;margin-bottom:15px;}
-  .hbrand .sq{width:13px;height:13px;border-radius:3px;background:var(--accent-bright);}
+  .hbrand{display:flex;align-items:center;gap:14px;font-family:var(--head);font-weight:800;
+          font-size:clamp(2rem,5vw,2.7rem);line-height:1;letter-spacing:-.025em;margin-bottom:11px;}
+  .hbrand .wm{color:#eef4fc;}
+  .hbrand .cinder{color:#ff9e4d;background:linear-gradient(95deg,#ffd291,#ff9e4d 45%,#ff6a35);
+                  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;}
+  .hbrand .ember{width:15px;height:15px;border-radius:50%;flex:0 0 auto;
+                 background:radial-gradient(circle at 38% 32%,#ffe7c2,#ff9e4d 52%,#ff5a2a);
+                 box-shadow:0 0 9px 1px rgba(255,120,55,.7),0 0 20px 6px rgba(255,90,40,.3);
+                 animation:ember 3.4s ease-in-out infinite;}
+  @keyframes ember{0%,100%{box-shadow:0 0 8px 1px rgba(255,120,55,.65),0 0 18px 5px rgba(255,90,40,.28);transform:scale(1);}
+                   50%{box-shadow:0 0 13px 2px rgba(255,160,80,.9),0 0 28px 9px rgba(255,100,45,.45);transform:scale(1.08);}}
+  .ey-em{color:#ff9e4d;}
+  @media (prefers-reduced-motion:reduce){.hbrand .ember{animation:none;}}
   .panel{background:var(--bg);border:1px solid var(--line);border-radius:var(--radius);
          box-shadow:var(--shadow);margin-bottom:18px;overflow:hidden;}
   .panel__head{display:flex;align-items:baseline;gap:.5rem;padding:13px 18px;border-bottom:1px solid var(--line);}
@@ -710,8 +722,8 @@ LANDING_STYLE = """<style>
 LANDING_BODY = """<main>
   <div class="wrap">
     <section class="panel hero">
-      <div class="hbrand"><span class="sq"></span>cinderplot</div>
-      <p class="eyebrow">Grammar-inspired plotting in C</p>
+      <div class="hbrand" title="C + Cairo render -> cinder"><span class="ember" aria-hidden="true"></span><span class="wm"><span class="cinder">cinder</span>plot</span></div>
+      <p class="eyebrow">C&#8239;+&#8239;Cairo&#8239;re<span class="ey-em">nder</span> &#8594; cinder</p>
       <h1>Publication-ready graphics from one small, fast binary.</h1>
       <p>cinderplot turns a CSV into a PDF, SVG or PNG with a ggplot2-inspired grammar — panels, hue palettes,
          scales, legends — rendered by a single C binary with Cairo. No R, no Python at plot time.</p>
