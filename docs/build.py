@@ -304,9 +304,9 @@ STYLE = """<style>
   /* gallery runs on a dark navy ground built from the blue accent (the code
      drawer, lightbox and zoom chrome were already dark, so this is cohesive) */
   :root{
-    --accent:#58a0ff; --accent-hover:#7ab2ff; --accent-bright:#2f86ff; --accent-deep:#06223f;
-    --accent-soft:#12324f; --accent-tint:#143a63;
-    --ink:#eef4fc; --body:#b7cbe6; --muted:#8099bd; --line:#1d3d5f; --bg:#0d2c4f; --bg-soft:#07182f;
+    --accent:#4b93f5; --accent-hover:#6aa8ff; --accent-bright:#2f86ff; --accent-deep:#06223f;
+    --accent-soft:#2b5c82; --accent-tint:#2c5980;
+    --ink:#f2f7fd; --body:#cbdaee; --muted:#9db3d2; --line:#3a608a; --bg:#2a577c; --bg-soft:#1e496a;
     --code-ink:#e7eef7; --code-dim:#7fa8d8;
     --font:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
     --head:"Space Grotesk",var(--font); --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
@@ -332,19 +332,19 @@ STYLE = """<style>
   .nav{margin-left:auto;display:flex;gap:18px;font-family:var(--head);font-weight:500;font-size:.85rem;}
   .nav a{color:var(--muted);text-decoration:none;transition:color .15s;}
   .nav a:hover,.nav a.active{color:var(--accent);}
-  main.scroll{flex:1 1 auto;min-height:0;overflow-y:auto;padding:20px 0 60px;}
+  main.scroll{flex:1 1 auto;min-height:0;overflow-y:auto;padding:6px 0 60px;}
   /* one continuous stream: cards flow across sections; each section label is an
      inline divider that grows to fill the rest of its row, so there are no
      per-section blocks and no ragged gaps between sections. */
   .galtools{position:sticky;top:0;z-index:6;display:flex;justify-content:flex-end;
-    margin:0 0 -4px;padding:12px 0 8px;pointer-events:none;}
+    margin:0 0 -6px;padding:4px 0 4px;pointer-events:none;}
   .galtools .foldbtn{pointer-events:auto;}
   .foldbtn{font-family:var(--head);font-weight:600;font-size:.72rem;letter-spacing:.04em;
     color:var(--muted);background:var(--bg);border:1px solid var(--line);border-radius:7px;
     padding:5px 13px;cursor:pointer;box-shadow:var(--shadow);
     transition:color .15s,border-color .15s,background .15s;}
   .foldbtn:hover{color:var(--accent);border-color:var(--accent);background:var(--accent-tint);}
-  .stream{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:16px;align-items:start;margin-top:6px;}
+  .stream{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:16px;align-items:start;margin-top:2px;}
   /* section titles are card-sized tiles, so titles and figures align in one grid */
   .divider{cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;
            aspect-ratio:4 / 3;border:1px dashed var(--line);border-radius:10px;background:var(--bg-soft);
