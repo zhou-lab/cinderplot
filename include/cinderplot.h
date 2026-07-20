@@ -292,6 +292,10 @@ SigBin   *bedgraph_read(const char *path, const char *chrom, long rs, long re, i
 Link     *bedpe_read(const char *path, const char *chrom, long rs, long re, int *n, char *err);
 GeneModel *bed12_read(const char *path, const char *chrom, long rs, long re, int *n, char *err);
 
+/* ---------- gzio.c: gzip / BGZF+tabix input ---------- */
+char *gz_read_all(const char *path, char *err);           /* whole-file gzip inflate */
+char *tabix_slurp_region(const char *path, const char *chrom, long beg, long end, char *err);
+
 /* ---------- render_tracks.c: locus track-browser mode ---------- */
 int render_tracks(const PlotSpec *spec, const char *out,
                   double w_pt, double h_pt, char *err);

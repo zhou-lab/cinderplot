@@ -35,6 +35,11 @@ FIG_BASE = os.environ.get("CINDERPLOT_FIG_BASE",
                           "https://zhou-lab.github.io/cinderplot-examples/figs")
 BIN      = os.environ.get("CINDERPLOT", str(REPO / "cinderplot"))
 PREVIEW  = os.environ.get("CINDERPLOT_PREVIEW", str(HERE / "_preview.html"))
+# Reference genome annotation (cytoband, seqinfo, bgzip+tabix gene models) is
+# read straight from the local genomes repo — cinderplot decompresses gzip and
+# region-queries the tabix index in memory, so no flattened copies live in
+# data/. Override the location with $CINDERPLOT_GENOMES.
+GENOMES  = os.environ.get("CINDERPLOT_GENOMES", os.path.expanduser("~/repo/genomes/hg38"))
 
 # Gallery figures grouped into sections. Each section renders as a full-width
 # separator line + heading + its figure grid. Add future sections (heatmaps,
@@ -119,9 +124,9 @@ SECTIONS = [
          ' + aes(chrom=chrom, x=start, xend=end, y=log2ratio, colour=log2ratio)'
          ' + geom_point(size=0.5)'
          ' + geom_segment(data="data/k562.segments.tsv", y=seg.mean, color="black")'
-         ' + scale_x_genome("data/hg38.seqinfo.tsv")'
+         f' + scale_x_genome("{GENOMES}/seqinfo.tsv.gz")'
          ' + scale_colour_gradient2(low="#3b4cc0", mid="#dcdcdc", high="#b40426", midpoint=0, limits=c(-0.3,0.3))'
-         ' + ideogram("data/hg38.cytoband.tsv")'
+         f' + ideogram("{GENOMES}/cytoband.tsv.gz")'
          ' + labs(title="K562 copy number", y="log2 ratio")',
          "# K562 copy number, EPICv2 (sesame)\n"
          "library(sesame)\n"
@@ -131,9 +136,9 @@ SECTIONS = [
         # Long/tidy betas (chrom beg end Probe_ID beta sample_name). R ref = sesame.
         ("region", "Region view (anchored heatmap)",
          'region(chr20:44616522-44655233)'
-         ' + cytoband("data/hg38.cytoband.tsv", height=0.5)'
-         ' + genes("data/region_genes.bed", height=1.5)'
-         ' + matrix("data/region_betas_long.tsv", name="betas", cluster=samples, height=18)',
+         f' + cytoband("{GENOMES}/cytoband.tsv.gz", height=0.5)'
+         f' + genes("{GENOMES}/genes.bed.gz", height=1.5)'
+         ' + matrix("data/region_betas_long.tsv", name="betas", cluster=samples, rownames=off, height=10)',
          "# ADA locus methylation, HM450 (sesame)\n"
          "library(sesame)\n"
          'visualizeRegion("chr20", 44616522, 44655233, betas,\n'
@@ -166,9 +171,9 @@ DATASETS = [
 ]
 
 # figures rendered at a non-default size (WxH inches); genome plots are wide.
-SIZES = {"k562cnv": "12x3.6", "region": "5x14"}
+SIZES = {"k562cnv": "12x3.6", "region": "5x8"}
 # figures whose gallery card spans the full row (wide banners).
-WIDE = {"k562cnv", "region"}
+WIDE = set()   # no full-width cards — every figure sits in a normal grid cell
 # figures rendered as PNG instead of SVG — dense scatters / heatmaps (thousands
 # of cells) are far lighter as a raster than as per-element vector shapes.
 RASTER = {"k562cnv", "region"}
@@ -263,14 +268,17 @@ def card_html(i, slug, title, cp, rc, src):
     """One figure card. i is the global 1-based index (also shown in the caption
     and used as the zoom button's 0-based data-i)."""
     out_line = "  -o out.svg" + (f" --size {SIZES[slug]}" if slug in SIZES else "")
-    cp_cmd = "cinderplot '" + cp.replace(" + ", "\n  + ") + "' \\\n" + out_line
+    # Render uses the absolute genomes-repo path; the shown command abbreviates
+    # it to hg38/… so the published HTML carries no local home directory.
+    shown = cp.replace(GENOMES, "hg38")
+    cp_cmd = "cinderplot '" + shown.replace(" + ", "\n  + ") + "' \\\n" + out_line
     cls = "cell wide" if slug in WIDE else "cell"
     return f'''        <figure class="{cls}" tabindex="0" role="button" aria-label="Figure {i}: {esc(title)} — show code" data-title="{i} · {esc(title)}">
           <div class="thumb"><button class="zoom" data-i="{i-1}" aria-label="Maximize figure {i}">{ZOOM_SVG}</button><img src="{src(slug, 'cp.' + cp_ext(slug))}" alt="{esc(title)} — cinderplot"></div>
           <figcaption><span class="num">{i}</span>{esc(title)}</figcaption>
           <template class="code">
             <div class="snip"><span class="k">cinderplot</span><pre>{esc(cp_cmd)}</pre></div>
-            <div class="snip"><span class="k">R · ggplot2</span><pre>{esc(rc)}</pre></div>
+            <div class="snip"><span class="k">R</span><pre>{esc(rc)}</pre></div>
           </template>
         </figure>'''
 
@@ -339,10 +347,12 @@ STYLE = """<style>
   .smallprint a:hover{text-decoration:underline;}
   .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(212px,1fr));gap:16px;}
   .cell{position:relative;margin:0;cursor:pointer;}
-  .cell.wide{grid-column:1 / -1;}   /* full-width banner (e.g. whole-genome plots) */
-  .thumb{position:relative;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#fff;
-         box-shadow:var(--shadow);transition:border-color .15s,transform .15s;}
-  .thumb img{display:block;width:100%;height:auto;}
+  /* uniform cards: fixed 4:3 thumbnail, the figure fits inside (centered; the
+     white letterbox blends with the figures' white background) */
+  .thumb{position:relative;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#f5f6f8;
+         box-shadow:var(--shadow);transition:border-color .15s,transform .15s;
+         aspect-ratio:4 / 3;display:flex;align-items:center;justify-content:center;}
+  .thumb img{display:block;max-width:100%;max-height:100%;width:auto;height:auto;}
   .cell:hover .thumb,.cell:focus-visible .thumb{border-color:var(--accent);transform:translateY(-2px);}
   .cell.on .thumb{border-color:var(--accent);}
   .zoom{position:absolute;top:8px;right:8px;z-index:2;width:26px;height:26px;padding:0;border:0;

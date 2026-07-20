@@ -77,7 +77,8 @@ typedef struct {
 } MatData;
 
 static MatData *read_matrix(const TrackObj *t, char *err) {
-    DataFrame *mf = df_read_csv(t->data, err);
+    const char *path = strcmp(t->data, "stdin") == 0 ? "-" : t->data;   /* '-'/stdin = pipe */
+    DataFrame *mf = df_read_csv(path, err);
     if (!mf) return NULL;
     const Column *chr_c = df_col(mf, "chrom");
     const Column *sc = df_col(mf, "beg"); if (!sc) sc = df_col(mf, "start");

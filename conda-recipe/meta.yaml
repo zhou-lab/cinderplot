@@ -21,9 +21,11 @@ requirements:
     - pkg-config
   host:
     - cairo
+    - zlib
   run:
-    # cairo's run_exports pins the runtime automatically; listed for clarity
+    # cairo's / zlib's run_exports pin the runtime automatically; listed for clarity
     - cairo
+    - zlib
 
 test:
   commands:

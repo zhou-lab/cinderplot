@@ -85,10 +85,17 @@ static int is_na(const char *s) {
 }
 
 DataFrame *df_read_csv(const char *path, char *err) {
-    FILE *f = !strcmp(path, "-") ? stdin : fopen(path, "rb");
-    if (!f) { sprintf(err, "cannot open %s", path); return NULL; }
-    char *buf = read_all(f);
-    if (f != stdin) fclose(f);
+    char *buf;
+    size_t pl = strlen(path);
+    if (pl > 3 && !strcmp(path + pl - 3, ".gz")) {      /* gzip / bgzip TSV */
+        buf = gz_read_all(path, err);
+        if (!buf) return NULL;
+    } else {
+        FILE *f = !strcmp(path, "-") ? stdin : fopen(path, "rb");
+        if (!f) { sprintf(err, "cannot open %s", path); return NULL; }
+        buf = read_all(f);
+        if (f != stdin) fclose(f);
+    }
 
     /* sniff the delimiter: tab in the first line => TSV, else comma */
     char delim = ',';

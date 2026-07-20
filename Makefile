@@ -26,7 +26,7 @@ endif
 CPPFLAGS += -D_DEFAULT_SOURCE -Iinclude $(CAIRO_CFLAGS)
 CFLAGS ?= -O2
 CFLAGS += -std=c11 -Wall -Wextra
-LDLIBS += $(CAIRO_LIBS) -lm
+LDLIBS += $(CAIRO_LIBS) -lm -lz
 
 TARGET := cinderplot
 SOURCES := $(wildcard src/*.c)

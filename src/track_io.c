@@ -8,6 +8,8 @@
 #include <string.h>
 
 static char *slurp(const char *path, char *err) {
+    size_t pl = strlen(path);
+    if (pl > 3 && !strcmp(path + pl - 3, ".gz")) return gz_read_all(path, err);
     FILE *f = !strcmp(path, "-") ? stdin : fopen(path, "rb");
     if (!f) { sprintf(err, "cannot open %s", path); return NULL; }
     size_t cap = 1 << 16, n = 0, r;
@@ -105,11 +107,25 @@ static int commalist(const char *s, long *out, int maxn) {
 }
 
 GeneModel *bed12_read(const char *path, const char *chrom, long rs, long re, int *n, char *err) {
-    char *buf = slurp(path, err); if (!buf) return NULL;
+    /* A bgzip+tabix BED (genes.bed.gz + .tbi) is queried by region; any other
+     * path (incl. a plain .gz) is slurped whole and scanned. */
+    char *buf;
+    size_t pl = strlen(path);
+    int have_tbi = 0;
+    if (pl > 3 && !strcmp(path + pl - 3, ".gz")) {
+        char tbi[4096]; snprintf(tbi, sizeof tbi, "%s.tbi", path);
+        FILE *tf = fopen(tbi, "rb");
+        if (tf) { fclose(tf); have_tbi = 1; }
+    }
+    buf = have_tbi ? tabix_slurp_region(path, chrom, rs, re, err) : slurp(path, err);
+    if (!buf) return NULL;
     int cap = 64, cnt = 0;
     GeneModel *out = malloc(cap * sizeof *out);
     FOR_LINES(buf) {
-        char *f[12]; int nf = split_tab(line, f, 12);
+        /* 12-col BED, or Gencode-style BED12+ (…, gene_name, gene_type,
+         * transcript_name, …) — use transcript_name (col 16) as the label when
+         * present so gene-symbol grouping works; else the BED name (col 4). */
+        char *f[16]; int nf = split_tab(line, f, 16);
         if (nf < 12 || strcmp(f[0], chrom)) continue;
         long s = atol(f[1]), e = atol(f[2]);
         if (!overlaps(s, e, rs, re)) continue;
@@ -117,7 +133,8 @@ GeneModel *bed12_read(const char *path, const char *chrom, long rs, long re, int
         GeneModel *g = &out[cnt];
         g->tx_start = s; g->tx_end = e;
         g->cds_start = atol(f[6]); g->cds_end = atol(f[7]);
-        g->name = strcmp(f[3], ".") ? strdup(f[3]) : NULL;
+        const char *nm = (nf >= 16) ? f[15] : f[3];
+        g->name = strcmp(nm, ".") ? strdup(nm) : NULL;
         g->strand = f[5][0];
         long sizes[1024], starts[1024];
         int bc = atoi(f[9]);
