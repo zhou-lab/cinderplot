@@ -120,8 +120,14 @@
                 display:grid;grid-template-columns:1fr 1fr;gap:22px;align-content:start;}
   @media (max-width:760px){.drawer.open{max-height:62vh;}.drawer__panel{max-height:62vh;}
                            .drawer__body{grid-template-columns:1fr;}}
+  .snip{position:relative;}
   .snip .k{display:block;font-family:var(--head);font-weight:600;font-size:.64rem;letter-spacing:.09em;
            text-transform:uppercase;color:var(--accent-bright);margin-bottom:7px;}
+  .copy{position:absolute;top:-2px;right:0;font-family:var(--head);font-size:.66rem;letter-spacing:.04em;
+        color:var(--code-dim);background:rgba(127,168,216,.10);border:1px solid rgba(127,168,216,.28);
+        border-radius:6px;padding:3px 9px;cursor:pointer;transition:color .15s,background .15s,border-color .15s;}
+  .copy:hover{color:#fff;background:rgba(127,168,216,.20);border-color:rgba(127,168,216,.5);}
+  .copy.done{color:#0d1522;background:var(--accent-bright);border-color:var(--accent-bright);}
   .snip pre{margin:0;font-family:var(--mono);font-size:12.5px;line-height:1.6;color:var(--code-ink);
             white-space:pre;overflow-x:auto;}
   footer{color:var(--muted);font-family:var(--head);font-size:.8rem;border-top:1px solid var(--line);
@@ -159,7 +165,7 @@
           <div class="thumb"><button class="zoom" data-i="0" aria-label="Maximize figure 1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/group-cyl-cp.svg" alt="Colour by group — cinderplot"></div>
           <figcaption><span class="num">1</span>Colour by group</figcaption>
           <template class="code">
-            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
+            <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/mtcars.csv
   + aes(wt, mpg, colour=factor(cyl))
   + geom_point()&#x27; \
   -o out.svg</pre></div>
@@ -170,7 +176,7 @@
           <div class="thumb"><button class="zoom" data-i="1" aria-label="Maximize figure 2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/quakes-cp.svg" alt="Continuous colour scale — cinderplot"></div>
           <figcaption><span class="num">2</span>Continuous colour scale</figcaption>
           <template class="code">
-            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/quakes.csv
+            <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/quakes.csv
   + aes(long, lat, colour=mag)
   + geom_point()
   + scale_colour_gradient(low=&quot;#132b43&quot;, high=&quot;#56b1f7&quot;)&#x27; \
@@ -183,7 +189,7 @@
           <div class="thumb"><button class="zoom" data-i="2" aria-label="Maximize figure 3"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/diamonds-cp.svg" alt="Colour by category — cinderplot"></div>
           <figcaption><span class="num">3</span>Colour by category</figcaption>
           <template class="code">
-            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/diamonds_sample.csv
+            <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/diamonds_sample.csv
   + aes(carat, price, colour=cut)
   + geom_point()&#x27; \
   -o out.svg</pre></div>
@@ -195,7 +201,7 @@ ggplot(diamonds, aes(carat, price, colour = cut)) + geom_point()</pre></div>
           <div class="thumb"><button class="zoom" data-i="3" aria-label="Maximize figure 4"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/logx-cp.svg" alt="Log-scaled x-axis — cinderplot"></div>
           <figcaption><span class="num">4</span>Log-scaled x-axis</figcaption>
           <template class="code">
-            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
+            <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/mtcars.csv
   + aes(hp, mpg)
   + geom_point()
   + scale_x_log10(limits=c(10,1000))
@@ -220,7 +226,7 @@ ggplot(diamonds, aes(carat, price, colour = cut)) + geom_point()</pre></div>
           <div class="thumb"><button class="zoom" data-i="4" aria-label="Maximize figure 5"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/reflines-cp.svg" alt="Reference lines — cinderplot"></div>
           <figcaption><span class="num">5</span>Reference lines</figcaption>
           <template class="code">
-            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
+            <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/mtcars.csv
   + aes(wt, mpg)
   + geom_point()
   + geom_abline(slope=-5, intercept=37, color=&quot;#c0392b&quot;)
@@ -235,7 +241,7 @@ ggplot(diamonds, aes(carat, price, colour = cut)) + geom_point()</pre></div>
           <div class="thumb"><button class="zoom" data-i="5" aria-label="Maximize figure 6"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/textlabels-cp.svg" alt="Repelled text labels — cinderplot"></div>
           <figcaption><span class="num">6</span>Repelled text labels</figcaption>
           <template class="code">
-            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
+            <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/mtcars.csv
   + aes(wt, mpg, label=model)
   + geom_point()
   + geom_text_repel(size=2.6)&#x27; \
@@ -250,7 +256,7 @@ ggplot(mtcars, aes(wt, mpg, label = rownames(mtcars))) +
           <div class="thumb"><button class="zoom" data-i="6" aria-label="Maximize figure 7"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/manualcol-cp.svg" alt="Manual colour scale — cinderplot"></div>
           <figcaption><span class="num">7</span>Manual colour scale</figcaption>
           <template class="code">
-            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
+            <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/mtcars.csv
   + aes(wt, mpg, colour=factor(cyl))
   + geom_point()
   + scale_colour_manual(values=c(&quot;4&quot;=&quot;#1b9e77&quot;,&quot;6&quot;=&quot;#d95f02&quot;,&quot;8&quot;=&quot;#7570b3&quot;))&#x27; \
@@ -263,7 +269,7 @@ ggplot(mtcars, aes(wt, mpg, label = rownames(mtcars))) +
           <div class="thumb"><button class="zoom" data-i="7" aria-label="Maximize figure 8"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/labs-cp.svg" alt="Titles &amp; captions — cinderplot"></div>
           <figcaption><span class="num">8</span>Titles &amp; captions</figcaption>
           <template class="code">
-            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
+            <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/mtcars.csv
   + aes(hp, mpg, colour=factor(cyl))
   + geom_point()
   + labs(title=&quot;Fuel economy&quot;, subtitle=&quot;lower is thirstier&quot;, caption=&quot;source: mtcars&quot;, colour=&quot;cylinders&quot;)&#x27; \
@@ -285,7 +291,7 @@ ggplot(mtcars, aes(wt, mpg, label = rownames(mtcars))) +
           <div class="thumb"><button class="zoom" data-i="8" aria-label="Maximize figure 9"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/density-cp.svg" alt="Kernel density (KDE) — cinderplot"></div>
           <figcaption><span class="num">9</span>Kernel density (KDE)</figcaption>
           <template class="code">
-            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/gm12878_betas.tsv
+            <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/gm12878_betas.tsv
   + aes(beta)
   + geom_density()
   + scale_x_continuous(labels=percent)&#x27; \
@@ -307,7 +313,7 @@ ggplot(betas, aes(beta)) + geom_density() +
           <div class="thumb"><button class="zoom" data-i="9" aria-label="Maximize figure 10"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/heatmap-cp.svg" alt="Complex assembly — cinderplot"></div>
           <figcaption><span class="num">10</span>Complex assembly</figcaption>
           <template class="code">
-            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars_heat.csv
+            <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/mtcars_heat.csv
   + heatmap(name=&quot;m&quot;, cluster=both, rownames=right)
   + dendrogram(top_of(&quot;m&quot;))
   + dendrogram(left_of(&quot;m&quot;))
@@ -334,7 +340,7 @@ Heatmap(m, name = &quot;z&quot;, cluster_rows = TRUE, cluster_columns = TRUE,
           <div class="thumb"><button class="zoom" data-i="10" aria-label="Maximize figure 11"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/k562cnv-cp.png" alt="Whole-genome CNV — cinderplot"></div>
           <figcaption><span class="num">11</span>Whole-genome CNV</figcaption>
           <template class="code">
-            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/k562.bins.tsv
+            <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/k562.bins.tsv
   + aes(chrom=chrom, x=start, xend=end, y=log2ratio, colour=log2ratio)
   + geom_point(size=0.5)
   + geom_segment(data=&quot;data/k562.segments.tsv&quot;, y=seg.mean, color=&quot;black&quot;)
@@ -352,7 +358,7 @@ visualizeSegments(cnv)  # bins + CBS segments + ideogram, whole-genome x</pre></
           <div class="thumb"><button class="zoom" data-i="11" aria-label="Maximize figure 12"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/region-cp.png" alt="Region view (anchored heatmap) — cinderplot"></div>
           <figcaption><span class="num">12</span>Region view (anchored heatmap)</figcaption>
           <template class="code">
-            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;region(chr20:44616522-44655233)
+            <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;region(chr20:44616522-44655233)
   + cytoband(&quot;hg38/cytoband.tsv.gz&quot;, height=0.5)
   + genes(&quot;hg38/genes.bed.gz&quot;, height=1.5)
   + matrix(&quot;data/region_betas_long.tsv&quot;, name=&quot;betas&quot;, cluster=samples, rownames=off, height=10)&#x27; \
@@ -375,7 +381,7 @@ visualizeRegion(&quot;chr20&quot;, 44616522, 44655233, betas,
           <div class="thumb"><button class="zoom" data-i="12" aria-label="Maximize figure 13"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-bw-cp.svg" alt="theme_bw — cinderplot"></div>
           <figcaption><span class="num">13</span>theme_bw</figcaption>
           <template class="code">
-            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
+            <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/mtcars.csv
   + aes(wt, mpg, colour=factor(cyl))
   + geom_point()
   + theme_bw()&#x27; \
@@ -387,7 +393,7 @@ visualizeRegion(&quot;chr20&quot;, 44616522, 44655233, betas,
           <div class="thumb"><button class="zoom" data-i="13" aria-label="Maximize figure 14"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-minimal-cp.svg" alt="theme_minimal — cinderplot"></div>
           <figcaption><span class="num">14</span>theme_minimal</figcaption>
           <template class="code">
-            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
+            <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/mtcars.csv
   + aes(wt, mpg, colour=factor(cyl))
   + geom_point()
   + theme_minimal()&#x27; \
@@ -399,7 +405,7 @@ visualizeRegion(&quot;chr20&quot;, 44616522, 44655233, betas,
           <div class="thumb"><button class="zoom" data-i="14" aria-label="Maximize figure 15"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-classic-cp.svg" alt="theme_classic — cinderplot"></div>
           <figcaption><span class="num">15</span>theme_classic</figcaption>
           <template class="code">
-            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
+            <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/mtcars.csv
   + aes(wt, mpg, colour=factor(cyl))
   + geom_point()
   + theme_classic()&#x27; \
@@ -411,7 +417,7 @@ visualizeRegion(&quot;chr20&quot;, 44616522, 44655233, betas,
           <div class="thumb"><button class="zoom" data-i="15" aria-label="Maximize figure 16"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-void-cp.svg" alt="theme_void — cinderplot"></div>
           <figcaption><span class="num">16</span>theme_void</figcaption>
           <template class="code">
-            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
+            <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/mtcars.csv
   + aes(wt, mpg, colour=factor(cyl))
   + geom_point()
   + theme_void()&#x27; \
@@ -423,7 +429,7 @@ visualizeRegion(&quot;chr20&quot;, 44616522, 44655233, betas,
           <div class="thumb"><button class="zoom" data-i="16" aria-label="Maximize figure 17"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-linedraw-cp.svg" alt="theme_linedraw — cinderplot"></div>
           <figcaption><span class="num">17</span>theme_linedraw</figcaption>
           <template class="code">
-            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
+            <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/mtcars.csv
   + aes(wt, mpg, colour=factor(cyl))
   + geom_point()
   + theme_linedraw()&#x27; \
@@ -435,7 +441,7 @@ visualizeRegion(&quot;chr20&quot;, 44616522, 44655233, betas,
           <div class="thumb"><button class="zoom" data-i="17" aria-label="Maximize figure 18"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-light-cp.svg" alt="theme_light — cinderplot"></div>
           <figcaption><span class="num">18</span>theme_light</figcaption>
           <template class="code">
-            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
+            <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/mtcars.csv
   + aes(wt, mpg, colour=factor(cyl))
   + geom_point()
   + theme_light()&#x27; \
@@ -447,7 +453,7 @@ visualizeRegion(&quot;chr20&quot;, 44616522, 44655233, betas,
           <div class="thumb"><button class="zoom" data-i="18" aria-label="Maximize figure 19"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-dark-cp.svg" alt="theme_dark — cinderplot"></div>
           <figcaption><span class="num">19</span>theme_dark</figcaption>
           <template class="code">
-            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
+            <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/mtcars.csv
   + aes(wt, mpg, colour=factor(cyl))
   + geom_point()
   + theme_dark()&#x27; \
@@ -459,7 +465,7 @@ visualizeRegion(&quot;chr20&quot;, 44616522, 44655233, betas,
           <div class="thumb"><button class="zoom" data-i="19" aria-label="Maximize figure 20"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="20.5" y1="20.5" x2="16.5" y2="16.5"/><line x1="11" y1="8.2" x2="11" y2="13.8"/><line x1="8.2" y1="11" x2="13.8" y2="11"/></svg></button><img src="https://zhou-lab.github.io/cinderplot-examples/figs/theme-few-cp.svg" alt="theme_few — cinderplot"></div>
           <figcaption><span class="num">20</span>theme_few</figcaption>
           <template class="code">
-            <div class="snip"><span class="k">cinderplot</span><pre>cinderplot &#x27;data/mtcars.csv
+            <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/mtcars.csv
   + aes(wt, mpg, colour=factor(cyl))
   + geom_point()
   + theme_few()&#x27; \
@@ -534,6 +540,28 @@ ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) + geom_point() + theme_few()<
     });
   });
   document.getElementById('drawerClose').addEventListener('click', closeDrawer);
+
+  // --- copy the cinderplot command to the clipboard ---
+  function copyFallback(text) {
+    var ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); } catch (err) {}
+    document.body.removeChild(ta);
+  }
+  dBody.addEventListener('click', function (e) {
+    var btn = e.target.closest('.copy');
+    if (!btn) return;
+    var pre = btn.parentNode.querySelector('pre');
+    if (!pre) return;
+    function done() {
+      btn.textContent = 'Copied!'; btn.classList.add('done');
+      setTimeout(function () { btn.textContent = 'Copy'; btn.classList.remove('done'); }, 1500);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText)
+      navigator.clipboard.writeText(pre.textContent).then(done, function () { copyFallback(pre.textContent); done(); });
+    else { copyFallback(pre.textContent); done(); }
+  });
 
   // --- lightbox (maximize) ---
   var figs = cells.map(function (c) {

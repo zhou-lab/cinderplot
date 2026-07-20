@@ -277,7 +277,7 @@ def card_html(i, slug, title, cp, rc, src):
           <div class="thumb"><button class="zoom" data-i="{i-1}" aria-label="Maximize figure {i}">{ZOOM_SVG}</button><img src="{src(slug, 'cp.' + cp_ext(slug))}" alt="{esc(title)} — cinderplot"></div>
           <figcaption><span class="num">{i}</span>{esc(title)}</figcaption>
           <template class="code">
-            <div class="snip"><span class="k">cinderplot</span><pre>{esc(cp_cmd)}</pre></div>
+            <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>{esc(cp_cmd)}</pre></div>
             <div class="snip"><span class="k">R</span><pre>{esc(rc)}</pre></div>
           </template>
         </figure>'''
@@ -417,8 +417,14 @@ STYLE = """<style>
                 display:grid;grid-template-columns:1fr 1fr;gap:22px;align-content:start;}
   @media (max-width:760px){.drawer.open{max-height:62vh;}.drawer__panel{max-height:62vh;}
                            .drawer__body{grid-template-columns:1fr;}}
+  .snip{position:relative;}
   .snip .k{display:block;font-family:var(--head);font-weight:600;font-size:.64rem;letter-spacing:.09em;
            text-transform:uppercase;color:var(--accent-bright);margin-bottom:7px;}
+  .copy{position:absolute;top:-2px;right:0;font-family:var(--head);font-size:.66rem;letter-spacing:.04em;
+        color:var(--code-dim);background:rgba(127,168,216,.10);border:1px solid rgba(127,168,216,.28);
+        border-radius:6px;padding:3px 9px;cursor:pointer;transition:color .15s,background .15s,border-color .15s;}
+  .copy:hover{color:#fff;background:rgba(127,168,216,.20);border-color:rgba(127,168,216,.5);}
+  .copy.done{color:#0d1522;background:var(--accent-bright);border-color:var(--accent-bright);}
   .snip pre{margin:0;font-family:var(--mono);font-size:12.5px;line-height:1.6;color:var(--code-ink);
             white-space:pre;overflow-x:auto;}
   footer{color:var(--muted);font-family:var(--head);font-size:.8rem;border-top:1px solid var(--line);
@@ -516,6 +522,28 @@ __SECTIONS__
     });
   });
   document.getElementById('drawerClose').addEventListener('click', closeDrawer);
+
+  // --- copy the cinderplot command to the clipboard ---
+  function copyFallback(text) {
+    var ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); } catch (err) {}
+    document.body.removeChild(ta);
+  }
+  dBody.addEventListener('click', function (e) {
+    var btn = e.target.closest('.copy');
+    if (!btn) return;
+    var pre = btn.parentNode.querySelector('pre');
+    if (!pre) return;
+    function done() {
+      btn.textContent = 'Copied!'; btn.classList.add('done');
+      setTimeout(function () { btn.textContent = 'Copy'; btn.classList.remove('done'); }, 1500);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText)
+      navigator.clipboard.writeText(pre.textContent).then(done, function () { copyFallback(pre.textContent); done(); });
+    else { copyFallback(pre.textContent); done(); }
+  });
 
   // --- lightbox (maximize) ---
   var figs = cells.map(function (c) {
