@@ -40,6 +40,16 @@ static double font_h(cairo_t *cr, double size) {
     return fe.ascent + fe.descent;
 }
 
+/* auto-fit tuning (pt): matrix sample-row height when rownames are hidden vs
+ * shown (a line-height multiplier), the per-weight-unit fallback when no matrix
+ * anchors the height, the default region panel width, and overall clamps. */
+#define AUTO_MIN_CELL 3.2
+#define AUTO_ROW_PAD  1.18
+#define AUTO_UNIT_H   46.0
+#define AUTO_PANEL_W  (5.0 * 72)
+#define AUTO_MIN_PT   (2.0 * 72)
+#define AUTO_MAX_PT   (30.0 * 72)
+
 /* copy s into out, inserting thousands commas in the integer part (44620 -> 44,620) */
 static void commafy(char *out, size_t cap, const char *s) {
     const char *dot = strchr(s, '.');
@@ -253,8 +263,10 @@ int render_tracks(const PlotSpec *spec, const char *out,
     double x0 = rstart, x1 = rend;
 #define NPCX(v) (((v) - x0) / (x1 - x0))
 
-    cairo_surface_t *surf = cp_surface_create(out, w_pt, h_pt);
-    cairo_t *cr = cairo_create(surf);
+    /* measure text on a scratch context; the real output surface is created
+     * only after auto-fit (below) resolves any auto (0) size axis. */
+    cairo_surface_t *msurf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 8, 8);
+    cairo_t *cr = cairo_create(msurf);
     cairo_select_font_face(cr, FONT_FAMILY, CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
 
     /* ---- genomic axis: pick unit, nice breaks, format with suffix ---- */
@@ -313,6 +325,41 @@ int render_tracks(const PlotSpec *spec, const char *out,
     double titleh = title ? font_h(cr, sz_title) : 0;
     double axh = font_h(cr, SZ_AXIS_TEXT);
     double lab_pad = HALF_LINE * 0.5;      /* row & column label -> heatmap gap (fixed pt) */
+
+    /* ---- auto-fit: fill any auto (0) size axis from the measured content.
+     * Width = chrome + a default panel. Height anchors the per-weight unit on
+     * the matrix track's rows (so it grows taller when sample names show), which
+     * keeps height= a relative weight rather than an absolute size. ---- */
+    if (w_pt <= 0 || h_pt <= 0) {
+        double aw = MARGIN + labw + (labw > 0 ? lab_pad : 0) + AUTO_PANEL_W + rmargin;
+        double per_u = AUTO_UNIT_H, sumw = 0, samp_line = font_h(cr, sz_samp);
+        for (int i = 0; i < ntr; i++)
+            sumw += spec->tobjs[i].height > 0 ? spec->tobjs[i].height : 1;
+        for (int i = 0; i < ntr; i++)
+            if (md[i]) {                                 /* first matrix anchors height */
+                double wgt = spec->tobjs[i].height > 0 ? spec->tobjs[i].height : 1, lbl_pt = 0;
+                for (int c = 0; c < md[i]->nc; c++)
+                    if (md[i]->colid[c]) { double w = text_w(cr, sz_samp, md[i]->colid[c]); if (w > lbl_pt) lbl_pt = w; }
+                double bands = font_h(cr, SZ_AXIS_TEXT) + TICK_LEN + TXT_GAP + 42 + lbl_pt + lab_pad;
+                double row_h = spec->tobjs[i].hide_rownames ? AUTO_MIN_CELL : samp_line * AUTO_ROW_PAD;
+                double u = (bands + md[i]->nr * row_h) / wgt;
+                if (u > per_u) per_u = u;
+                break;
+            }
+        double gaps = ntr > 1 ? (ntr - 1) * HALF_LINE * 0.6 : 0;
+        double axisr = has_matrix ? HALF_LINE : TICK_LEN + TXT_GAP + axh;
+        double fixed = MARGIN + titleh + (title ? HALF_LINE * 0.3 : 0) + gaps + axisr + MARGIN;
+        double ah = fixed + per_u * sumw;
+        if (w_pt <= 0) w_pt = fmin(AUTO_MAX_PT, fmax(AUTO_MIN_PT, aw));
+        if (h_pt <= 0) h_pt = fmin(AUTO_MAX_PT, fmax(AUTO_MIN_PT, ah));
+    }
+
+    /* switch from the scratch measuring context to the real output surface */
+    cairo_destroy(cr); cairo_surface_destroy(msurf);
+    cairo_surface_t *surf = cp_surface_create(out, w_pt, h_pt);
+    cr = cairo_create(surf);
+    cairo_select_font_face(cr, FONT_FAMILY, CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+
     double panel_w = w_pt - MARGIN - labw - (labw > 0 ? lab_pad : 0) - rmargin;  /* pt */
 
     /* ---- outer gtable: [MARGIN|label|gap|PANEL|MARGIN] cols;

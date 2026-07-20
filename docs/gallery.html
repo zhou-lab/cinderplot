@@ -362,7 +362,7 @@ visualizeSegments(cnv)  # bins + CBS segments + ideogram, whole-genome x</pre></
   + cytoband(&quot;hg38/cytoband.tsv.gz&quot;, height=0.5)
   + genes(&quot;hg38/genes.bed.gz&quot;, height=1.5)
   + matrix(&quot;data/region_betas_long.tsv&quot;, name=&quot;betas&quot;, cluster=samples, rownames=off, height=10)&#x27; \
-  -o out.svg --size 5x8</pre></div>
+  -o out.svg</pre></div>
             <div class="snip"><span class="k">R</span><pre># ADA locus methylation, HM450 (sesame)
 library(sesame)
 visualizeRegion(&quot;chr20&quot;, 44616522, 44655233, betas,

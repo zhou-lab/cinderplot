@@ -17,6 +17,7 @@
 
 static const char *USAGE =
     "usage: cinderplot [DSL-expr | flags] [data.csv] [-o out.pdf|.svg|.png] [--size WxH] [--dpi N] [--dump-spec]\n"
+    "         (--size also takes a partial Wx or xH; the missing / omitted axis auto-fits to content)\n"
     "         (output format is chosen from the -o extension: .svg -> SVG, .png -> PNG, else PDF)\n"
     "  DSL:   'data.csv + aes(x, y, colour=factor(g)) + geom_point()\n"
     "          + labs(title=\"...\") + facet_wrap(~g)'\n"
@@ -52,7 +53,7 @@ int main(int argc, char **argv) {
     const char *out = "plot.pdf", *expr = NULL, *data = NULL;
     const char *fx = NULL, *fy = NULL, *fc = NULL, *ff = NULL, *ft = NULL;
     const char *fm = "point", *flog = NULL, *fregion = NULL;
-    double w_in = 6, h_in = 4, dpi = 96;
+    double w_in = 0, h_in = 0, dpi = 96;   /* 0 = auto-fit that axis */
     int dump = 0;
 
     for (int i = 1; i < argc; i++) {
@@ -67,10 +68,20 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--log") && i + 1 < argc) flog = argv[++i];
         else if ((!strcmp(a, "-r") || !strcmp(a, "--region")) && i + 1 < argc) fregion = argv[++i];
         else if (!strcmp(a, "--size") && i + 1 < argc) {
-            char tail;
-            if (sscanf(argv[++i], "%lfx%lf%c", &w_in, &h_in, &tail) != 2
-                    || !isfinite(w_in) || !isfinite(h_in) || w_in <= 0 || h_in <= 0) {
-                fprintf(stderr, "cinderplot: bad --size, expected WxH in inches\n%s", USAGE);
+            /* WxH, or a partial Wx / xH (missing side = auto-fit). */
+            const char *s = argv[++i], *xp = strchr(s, 'x');
+            char wbuf[64], hbuf[64], tail;
+            size_t wl = xp ? (size_t)(xp - s) : 0;
+            if (!xp || wl >= sizeof wbuf) {
+                fprintf(stderr, "cinderplot: bad --size, expected WxH (or Wx / xH) in inches\n%s", USAGE);
+                return 1;
+            }
+            memcpy(wbuf, s, wl); wbuf[wl] = 0;
+            snprintf(hbuf, sizeof hbuf, "%s", xp + 1);
+            w_in = h_in = 0;                              /* empty side stays auto */
+            if ((*wbuf && (sscanf(wbuf, "%lf%c", &w_in, &tail) != 1 || !isfinite(w_in) || w_in <= 0)) ||
+                (*hbuf && (sscanf(hbuf, "%lf%c", &h_in, &tail) != 1 || !isfinite(h_in) || h_in <= 0))) {
+                fprintf(stderr, "cinderplot: bad --size, expected WxH (or Wx / xH) in inches\n%s", USAGE);
                 return 1;
             }
         }
@@ -125,9 +136,12 @@ int main(int argc, char **argv) {
         fprintf(stderr, "cinderplot: %s\n", err);
         return 1;
     }
+    /* 0 = auto-fit: track & heatmap modes size themselves from content;
+     * grammar mode keeps the classic 6x4in default. */
+    double w_pt = w_in * 72, h_pt = h_in * 72;
     if (spec.ntracks > 0) {                      /* track (locus-browser) mode */
         if (!spec.region) spec.region = (char *)fregion;   /* --region flag */
-        if (render_tracks(&spec, out, w_in * 72, h_in * 72, err)) {
+        if (render_tracks(&spec, out, w_pt, h_pt, err)) {
             fprintf(stderr, "cinderplot: %s\n", err);
             return 1;
         }
@@ -135,7 +149,7 @@ int main(int argc, char **argv) {
         return 0;
     }
     if (spec.nhobjs > 0) {                       /* matrix (wheatmap) mode */
-        if (render_heatmap(&spec, out, w_in * 72, h_in * 72, err)) {
+        if (render_heatmap(&spec, out, w_pt, h_pt, err)) {
             fprintf(stderr, "cinderplot: %s\n", err);
             return 1;
         }
@@ -144,7 +158,7 @@ int main(int argc, char **argv) {
     }
     DataFrame *df = df_read_csv(spec.data_path, err);
     if (!df) { fprintf(stderr, "cinderplot: %s\n", err); return 1; }
-    if (render_plot(&spec, df, out, w_in * 72, h_in * 72, err)) {
+    if (render_plot(&spec, df, out, w_pt > 0 ? w_pt : 6 * 72, h_pt > 0 ? h_pt : 4 * 72, err)) {
         fprintf(stderr, "cinderplot: %s\n", err);
         return 1;
     }

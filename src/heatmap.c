@@ -47,6 +47,9 @@ static uint32_t col_argb(Col c) {
 #define LEG_GRID (4.0 * MM)         /* discrete key square */
 #define LEG_GAP  (2.0 * MM)         /* gap between keys    */
 #define ANN_LEAD (3.5 * MM)         /* in-situ label leader horizontal span (pt) */
+#define HM_CELL_BASE 8.0            /* auto-fit: target heatmap cell edge (pt) */
+#define HM_MIN_PT (2.0 * 72)        /* auto-fit: figure size clamps */
+#define HM_MAX_PT (30.0 * 72)
 
 typedef struct {
     const HMObj *o;
@@ -556,8 +559,8 @@ int render_heatmap(const PlotSpec *spec, const char *out,
      * reserve it as a page margin so nothing clips at the device edge.
      * Boundary test: a label reserves margin only when its object's edge
      * on that side sits at the normalized bbox boundary (0 or 1). */
-    cairo_surface_t *surf = cp_surface_create(out, w_pt, h_pt);
-    cairo_t *cr = cairo_create(surf);
+    cairo_surface_t *msurf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 8, 8);
+    cairo_t *cr = cairo_create(msurf);           /* scratch: measure chrome first */
     cairo_select_font_face(cr, FONT_FAMILY, CAIRO_FONT_SLANT_NORMAL,
                            CAIRO_FONT_WEIGHT_NORMAL);
     cairo_font_extents_t fe;
@@ -666,6 +669,35 @@ int render_heatmap(const PlotSpec *spec, const char *out,
     }
 
     double titlegap = titleh ? HALF_LINE : 0;
+
+    /* ---- auto-fit: fill any auto (0) size axis from content. The canvas is
+     * sized so the primary heatmap's cells hit a target edge (>= a label line
+     * when that side is labelled), then grown to full canvas via the heatmap's
+     * normalized fraction, plus the measured margins. ---- */
+    if (w_pt <= 0 || h_pt <= 0) {
+        RObj *hm = NULL;
+        for (int i = 0; i < n; i++) if (ro[i].o->type == HM_HEATMAP) { hm = &ro[i]; break; }
+        double aw = w_pt, ah = h_pt;
+        if (hm && hm->w > 0 && hm->h > 0) {
+            int rowlab = hm->o->rownames && hm->m->rn, collab = hm->o->colnames && hm->m->cn;
+            double cell_w = collab ? fmax(HM_CELL_BASE, axH * 1.1) : HM_CELL_BASE;
+            double cell_h = rowlab ? fmax(HM_CELL_BASE, axH * 1.1) : HM_CELL_BASE;
+            aw = marL + hm->nc * cell_w / hm->w + marR;
+            ah = marT + titleh + titlegap + hm->nr * cell_h / hm->h + marB;
+        } else {                                     /* no heatmap: sensible default */
+            if (aw <= 0) aw = 6 * 72;
+            if (ah <= 0) ah = 4 * 72;
+        }
+        if (w_pt <= 0) w_pt = fmin(HM_MAX_PT, fmax(HM_MIN_PT, aw));
+        if (h_pt <= 0) h_pt = fmin(HM_MAX_PT, fmax(HM_MIN_PT, ah));
+    }
+
+    /* switch from the scratch measuring context to the real output surface */
+    cairo_destroy(cr); cairo_surface_destroy(msurf);
+    cairo_surface_t *surf = cp_surface_create(out, w_pt, h_pt);
+    cr = cairo_create(surf);
+    cairo_select_font_face(cr, FONT_FAMILY, CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+
     GTable *T = calloc(1, sizeof(GTable));
     T->ncol = 3;
     T->colw[0] = upt(marL);

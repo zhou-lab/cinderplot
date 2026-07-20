@@ -171,7 +171,9 @@ DATASETS = [
 ]
 
 # figures rendered at a non-default size (WxH inches); genome plots are wide.
-SIZES = {"k562cnv": "12x3.6", "region": "5x8"}
+# k562cnv is grammar mode (wide whole-genome aspect) so it needs an explicit
+# size; the heatmap and region (track) cards auto-fit from their content.
+SIZES = {"k562cnv": "12x3.6"}
 # figures whose gallery card spans the full row (wide banners).
 WIDE = set()   # no full-width cards — every figure sits in a normal grid cell
 # figures rendered as PNG instead of SVG — dense scatters / heatmaps (thousands
