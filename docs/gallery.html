@@ -6,14 +6,16 @@
 <title>cinderplot gallery</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap">
 <style>
+  /* gallery runs on a dark navy ground built from the blue accent (the code
+     drawer, lightbox and zoom chrome were already dark, so this is cohesive) */
   :root{
-    --accent:#0a5bb5; --accent-hover:#084a96; --accent-bright:#2f86ff; --accent-deep:#06223f;
-    --accent-soft:#dce8f7; --accent-tint:#eef4fb;
-    --ink:#0b1220; --body:#3a4658; --muted:#6b7688; --line:#e6eaf0; --bg:#ffffff; --bg-soft:#eef1f6;
+    --accent:#58a0ff; --accent-hover:#7ab2ff; --accent-bright:#2f86ff; --accent-deep:#06223f;
+    --accent-soft:#12324f; --accent-tint:#143a63;
+    --ink:#eef4fc; --body:#b7cbe6; --muted:#8099bd; --line:#1d3d5f; --bg:#0d2c4f; --bg-soft:#07182f;
     --code-ink:#e7eef7; --code-dim:#7fa8d8;
     --font:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
     --head:"Space Grotesk",var(--font); --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-    --radius:10px; --shadow:0 1px 2px rgba(11,18,32,.05),0 4px 14px rgba(11,18,32,.05);
+    --radius:10px; --shadow:0 1px 2px rgba(0,0,0,.35),0 8px 22px rgba(0,0,0,.42);
   }
   *{box-sizing:border-box;}
   /* app shell: header + drawer are fixed rows; only .scroll scrolls, so the
@@ -66,7 +68,7 @@
   .cell.hidden{display:none;}
   /* the figure fills the card (object-fit: cover): its constraining side scales
      to the card edge, the other side overflows and is clipped. */
-  .thumb{position:relative;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#f5f6f8;
+  .thumb{position:relative;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--bg-soft);
          box-shadow:var(--shadow);transition:border-color .15s,transform .15s;aspect-ratio:4 / 3;}
   .thumb img{display:block;width:100%;height:100%;object-fit:cover;object-position:left top;background:#fff;}
   .cell:hover .thumb,.cell:focus-visible .thumb{border-color:var(--accent);transform:translateY(-2px);}
