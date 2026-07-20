@@ -2,7 +2,7 @@
 #ifndef CINDERPLOT_H
 #define CINDERPLOT_H
 
-#define CINDERPLOT_VERSION "0.4.1"
+#define CINDERPLOT_VERSION "0.4.2"
 
 #include <cairo.h>
 
