@@ -215,6 +215,7 @@ typedef struct {
     char *title;                   /* legend title (NULL = default/none) */
     ClusterMode cluster;           /* heatmap only */
     Side rownames, colnames;       /* heatmap label sides (SIDE_NONE = off) */
+    int label_data;                /* annotation: label value runs in situ + bezier leaders */
     HPlace place;
 } HMObj;
 #define MAX_HMOBJS 16

@@ -322,8 +322,14 @@ static int parse_hm_args(P *p, HMObj *o, int want_data) {
                 else return fail(p, row ? "rownames= must be left, right, or none"
                                         : "colnames= must be top, bottom, or none", "");
                 if (row) o->rownames = s; else o->colnames = s;
+            } else if (!strcmp(key, "labels")) {
+                char *v = ident(p);
+                if (!v) return fail(p, "labels= expects data/on or none/off", "");
+                if (!strcmp(v, "data") || !strcmp(v, "on") || !strcmp(v, "true")) o->label_data = 1;
+                else if (!strcmp(v, "none") || !strcmp(v, "off") || !strcmp(v, "false")) o->label_data = 0;
+                else return fail(p, "labels=%s invalid; use data/on or none/off", v);
             } else return fail(p, "option `%s` not implemented; supported: name=, data=, "
-                                  "cluster=, rownames=, colnames=, placements", key);
+                                  "cluster=, rownames=, colnames=, labels=, placements", key);
         } else {
             p->s = save;
             char *v = raw_token(p);

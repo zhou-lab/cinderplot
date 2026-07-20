@@ -46,6 +46,7 @@ static uint32_t col_argb(Col c) {
 #define LEG_LEN  (28.0 * MM)        /* colorbar length     */
 #define LEG_GRID (4.0 * MM)         /* discrete key square */
 #define LEG_GAP  (2.0 * MM)         /* gap between keys    */
+#define ANN_LEAD (3.5 * MM)         /* in-situ label leader horizontal span (pt) */
 
 typedef struct {
     const HMObj *o;
@@ -220,6 +221,36 @@ static double legend_block_h(const RObj *r, const RObj *tg, const char *title,
  * (npc y of the block's top) downward, so a caller can stack them.
  * Horizontal legends (top/beneath) centre themselves on the target. `shift`
  * (pt) pushes the whole legend outward past same-side row/col labels. */
+/* Spread label anchors so adjacent labels stay >= gap apart while sitting as
+ * close as possible to their desired positions y0 (npc, y-up, DECREASING with
+ * index = top->bottom). L2-optimal via pool-adjacent-violators, then the whole
+ * stack is shifted to fit within [ylo,yhi]. Deterministic (no RNG). */
+static void spread_labels(const double *y0, int n, double gap,
+                          double ylo, double yhi, double *y1) {
+    if (n <= 0) return;
+    /* a[i] = -y0[i] is INCREASING; a spacing q[i+1]-q[i] >= gap becomes
+     * "r[i] = q[i] - i*gap is non-decreasing" — isotonic regression of c[i]. */
+    double *val = malloc(n * sizeof(double));
+    int *len = malloc(n * sizeof(int));
+    int m = 0;
+    for (int i = 0; i < n; i++) {
+        val[m] = -y0[i] - i * gap; len[m] = 1; m++;
+        while (m > 1 && val[m - 1] < val[m - 2]) {          /* pool violators */
+            double tot = val[m - 1] * len[m - 1] + val[m - 2] * len[m - 2];
+            int L = len[m - 1] + len[m - 2];
+            val[m - 2] = tot / L; len[m - 2] = L; m--;
+        }
+    }
+    int idx = 0;
+    for (int b = 0; b < m; b++)
+        for (int k = 0; k < len[b]; k++, idx++)
+            y1[idx] = -(val[b] + idx * gap);               /* q[i]=r[i]+i*gap; y1=-q */
+    double top = y1[0], bot = y1[n - 1];                    /* top >= bot (y-up) */
+    double shift = top > yhi ? yhi - top : bot < ylo ? ylo - bot : 0;
+    for (int i = 0; i < n; i++) y1[i] += shift;
+    free(val); free(len);
+}
+
 static void draw_one_legend(GTable *T, const RObj *r, const RObj *tg,
                             const PlotSpec *spec, double dmin, double dmax,
                             const char *title, double baseH,
@@ -391,6 +422,10 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                                      : fill_map_value(&vir, col->num[r], lo, hi);
                 ro[i].ann_continuous = 1;           /* own colorbar scale */
                 ro[i].ann_dmin = lo; ro[i].ann_dmax = hi; ro[i].ann_fill = vir;
+            }
+            if (o->label_data) {
+                if (ro[i].ann_horiz) { sprintf(err, "labels=data needs a vertical annotation (place with left_of/right_of)"); return -1; }
+                if (ro[i].ann_continuous) { sprintf(err, "labels=data needs a categorical annotation"); return -1; }
             }
             ro[i].nr = ro[i].ann_horiz ? 1 : ro[i].ann_n;
             ro[i].nc = ro[i].ann_horiz ? ro[i].ann_n : 1;
@@ -566,6 +601,21 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             if (r->o->colnames == SIDE_TOP    && fabs(r->b + r->h - 1) < EPS)  shiftT = fmax(shiftT, e);
         }
     }
+    /* pass A2: in-situ annotation labels (labels=data) reserve outward margin,
+     * like row names — a leader span plus the widest value label. */
+    for (int i = 0; i < n; i++) {
+        RObj *r = &ro[i];
+        if (r->o->type != HM_ANNOTATION || !r->o->label_data || r->ann_horiz || !r->ann_f) continue;
+        double wmax = 0;
+        for (int k = 0; k < r->ann_f->nlev; k++) {
+            double tw = text_w(cr, SZ_AXIS_TEXT, r->ann_f->levels[k]);
+            if (tw > wmax) wmax = tw;
+        }
+        double e = ANN_LEAD + TXT_GAP + wmax;
+        int right = r->o->place.kind != PL_LEFT_OF;
+        if (right && fabs(r->l + r->w - 1) < EPS) shiftR = fmax(shiftR, e);
+        if (!right && fabs(r->l) < EPS)           shiftL = fmax(shiftL, e);
+    }
     marL = fmax(marL, MARGIN + shiftL);
     marR = fmax(marR, MARGIN + shiftR);
     marT = fmax(marT, MARGIN + shiftT);
@@ -710,6 +760,46 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                         g->x0 = r->l; g->x1 = r->l + r->w;
                     }
                 }
+            }
+            /* in-situ value labels: one per contiguous run, spread vertically and
+             * joined to the run's true position by a colored bezier leader
+             * (wheatmap's label.use.data). Vertical categorical strips only. */
+            if (r->o->label_data && !r->ann_horiz && r->ann_f) {
+                int right = r->o->place.kind != PL_LEFT_OF;
+                double edge = right ? r->l + r->w : r->l;
+                double txt_x = right ? edge + PTX(ANN_LEAD) : edge - PTX(ANN_LEAD);
+                double *cy = malloc(r->ann_n * sizeof(double));   /* run true centre (npc) */
+                double *ty = malloc(r->ann_n * sizeof(double));   /* spread label position */
+                int *rlev = malloc(r->ann_n * sizeof(int));
+                int nrun = 0;
+                for (int s = 0; s < r->ann_n; ) {
+                    int lev = r->ann_f->idx[r->ann_ord[s]], e = s;
+                    while (e + 1 < r->ann_n && r->ann_f->idx[r->ann_ord[e + 1]] == lev) e++;
+                    cy[nrun] = r->b + r->h * (1.0 - (s + e + 1) / 2.0 / r->ann_n);
+                    rlev[nrun] = lev; nrun++; s = e + 1;
+                }
+                spread_labels(cy, nrun, PTY(axH * 1.05), r->b, r->b + r->h, ty);
+                for (int k = 0; k < nrun; k++) {
+                    if (rlev[k] < 0) continue;                    /* NA run */
+                    Col c = r->ann_pal[rlev[k]];
+                    const int NB = 16;                            /* cubic bezier, horizontal
+                        * tangents: P0,P1 at the strip edge, P2,P3 at the label */
+                    double *px = malloc(NB * sizeof(double)), *py = malloc(NB * sizeof(double));
+                    double ym = (cy[k] + ty[k]) / 2;
+                    for (int j = 0; j < NB; j++) {
+                        double u = 1.0 - (double)j / (NB - 1), tt = 1.0 - u;
+                        double b0 = u*u*u, b1 = 3*u*u*tt, b2 = 3*u*tt*tt, b3 = tt*tt*tt;
+                        px[j] = (b0 + b1) * edge + (b2 + b3) * txt_x;
+                        py[j] = b0 * cy[k] + (b1 + b2) * ym + b3 * ty[k];
+                    }
+                    g = gt_add(T, G_POLYLINE, CR, CC, CR, CC);
+                    g->n = NB; g->px = px; g->py = py; g->col = c; g->lw = lw_pt(0.5);
+                    g = gt_add(T, G_TEXT, CR, CC, CR, CC);
+                    g->str = r->ann_f->levels[rlev[k]]; g->size = SZ_AXIS_TEXT; g->col = c;
+                    g->tx = right ? txt_x + PTX(TXT_GAP * 0.5) : txt_x - PTX(TXT_GAP * 0.5);
+                    g->ty = ty[k]; g->hj = right ? 0 : 1; g->va = V_INKCENTER;
+                }
+                free(cy); free(ty); free(rlev);
             }
         }
         /* HM_LEGEND is drawn separately, as rigid margin chrome, below */
