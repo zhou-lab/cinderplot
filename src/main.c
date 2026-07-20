@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 static const char *USAGE =
     "usage: cinderplot [DSL-expr | flags] [data.csv] [-o out.pdf|.svg|.png] [--size WxH] [--dpi N] [--dump-spec]\n"
@@ -25,6 +26,52 @@ static const char *USAGE =
     "         [--log x|y|xy]                              (desugar to the DSL)\n"
     "  data \"-\" or omitted = stdin\n"
     "  --version, --help\n";
+
+/* A modern, sectioned --help. Colour is enabled for a TTY (or CLICOLOR_FORCE)
+ * and suppressed by NO_COLOR, so piped/redirected output stays plain text. */
+static void print_help(void) {
+    int color = (isatty(fileno(stdout)) || getenv("CLICOLOR_FORCE")) && !getenv("NO_COLOR");
+    const char *E  = color ? "\033[1;38;5;208m" : "";   /* ember, bold (name)     */
+    const char *H  = color ? "\033[1;38;5;214m" : "";   /* amber, bold (headings) */
+    const char *K  = color ? "\033[38;5;80m"    : "";   /* cyan  (code / keywords)*/
+    const char *G  = color ? "\033[38;5;114m"   : "";   /* green (verbs)          */
+    const char *D  = color ? "\033[38;5;245m"   : "";   /* dim grey (comments)    */
+    const char *R  = color ? "\033[0m"          : "";   /* reset                  */
+
+    printf("\n  %s◆ cinderplot%s %s%s%s   %sggplot2-quality plots from a tiny grammar — pure C, no R%s\n\n",
+           E, R, D, CINDERPLOT_VERSION, R, D, R);
+
+    printf("  %sUSAGE%s\n", H, R);
+    printf("    cinderplot %s'<expr>'%s [data] %s-o%s out.{pdf,svg,png} [options]\n", K, R, G, R);
+    printf("    cinderplot %s-x%s COL %s-y%s COL [flags] data.csv %s-o%s out.pdf   %s# shortcut flags → grammar%s\n\n",
+           G, R, G, R, G, R, D, R);
+
+    printf("  %sGRAMMAR%s   %s(compose layers with %s+%s%s)%s\n", H, R, D, K, R, D, R);
+    printf("    %sdata.csv%s        a CSV/TSV — or %s-%s for stdin, %s.gz%s for gzip/bgzip\n", K, R, K, R, K, R);
+    printf("    %saes%s(x, y, …)    map columns to aesthetics\n", G, R);
+    printf("    %sgeom_*%s()        point · line · col · histogram · text · segment · h/v/abline\n", G, R);
+    printf("    %sfacet_wrap%s(~g)  small multiples · %sscale_*%s · %stheme_*%s · %slabs%s(title=…)\n", G, R, G, R, G, R, G, R);
+
+    printf("\n  %sTHREE MODES%s   %s(chosen from the verbs you use)%s\n", H, R, D, R);
+    printf("    %splots%s     %saes(…) + geom_*()%s              %s— the ggplot2 grammar%s\n", G, R, K, R, D, R);
+    printf("    %sheatmaps%s  %sheatmap() + annotation()%s       %s— clustering, dendrograms%s\n", G, R, K, R, D, R);
+    printf("    %sgenome%s    %sregion() + genes() + matrix()%s  %s— locus browser, tabix tracks%s\n", G, R, K, R, D, R);
+
+    printf("\n  %sEXAMPLES%s\n", H, R);
+    printf("    %scinderplot%s %s'mtcars.csv + aes(wt, mpg, colour=factor(cyl)) + geom_point()'%s -o s.pdf\n", D, R, K, R);
+    printf("    %scinderplot%s %s'expr.tsv + heatmap(cluster=both, rownames=right)'%s -o h.png\n", D, R, K, R);
+    printf("    %scinderplot%s %s'region() + genes(\"genes.bed.gz\") + matrix(\"betas.tsv\")'%s -o r.svg\n", D, R, K, R);
+
+    printf("\n  %sOPTIONS%s\n", H, R);
+    printf("    %s-o%s FILE        output; format from the extension (%s.pdf .svg .png%s)\n", G, R, K, R);
+    printf("    %s--size%s WxH     inches; a partial %sWx%s or %sxH%s auto-fits the other axis %s(omit = auto)%s\n", G, R, K, R, K, R, D, R);
+    printf("    %s--dpi%s N        raster density for %s.png%s %s(default 96)%s\n", G, R, K, R, D, R);
+    printf("    %s-x -y -c -f -t -m --log%s   shortcut flags that desugar to the grammar\n", G, R);
+    printf("    %s--dump-spec%s    print the desugared DSL and exit\n", G, R);
+    printf("    %s--version%s  ·  %s--help%s\n", G, R, G, R);
+
+    printf("\n  %sdocs%s  https://github.com/zhou-lab/cinderplot\n\n", D, R);
+}
 
 static int appendf(char *buf, size_t cap, size_t *len, const char *fmt, ...) {
     if (*len >= cap) return -1;
@@ -94,7 +141,7 @@ int main(int argc, char **argv) {
         }
         else if (!strcmp(a, "--dump-spec")) dump = 1;
         else if (!strcmp(a, "--version") || !strcmp(a, "-V")) { printf("cinderplot %s\n", CINDERPLOT_VERSION); return 0; }
-        else if (!strcmp(a, "-h") || !strcmp(a, "--help")) { printf("%s", USAGE); return 0; }
+        else if (!strcmp(a, "-h") || !strcmp(a, "--help")) { print_help(); return 0; }
         else if (strchr(a, '(')) expr = a;
         else if (a[0] == '-' && a[1]) { fprintf(stderr, "cinderplot: unknown flag %s\n%s", a, USAGE); return 1; }
         else data = a;
