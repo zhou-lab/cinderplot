@@ -58,7 +58,7 @@ static void ramp(const Col *stops, int n, double t, Col *out) {
 
 Col fill_map(const FillScale *fs, double t) {
     /* stop tables (viridis: the standard 10-colour rendering) */
-    static Col vir[10], jet[9], bwr[3];
+    static Col vir[10], jet[9], bwr[3], parula[9];
     static int init = 0;
     if (!init) {
         Col v[10] = {C(0x44,0x01,0x54), C(0x48,0x28,0x78), C(0x3E,0x49,0x89),
@@ -69,12 +69,18 @@ Col fill_map(const FillScale *fs, double t) {
                     C(0x00,0xFF,0xFF), C(0x7F,0xFF,0x7F), C(0xFF,0xFF,0x00),
                     C(0xFF,0x7F,0x00), C(0xFF,0x00,0x00), C(0x7F,0x00,0x00)};
         Col b[3] = {C(0x00,0x00,0xFF), C(0xFF,0xFF,0xFF), C(0xFF,0x00,0x00)};
-        memcpy(vir, v, sizeof v); memcpy(jet, j, sizeof j); memcpy(bwr, b, sizeof b);
+        /* MATLAB/pals parula: indigo -> blue -> cyan -> green -> yellow */
+        Col pa[9] = {C(0x35,0x2A,0x87), C(0x0F,0x5C,0xDD), C(0x12,0x7D,0xD8),
+                     C(0x06,0x9C,0xC5), C(0x21,0xB4,0x9E), C(0x79,0xBD,0x69),
+                     C(0xC2,0xBD,0x4A), C(0xFA,0xC4,0x2C), C(0xF9,0xFB,0x0E)};
+        memcpy(vir, v, sizeof v); memcpy(jet, j, sizeof j);
+        memcpy(bwr, b, sizeof b); memcpy(parula, pa, sizeof pa);
         init = 1;
     }
     Col out;
     switch (fs->kind) {
     case FILL_JET: ramp(jet, 9, t, &out); break;
+    case FILL_PARULA: ramp(parula, 9, t, &out); break;
     case FILL_BWR: ramp(bwr, 3, t, &out); break;
     case FILL_GRADIENT: {
         Col st[2] = {fs->low, fs->high};
@@ -128,4 +134,17 @@ int parse_color(const char *s, Col *out) {
     for (size_t i = 0; i < sizeof named / sizeof *named; i++)
         if (!strcmp(s, named[i].n)) { *out = C(named[i].r, named[i].g, named[i].b); return 0; }
     return -1;
+}
+
+/* cytoband gieStain -> colour: grey ramp for gpos*, red centromere. Shared by
+ * the grammar-mode ideogram (render.c) and the cytoband track (render_tracks.c).
+ * Values match the former static in render.c exactly (byte-identical output). */
+Col stain_color(const char *s) {
+    if (!strcmp(s, "acen")) { Col c = {0.878, 0, 0}; return c; }      /* #E00000 */
+    if (!strcmp(s, "gneg")) return C_WHITE;
+    if (!strcmp(s, "gpos25")) { Col c = {0.753, 0.753, 0.753}; return c; }
+    if (!strcmp(s, "gpos50")) { Col c = {0.565, 0.565, 0.565}; return c; }
+    if (!strcmp(s, "gpos75")) { Col c = {0.376, 0.376, 0.376}; return c; }
+    if (!strcmp(s, "gpos100")) { Col c = {0, 0, 0}; return c; }
+    Col c = {0.502, 0.502, 0.502}; return c;                          /* gvar/stalk */
 }

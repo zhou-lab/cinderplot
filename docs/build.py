@@ -15,7 +15,10 @@ Datasets live in the sibling cinderplot-examples repo (not here). Point at them
 with $CINDERPLOT_EXAMPLES (default: ../cinderplot-examples). The binary is
 $CINDERPLOT (default: the built ./cinderplot at the repo root).
 
-Run from anywhere:  python3 docs/build.py
+Rendering is incremental: `python3 docs/build.py` only builds figures whose
+output is missing and always rebuilds the HTML. Re-render specific figures with
+`python3 docs/build.py <slug> ...`, everything with `--all`, or just the HTML
+with `--html`. (Editing one figure only re-renders that one.)
 """
 import base64, html, os, pathlib, subprocess
 
@@ -107,6 +110,35 @@ SECTIONS = [
          'Heatmap(m, name = "z", cluster_rows = TRUE, cluster_columns = TRUE,\n'
          '        left_annotation = rowAnnotation(cyl = factor(mtcars$cyl)))'),
     ]),
+    ("Genomics", [
+        # whole-genome CNV: per-bin log2 ratios + CBS segment lines over a genome
+        # coordinate axis (scale_x_genome) with a cytoband ideogram. Real K562
+        # (EPICv2) data; R reference is sesame's visualizeSegments (not ggplot2).
+        ("k562cnv", "Whole-genome CNV",
+         'data/k562.bins.tsv'
+         ' + aes(chrom=chrom, x=start, xend=end, y=log2ratio, colour=log2ratio)'
+         ' + geom_point(size=0.5)'
+         ' + geom_segment(data="data/k562.segments.tsv", y=seg.mean, color="black")'
+         ' + scale_x_genome("data/hg38.seqinfo.tsv")'
+         ' + scale_colour_gradient2(low="#3b4cc0", mid="#dcdcdc", high="#b40426", midpoint=0, limits=c(-0.3,0.3))'
+         ' + ideogram("data/hg38.cytoband.tsv")'
+         ' + labs(title="K562 copy number", y="log2 ratio")',
+         "# K562 copy number, EPICv2 (sesame)\n"
+         "library(sesame)\n"
+         "visualizeSegments(cnv)  # bins + CBS segments + ideogram, whole-genome x"),
+        # locus browser fused with a genome-anchored heatmap: cytoband + gene
+        # models + probe->column map lines + a per-sample beta heatmap (parula).
+        # Long/tidy betas (chrom beg end Probe_ID beta sample_name). R ref = sesame.
+        ("region", "Region view (anchored heatmap)",
+         'region(chr20:44616522-44655233)'
+         ' + cytoband("data/hg38.cytoband.tsv", height=0.5)'
+         ' + genes("data/region_genes.bed", height=5)'
+         ' + matrix("data/region_betas_long.tsv", name="betas", cluster=samples, height=18)',
+         "# ADA locus methylation, HM450 (sesame)\n"
+         "library(sesame)\n"
+         'visualizeRegion("chr20", 44616522, 44655233, betas,\n'
+         '                platform = "HM450", cluster.samples = TRUE)'),
+    ]),
 ]
 
 # Themes showcase: the same scatter under each theme. cinderplot renders these
@@ -133,50 +165,91 @@ DATASETS = [
     ("betas",    "data/gm12878_betas.tsv",   None),   # GM12878 methylation betas (TSV)
 ]
 
+# figures rendered at a non-default size (WxH inches); genome plots are wide.
+SIZES = {"k562cnv": "12x3.6", "region": "5x14"}
+# figures whose gallery card spans the full row (wide banners).
+WIDE = {"k562cnv", "region"}
+# figures rendered as PNG instead of SVG — dense scatters / heatmaps (thousands
+# of cells) are far lighter as a raster than as per-element vector shapes.
+RASTER = {"k562cnv", "region"}
+
+def cp_ext(slug):
+    return "png" if slug in RASTER else "svg"
+
 def no_gg(slug):
     """Slugs whose R reference needs a non-base package, so render() skips the
-    gg PNG: theme showcases (same ggplot), the heatmap (ComplexHeatmap), and the
-    repelled labels (ggrepel)."""
-    return slug.startswith("theme-") or slug in ("heatmap", "textlabels")
+    gg PNG: theme showcases (same ggplot), the heatmap (ComplexHeatmap), the
+    repelled labels (ggrepel), and the CNV plot (sesame)."""
+    return slug.startswith("theme-") or slug in ("heatmap", "textlabels", "k562cnv", "region")
 
-def render():
+def _up_to_date(slug):
+    """A figure is up to date when its cinderplot output exists (and, for
+    figures that have a ggplot reference, the gg PNG too)."""
+    if not (FIGS / f"{slug}-cp.{cp_ext(slug)}").exists():
+        return False
+    if not no_gg(slug) and not (FIGS / f"{slug}-gg.png").exists():
+        return False
+    return True
+
+def render(only=None, force=False):
+    """Render figures into FIGS. By default only figures whose output is
+    MISSING are (re)built; pass `only` (a set/list of slugs) to force exactly
+    those, or force=True to rebuild everything. Re-running R and cinderplot for
+    unchanged figures is the slow part, so this skips them."""
     if not EXAMPLES.is_dir():
         raise SystemExit(f"example datasets not found at {EXAMPLES}\n"
                          f"clone zhou-lab/cinderplot-examples beside this repo, "
                          f"or set CINDERPLOT_EXAMPLES.")
     FIGS.mkdir(parents=True, exist_ok=True)
     (FIGS.parent / ".nojekyll").touch()   # serve the examples Pages verbatim
+
+    if only is not None:
+        targets = [v for v in VARIANTS if v[0] in set(only)]
+    elif force:
+        targets = list(VARIANTS)
+    else:
+        targets = [v for v in VARIANTS if not _up_to_date(v[0])]
+    if not targets:
+        print("figures up to date (nothing to render)")
+        return
+    print("rendering: " + ", ".join(slug for slug, *_ in targets))
+
     tmp = HERE / "_gen"
     tmp.mkdir(exist_ok=True)
-    # 0. export any missing R datasets to <examples>/data/
-    exp = ["suppressMessages(library(ggplot2))"]
-    for _v, csv, expr in DATASETS:
-        if expr and not (EXAMPLES / csv).exists():
-            exp.append(f"write.csv({expr}, '{csv}', row.names=FALSE)")
-    (tmp / "export.R").write_text("\n".join(exp) + "\n")
-    subprocess.run(["Rscript", str(tmp / "export.R")], cwd=EXAMPLES, check=True,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    # 1. ggplot references via one R script (pdf device; no cairo/X11 needed)
-    r = ["suppressMessages({library(ggplot2); library(scales)})"]
-    for var, csv, _e in DATASETS:
-        rd = "read.delim" if csv.endswith(".tsv") else "read.csv"
-        r.append(f"{var} <- {rd}('{csv}')")
-    for slug, _t, _cp, rc in VARIANTS:
-        if no_gg(slug):
-            continue                      # cinderplot figure only, no ggplot2 gg
-        r.append(f"ggsave('{FIGS / (slug + '-gg.pdf')}', {rc}, width=6, height=4)")
-    (tmp / "gen.R").write_text("\n".join(r) + "\n")
-    subprocess.run(["Rscript", str(tmp / "gen.R")], cwd=EXAMPLES, check=True,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    # 2. rasterise ggplot PDFs, render cinderplot SVGs (both read <examples>/data)
-    for slug, _t, cp, _rc in VARIANTS:
+    # 0. export any missing R datasets to <examples>/data/ (only if some are absent)
+    exp = [f"write.csv({expr}, '{csv}', row.names=FALSE)"
+           for _v, csv, expr in DATASETS if expr and not (EXAMPLES / csv).exists()]
+    if exp:
+        (tmp / "export.R").write_text("suppressMessages(library(ggplot2))\n"
+                                      + "\n".join(exp) + "\n")
+        subprocess.run(["Rscript", str(tmp / "export.R")], cwd=EXAMPLES, check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # 1. ggplot references — one R script, only for the targeted non-no_gg figures
+    gg = [(slug, rc) for slug, _t, _cp, rc in targets if not no_gg(slug)]
+    if gg:
+        r = ["suppressMessages({library(ggplot2); library(scales)})"]
+        for var, csv, _e in DATASETS:
+            rd = "read.delim" if csv.endswith(".tsv") else "read.csv"
+            r.append(f"{var} <- {rd}('{csv}')")
+        for slug, rc in gg:
+            r.append(f"ggsave('{FIGS / (slug + '-gg.pdf')}', {rc}, width=6, height=4)")
+        (tmp / "gen.R").write_text("\n".join(r) + "\n")
+        subprocess.run(["Rscript", str(tmp / "gen.R")], cwd=EXAMPLES, check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # 2. rasterise ggplot PDFs, render cinderplot figures (both read <examples>/data)
+    for slug, _t, cp, _rc in targets:
         if not no_gg(slug):
             subprocess.run(["pdftoppm", "-r", "150", "-png", "-singlefile",
                             str(FIGS / f"{slug}-gg.pdf"), str(FIGS / f"{slug}-gg")],
                            check=True)
             (FIGS / f"{slug}-gg.pdf").unlink(missing_ok=True)   # keep only PNG
-        subprocess.run([BIN, cp, "-o", str(FIGS / f"{slug}-cp.svg")],
-                       cwd=EXAMPLES, check=True, stdout=subprocess.DEVNULL)
+        ext = cp_ext(slug)
+        cmd = [BIN, cp, "-o", str(FIGS / f"{slug}-cp.{ext}")]
+        if slug in SIZES:
+            cmd += ["--size", SIZES[slug]]
+        if ext == "png":
+            cmd += ["--dpi", "200"]
+        subprocess.run(cmd, cwd=EXAMPLES, check=True, stdout=subprocess.DEVNULL)
 
 def esc(s):
     return html.escape(s)
@@ -189,9 +262,11 @@ ZOOM_SVG = ('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-w
 def card_html(i, slug, title, cp, rc, src):
     """One figure card. i is the global 1-based index (also shown in the caption
     and used as the zoom button's 0-based data-i)."""
-    cp_cmd = "cinderplot '" + cp.replace(" + ", "\n  + ") + "' \\\n  -o out.svg"
-    return f'''        <figure class="cell" tabindex="0" role="button" aria-label="Figure {i}: {esc(title)} — show code" data-title="{i} · {esc(title)}">
-          <div class="thumb"><button class="zoom" data-i="{i-1}" aria-label="Maximize figure {i}">{ZOOM_SVG}</button><img src="{src(slug,'cp.svg')}" alt="{esc(title)} — cinderplot"></div>
+    out_line = "  -o out.svg" + (f" --size {SIZES[slug]}" if slug in SIZES else "")
+    cp_cmd = "cinderplot '" + cp.replace(" + ", "\n  + ") + "' \\\n" + out_line
+    cls = "cell wide" if slug in WIDE else "cell"
+    return f'''        <figure class="{cls}" tabindex="0" role="button" aria-label="Figure {i}: {esc(title)} — show code" data-title="{i} · {esc(title)}">
+          <div class="thumb"><button class="zoom" data-i="{i-1}" aria-label="Maximize figure {i}">{ZOOM_SVG}</button><img src="{src(slug, 'cp.' + cp_ext(slug))}" alt="{esc(title)} — cinderplot"></div>
           <figcaption><span class="num">{i}</span>{esc(title)}</figcaption>
           <template class="code">
             <div class="snip"><span class="k">cinderplot</span><pre>{esc(cp_cmd)}</pre></div>
@@ -264,6 +339,7 @@ STYLE = """<style>
   .smallprint a:hover{text-decoration:underline;}
   .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(212px,1fr));gap:16px;}
   .cell{position:relative;margin:0;cursor:pointer;}
+  .cell.wide{grid-column:1 / -1;}   /* full-width banner (e.g. whole-genome plots) */
   .thumb{position:relative;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#fff;
          box-shadow:var(--shadow);transition:border-color .15s,transform .15s;}
   .thumb img{display:block;width:100%;height:auto;}
@@ -660,6 +736,29 @@ def build_html():
              gbody.replace("__SECTIONS__", sections(datauri))))
     print(f"wrote docs/index.html, docs/gallery.html, and {PREVIEW}")
 
+USAGE = """usage: python3 docs/build.py [FIGURE ...] [--all] [--html]
+
+  (no args)     render only figures whose output is MISSING, then rebuild HTML
+  FIGURE ...    force-render just these figure slugs, then rebuild HTML
+  --all         force-render every figure, then rebuild HTML
+  --html        rebuild HTML only (no figure rendering)
+
+  Editing one figure? re-render just it:  python3 docs/build.py k562cnv
+"""
+
 if __name__ == "__main__":
-    render()
+    import sys
+    args = sys.argv[1:]
+    if "-h" in args or "--help" in args:
+        print(USAGE); raise SystemExit(0)
+    html_only = "--html" in args
+    force = "--all" in args
+    slugs = [a for a in args if not a.startswith("-")]
+    known = {v[0] for v in VARIANTS}
+    unknown = [s for s in slugs if s not in known]
+    if unknown:
+        raise SystemExit(f"unknown figure slug(s): {', '.join(unknown)}\n"
+                         f"known: {', '.join(sorted(known))}")
+    if not html_only:
+        render(only=slugs or None, force=force)
     build_html()

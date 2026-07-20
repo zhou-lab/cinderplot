@@ -223,8 +223,20 @@ static int parse_trk_args(P *p, TrackObj *o) {
             } else if (!strcmp(key, "data")) {
                 o->data = string_lit(p);
                 if (!o->data) return fail(p, "data= expects a quoted path", "");
+            } else if (!strcmp(key, "cluster")) {
+                char *v = ident(p);
+                if (!v) return fail(p, "cluster= expects samples or none", "");
+                if (!strcmp(v, "samples") || !strcmp(v, "rows")) o->cluster = 1;
+                else if (!strcmp(v, "none")) o->cluster = 0;
+                else return fail(p, "cluster=%s invalid; use samples or none", v);
+            } else if (!strcmp(key, "rownames")) {
+                char *v = ident(p);
+                if (!v) return fail(p, "rownames= expects on or off", "");
+                if (!strcmp(v, "off") || !strcmp(v, "none") || !strcmp(v, "hide")) o->hide_rownames = 1;
+                else if (!strcmp(v, "on") || !strcmp(v, "show")) o->hide_rownames = 0;
+                else return fail(p, "rownames=%s invalid; use on or off", v);
             } else return fail(p, "track option `%s` not implemented; supported: "
-                                  "name, height, max, color, data", key);
+                                  "name, height, max, color, data, cluster, rownames", key);
         } else {
             p->s = save;
             char *v = raw_token(p);
@@ -329,6 +341,7 @@ done:
 static int parse_grad_scale(P *p, FillScale *fs, const char *k, const char *fn) {
     if (!strcmp(k, "viridis")) fs->kind = FILL_VIRIDIS;
     else if (!strcmp(k, "jet")) fs->kind = FILL_JET;
+    else if (!strcmp(k, "parula")) fs->kind = FILL_PARULA;
     else if (!strcmp(k, "bwr")) fs->kind = FILL_BWR;
     else if (!strcmp(k, "gradient")) {
         fs->kind = FILL_GRADIENT;
@@ -340,7 +353,7 @@ static int parse_grad_scale(P *p, FillScale *fs, const char *k, const char *fn) 
     } else {
         char msg[128];
         snprintf(msg, sizeof msg, "`%s%s()` not implemented; supported: "
-                 "viridis, jet, bwr, gradient, gradient2", fn, k);
+                 "viridis, jet, parula, bwr, gradient, gradient2", fn, k);
         return fail(p, "%s", msg);
     }
     skip_ws(p);
@@ -512,6 +525,9 @@ static int parse_term(P *p, PlotSpec *spec) {
                 } else if ((gt == GEOM_TEXT || gt == GEOM_LABEL) && !strcmp(key, "size")) {
                     l->txt_size = strtod(p->s, (char **)&p->s);
                     if (l->txt_size <= 0) return fail(p, "geom_text(size=...) must be > 0", "");
+                } else if (gt == GEOM_POINT && !strcmp(key, "size")) {
+                    l->point_size = strtod(p->s, (char **)&p->s);
+                    if (l->point_size <= 0) return fail(p, "geom_point(size=...) must be > 0", "");
                 } else if ((gt == GEOM_TEXT || gt == GEOM_LABEL) && !strcmp(key, "nudge_x")) {
                     l->nudge_x = strtod(p->s, (char **)&p->s);
                 } else if ((gt == GEOM_TEXT || gt == GEOM_LABEL) && !strcmp(key, "nudge_y")) {
@@ -607,6 +623,8 @@ static int parse_term(P *p, PlotSpec *spec) {
     if (!strcmp(name, "interval")) { TrackObj *o = trk_new(p, spec, TRK_INTERVAL); return o ? parse_trk_args(p, o) : -1; }
     if (!strcmp(name, "genes"))    { TrackObj *o = trk_new(p, spec, TRK_GENES);    return o ? parse_trk_args(p, o) : -1; }
     if (!strcmp(name, "arcs"))     { TrackObj *o = trk_new(p, spec, TRK_ARCS);     return o ? parse_trk_args(p, o) : -1; }
+    if (!strcmp(name, "matrix"))   { TrackObj *o = trk_new(p, spec, TRK_MATRIX);   return o ? parse_trk_args(p, o) : -1; }
+    if (!strcmp(name, "cytoband")) { TrackObj *o = trk_new(p, spec, TRK_CYTOBAND); return o ? parse_trk_args(p, o) : -1; }
 
     /* ---- matrix (wheatmap) mode ---- */
     if (!strcmp(name, "heatmap")) {
@@ -634,8 +652,10 @@ static int parse_term(P *p, PlotSpec *spec) {
     if (!strcmp(name, "scale_fill_manual") || !strcmp(name, "scale_colour_manual")
         || !strcmp(name, "scale_color_manual"))
         return parse_manual_scale(p, spec, name);
-    if (!strncmp(name, "scale_fill_", 11))
+    if (!strncmp(name, "scale_fill_", 11)) {
+        spec->has_fill = 1;
         return parse_grad_scale(p, &spec->fill, name + 11, "scale_fill_");
+    }
     if (!strncmp(name, "scale_colour_", 13) || !strncmp(name, "scale_color_", 12)) {
         const char *k = name + (name[10] == 'u' ? 13 : 12);   /* colour vs color */
         spec->has_colour_scale = 1;
@@ -673,7 +693,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                    "facet_wrap(~var), scale_x_log10(), scale_y_log10(), scale_*_continuous(), xlim(), ylim(), "
                    "scale_*_manual(), theme_bw()/theme_minimal()/theme_classic()/..., "
                    "heatmap(), annotation(), legend(), scale_fill_*(), "
-                   "region(), coverage(), interval(), genes(), arcs()", name);
+                   "region(), coverage(), interval(), genes(), arcs(), matrix(), cytoband()", name);
 }
 
 int dsl_parse(const char *src, PlotSpec *spec, char *err) {

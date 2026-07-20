@@ -270,17 +270,6 @@ static double genome_off(const GenomeScale *g, const char *chr) {
     return -1;   /* sentinel: chromosome absent from seqinfo */
 }
 
-/* cytoband gieStain -> colour: grey ramp for gpos*, red centromere */
-static Col stain_color(const char *s) {
-    if (!strcmp(s, "acen")) { Col c = {0.878, 0, 0}; return c; }      /* #E00000 */
-    if (!strcmp(s, "gneg")) return C_WHITE;
-    if (!strcmp(s, "gpos25")) { Col c = {0.753, 0.753, 0.753}; return c; }
-    if (!strcmp(s, "gpos50")) { Col c = {0.565, 0.565, 0.565}; return c; }
-    if (!strcmp(s, "gpos75")) { Col c = {0.376, 0.376, 0.376}; return c; }
-    if (!strcmp(s, "gpos100")) { Col c = {0, 0, 0}; return c; }
-    Col c = {0.502, 0.502, 0.502}; return c;                          /* gvar/stalk */
-}
-
 int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 double w_pt, double h_pt, char *err) {
     /* ---- layer summary ---- */
@@ -1057,7 +1046,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 }
                 g = gt_add(T, G_POINTS, R, C, R, C);
                 g->n = np; g->px = px; g->py = py; g->pcol = pcol;
-                g->radius = PT_RADIUS; g->clip = 1;
+                g->radius = spec->layers[li].point_size > 0
+                          ? PT_RADIUS * spec->layers[li].point_size / 1.5 : PT_RADIUS;
+                g->clip = 1;
             } else if (gt == GEOM_LINE) {
                 int ngrp = cf ? cf->nlev : 1;
                 for (int grp = 0; grp < ngrp; grp++) {

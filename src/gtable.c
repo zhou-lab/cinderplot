@@ -115,6 +115,23 @@ void gt_resolve(GTable *t, double x, double y, double w, double h) {
             (t->rowh[i].k == U_PT ? t->rowh[i].v : t->rowh[i].v * per_h);
 }
 
+/* chromosome-ideogram outline: a horizontal "stadium" (semicircle end caps) with
+ * an optional inward pinch over [cl, crr] (the centromere). Builds the path. */
+static void ideo_path(cairo_t *cr, double xl, double xr, double top, double bot,
+                      double cyc, double rad, int pinch, double cl, double crr) {
+    double cc = (cl + crr) / 2, dip = (bot - top) * 0.20;
+    cairo_move_to(cr, xl + rad, top);
+    if (pinch) { cairo_line_to(cr, cl, top); cairo_line_to(cr, cc, top + dip);
+                 cairo_line_to(cr, crr, top); }
+    cairo_line_to(cr, xr - rad, top);
+    cairo_arc(cr, xr - rad, cyc, rad, -M_PI / 2, M_PI / 2);      /* right cap */
+    if (pinch) { cairo_line_to(cr, crr, bot); cairo_line_to(cr, cc, bot - dip);
+                 cairo_line_to(cr, cl, bot); }
+    cairo_line_to(cr, xl + rad, bot);
+    cairo_arc(cr, xl + rad, cyc, rad, M_PI / 2, 3 * M_PI / 2);   /* left cap */
+    cairo_close_path(cr);
+}
+
 void gt_render(GTable *t, cairo_t *cr) {
     for (int gi = 0; gi < t->ngrobs; gi++) {
         Grob *g = &t->grobs[gi];
@@ -153,6 +170,31 @@ void gt_render(GTable *t, cairo_t *cr) {
             cairo_paint(cr);
             cairo_restore(cr);
             cairo_surface_destroy(img);
+            break;
+        }
+        case G_IDEOGRAM: {
+            /* chromosome ideogram: rounded caps, centromere pinch, banded fill.
+             * px[i]/py[i] = band start/end npc-x, pcol[i] = colour; x0..x1 = the
+             * centromere npc-x range (x1<=x0 => no pinch). */
+            double bh = rh * 0.5, cyc = ry + rh * 0.5;
+            double top = cyc - bh / 2, bot = cyc + bh / 2, rad = bh * 0.5;
+            double xl = rx, xr = rx + rw;
+            int pinch = g->x1 > g->x0;
+            double cl = DX(g->x0), crr = DX(g->x1);
+            cairo_save(cr);
+            ideo_path(cr, xl, xr, top, bot, cyc, rad, pinch, cl, crr);
+            cairo_clip(cr);
+            for (int i = 0; i < g->n; i++) {              /* bands, clipped to shape */
+                set_col(cr, g->pcol[i]);
+                double bx0 = DX(g->px[i]), bx1 = DX(g->py[i]);
+                cairo_rectangle(cr, bx0, top, bx1 - bx0, bh);
+                cairo_fill(cr);
+            }
+            cairo_restore(cr);
+            ideo_path(cr, xl, xr, top, bot, cyc, rad, pinch, cl, crr);   /* outline */
+            { Col oc = {0.4, 0.4, 0.4}; set_col(cr, oc); }
+            cairo_set_line_width(cr, lw_pt(0.5));
+            cairo_stroke(cr);
             break;
         }
         case G_POLYLINE:

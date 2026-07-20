@@ -87,7 +87,7 @@ int log10_breaks(double tlo, double thi, double *tmaj, char **labs, int max_out)
 void hue_palette(int n, Col *out);
 
 /* continuous fill scales */
-typedef enum { FILL_VIRIDIS, FILL_JET, FILL_BWR, FILL_GRADIENT, FILL_GRADIENT2 } FillKind;
+typedef enum { FILL_VIRIDIS, FILL_JET, FILL_BWR, FILL_GRADIENT, FILL_GRADIENT2, FILL_PARULA } FillKind;
 typedef struct {
     FillKind kind;
     Col low, mid, high;      /* gradient / gradient2 */
@@ -99,6 +99,7 @@ Col fill_map(const FillScale *fs, double t01);   /* t in [0,1] */
 /* map v in [dmin,dmax] -> colour, honouring gradient2's midpoint */
 Col fill_map_value(const FillScale *fs, double v, double dmin, double dmax);
 int parse_color(const char *s, Col *out);        /* names + #RRGGBB; 0 = ok */
+Col stain_color(const char *s);                  /* cytoband gieStain -> colour */
 static const Col C_NA = {0.753, 0.753, 0.753};   /* #C0C0C0, wheatmap na.color */
 
 /* ---------- csv.c: data frame ---------- */
@@ -124,7 +125,7 @@ static inline Unit upt(double v)   { Unit u = {U_PT, v};   return u; }
 static inline Unit unull(double w) { Unit u = {U_NULL, w}; return u; }
 
 typedef enum { G_RECT, G_LINE, G_POLYLINE, G_TEXT, G_POINTS, G_TABLE,
-               G_AXIS_X, G_AXIS_Y, G_IMAGE } GType;
+               G_AXIS_X, G_AXIS_Y, G_IMAGE, G_IDEOGRAM } GType;
 typedef enum { V_TOP, V_BOTTOM, V_INKCENTER } VAlign;
 
 typedef struct GTable GTable;
@@ -191,6 +192,7 @@ typedef struct {
     double slope, intercept;    /* geom_abline; hline/vline store value in intercept */
     int has_slope, has_intercept;
     double txt_size;            /* geom_text/label font size (ggplot mm; 0 = default) */
+    double point_size;          /* geom_point size (ggplot units; 0 = default 1.5) */
     int repel;                  /* geom_text_repel/geom_label_repel: force placement */
     double nudge_x, nudge_y;    /* geom_text/label: constant offset (data units) */
 } Layer;
@@ -218,14 +220,17 @@ typedef struct {
 #define MAX_HMOBJS 16
 
 /* track (locus-browser) mode: stacked tracks over one genomic region */
-typedef enum { TRK_COVERAGE, TRK_INTERVAL, TRK_GENES, TRK_ARCS } TrackType;
+typedef enum { TRK_COVERAGE, TRK_INTERVAL, TRK_GENES, TRK_ARCS,
+               TRK_MATRIX, TRK_CYTOBAND } TrackType;
 typedef struct {
     TrackType type;
-    char *data;          /* input file (BED/bedGraph/GFF/BEDPE) */
+    char *data;          /* input file (BED/bedGraph/GFF/BEDPE/matrix TSV/cytoband) */
     char *name;          /* left-margin label */
     double height;       /* row weight (<=0 = auto) */
     double max_value;    /* coverage y-max (<=0 = auto) */
     Col color; int has_color;
+    int cluster;         /* matrix track: 1 = cluster the sample rows */
+    int hide_rownames;   /* matrix track: 1 = don't draw sample row labels */
 } TrackObj;
 #define MAX_TRACKS 12
 
@@ -254,6 +259,7 @@ typedef struct {
     HMObj hobjs[MAX_HMOBJS];
     int nhobjs;
     FillScale fill;
+    int has_fill;                   /* a scale_fill_*() was given (else default) */
     /* grammar mode: continuous colour scale (scale_colour_gradient*) */
     FillScale colour_scale;
     int has_colour_scale;
