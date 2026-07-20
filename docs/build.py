@@ -285,24 +285,18 @@ def card_html(i, slug, title, cp, rc, src):
         </figure>'''
 
 def sections(src):
-    """Render every section: a full-width separator + heading + its figure grid.
-    Figures are numbered globally (1..N) in document order."""
+    """Render all figures as one continuous stream: each section contributes an
+    inline divider (label + rule that fills the rest of the row) followed by its
+    cards, so cards pack continuously across sections. Figures are numbered
+    globally (1..N) in document order."""
     out, i = [], 0
     for sec_title, variants in SECTIONS:
-        cards = []
+        out.append('      <div class="divider"><span class="d__label">{}</span>'
+                   '<span class="d__n">{}</span></div>'.format(esc(sec_title), len(variants)))
         for (slug, title, cp, rc) in variants:
             i += 1
-            cards.append(card_html(i, slug, title, cp, rc, src))
-        out.append('''    <section class="sect">
-      <div class="sep"></div>
-      <button class="sect__title" aria-expanded="true">
-        <span class="caret" aria-hidden="true">&#9656;</span>{}<span class="sect__n">{}</span>
-      </button>
-      <div class="cards">
-{}
-      </div>
-    </section>'''.format(esc(sec_title), len(variants), "\n".join(cards)))
-    return "\n".join(out)
+            out.append(card_html(i, slug, title, cp, rc, src))
+    return '    <div class="stream">\n' + "\n".join(out) + '\n    </div>'
 
 STYLE = """<style>
   :root{
@@ -333,33 +327,25 @@ STYLE = """<style>
   .nav a{color:var(--muted);text-decoration:none;transition:color .15s;}
   .nav a:hover,.nav a.active{color:var(--accent);}
   main.scroll{flex:1 1 auto;min-height:0;overflow-y:auto;padding:20px 0 60px;}
-  .sect{margin:0;}
-  .sep{height:1px;background:var(--line);margin:20px 0 7px;}   /* sits just above the title */
-  .sect__title{display:flex;align-items:center;gap:9px;width:100%;text-align:left;background:none;
-               border:0;cursor:pointer;padding:2px 0;font-family:var(--head);font-weight:600;
-               font-size:1.05rem;color:var(--ink);margin:0 0 14px;}
-  .sect__title .caret{color:var(--accent);font-size:.72em;transition:transform .15s ease;}
-  .sect:not(.collapsed) .sect__title .caret{transform:rotate(90deg);}
-  .sect__title .sect__n{font-family:var(--head);font-weight:600;font-size:.68rem;color:var(--muted);
-                        background:var(--bg);border:1px solid var(--line);border-radius:99px;padding:1px 8px;}
-  .sect.collapsed .sect__title{margin-bottom:0;}
-  .sect.collapsed .cards{display:none;}
-  .galtools{display:flex;justify-content:flex-end;margin:14px 0 2px;}
-  .foldbtn{font-family:var(--head);font-weight:600;font-size:.72rem;letter-spacing:.04em;
-    color:var(--muted);background:none;border:1px solid var(--line);border-radius:7px;
-    padding:5px 13px;cursor:pointer;transition:color .15s,border-color .15s,background .15s;}
-  .foldbtn:hover{color:var(--accent);border-color:var(--accent);background:var(--accent-tint);}
+  /* one continuous stream: cards flow across sections; each section label is an
+     inline divider that grows to fill the rest of its row, so there are no
+     per-section blocks and no ragged gaps between sections. */
+  .stream{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;margin-top:6px;}
+  .divider{flex:1000 1 auto;min-width:150px;display:flex;align-items:center;gap:11px;
+           align-self:center;padding:8px 0 6px;}
+  .divider .d__label{font-family:var(--head);font-weight:600;font-size:.92rem;color:var(--ink);white-space:nowrap;}
+  .divider .d__n{font-family:var(--head);font-weight:600;font-size:.66rem;color:var(--muted);
+                 background:var(--bg);border:1px solid var(--line);border-radius:99px;padding:1px 8px;white-space:nowrap;}
+  .divider::after{content:"";flex:1 1 40px;height:1px;background:var(--line);}
   .smallprint{color:var(--muted);font-size:.76rem;margin:24px 0 0;}
   .smallprint a{color:var(--accent);text-decoration:none;}
   .smallprint a:hover{text-decoration:underline;}
-  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(212px,1fr));gap:16px;}
-  .cell{position:relative;margin:0;cursor:pointer;}
-  /* uniform cards: fixed 4:3 thumbnail, the figure fits inside (centered; the
-     white letterbox blends with the figures' white background) */
+  .cell{flex:1 1 210px;max-width:300px;min-width:170px;position:relative;margin:0;cursor:pointer;}
+  /* the figure fills the card (object-fit: cover): its constraining side scales
+     to the card edge, the other side overflows and is clipped. */
   .thumb{position:relative;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#f5f6f8;
-         box-shadow:var(--shadow);transition:border-color .15s,transform .15s;
-         aspect-ratio:4 / 3;display:flex;align-items:center;justify-content:center;}
-  .thumb img{display:block;max-width:100%;max-height:100%;width:auto;height:auto;background:#fff;}
+         box-shadow:var(--shadow);transition:border-color .15s,transform .15s;aspect-ratio:4 / 3;}
+  .thumb img{display:block;width:100%;height:100%;object-fit:cover;background:#fff;}
   .cell:hover .thumb,.cell:focus-visible .thumb{border-color:var(--accent);transform:translateY(-2px);}
   .cell.on .thumb{border-color:var(--accent);}
   .zoom{position:absolute;top:8px;right:8px;z-index:2;width:26px;height:26px;padding:0;border:0;
@@ -464,7 +450,6 @@ GALLERY_BODY = """
 </div>
 <main class="scroll">
   <div class="wrap">
-    <div class="galtools"><button id="foldAll" class="foldbtn" type="button" aria-pressed="false">Fold all</button></div>
 __SECTIONS__
     <p class="smallprint">Datasets used in these examples (mtcars, quakes, diamonds, …) are available from the
       <a href="https://github.com/zhou-lab/cinderplot-examples">cinderplot-examples</a> repository.</p>
@@ -488,37 +473,6 @@ __SECTIONS__
 <script>
 (function () {
   var cells = [].slice.call(document.querySelectorAll('.cell'));
-
-  // --- foldable sections (expanded by default; a fold/unfold-all toggle) ---
-  var foldBtn = document.getElementById('foldAll');
-  function anyOpen() {
-    return [].slice.call(document.querySelectorAll('.sect')).some(function (s) {
-      return !s.classList.contains('collapsed');
-    });
-  }
-  function syncFoldBtn() {
-    if (!foldBtn) return;
-    var open = anyOpen();
-    foldBtn.textContent = open ? 'Fold all' : 'Unfold all';
-    foldBtn.setAttribute('aria-pressed', open ? 'false' : 'true');
-  }
-  [].slice.call(document.querySelectorAll('.sect__title')).forEach(function (b) {
-    b.addEventListener('click', function () {
-      var collapsed = b.closest('.sect').classList.toggle('collapsed');
-      b.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-      syncFoldBtn();
-    });
-  });
-  if (foldBtn) foldBtn.addEventListener('click', function () {
-    var fold = anyOpen();                        // any open -> fold all; else unfold all
-    [].slice.call(document.querySelectorAll('.sect')).forEach(function (s) {
-      s.classList.toggle('collapsed', fold);
-      var t = s.querySelector('.sect__title');
-      if (t) t.setAttribute('aria-expanded', fold ? 'false' : 'true');
-    });
-    syncFoldBtn();
-  });
-  syncFoldBtn();
 
   // --- code drop-down (push panel) ---
   var drawer = document.getElementById('drawer'),
