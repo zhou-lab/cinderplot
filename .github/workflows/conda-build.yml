@@ -16,8 +16,10 @@ jobs:
       matrix:
         include:
           - {os: ubuntu-latest, name: linux-64}
-          - {os: macos-13,      name: osx-64}
           - {os: macos-14,      name: osx-arm64}
+          # osx-64 (Intel) dropped: GitHub's free macos-13 runners are
+          # deprecated/unavailable, so that job hung indefinitely and never
+          # published. osx-arm64 + linux-64 cover the supported platforms.
     defaults:
       run:
         shell: bash -el {0}
