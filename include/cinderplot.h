@@ -113,6 +113,7 @@ typedef struct {
 typedef struct { int nrow, ncol; Column *cols; } DataFrame;
 
 DataFrame *df_read_csv(const char *path, char *err);   /* "-" = stdin */
+void cp_set_no_header(int on);   /* headerless input: name columns V1, V2, ... (R style) */
 const Column *df_col(const DataFrame *df, const char *name);
 
 typedef struct { int nlev; char **levels; int *idx; } Factor; /* idx[row] or -1 */

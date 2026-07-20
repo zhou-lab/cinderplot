@@ -85,6 +85,9 @@ static int is_na(const char *s) {
     return !*s || !strcmp(s, "NA") || !strcmp(s, "na") || !strcmp(s, "NaN");
 }
 
+static int g_no_header = 0;                          /* treat inputs as headerless */
+void cp_set_no_header(int on) { g_no_header = on; }
+
 DataFrame *df_read_csv(const char *path, char *err) {
     if (!strcmp(path, "stdin")) path = "-";          /* alias for stdin */
     if (!strcmp(path, "-") && isatty(fileno(stdin))) {
@@ -121,21 +124,27 @@ DataFrame *df_read_csv(const char *path, char *err) {
         return NULL;
     }
     int ncol = header.n;
+    int noh = g_no_header;               /* headerless: names V1.. + first record is data */
+    int rowbase = noh ? 1 : 2;           /* file row number of the first *data* line */
 
     StrVec *cells = calloc(ncol, sizeof(StrVec));
     int nrow = 0;
+    if (noh) {                           /* the first record is data, not column names */
+        for (int c = 0; c < ncol; c++) sv_push(&cells[c], header.v[c]);
+        nrow = 1;
+    }
     for (;;) {
         StrVec rec = {0};
         int nf = split_record(&p, &rec, delim);
         if (nf < 0) {
-            snprintf(err, 256, "%s: malformed quoted field in row %d", path, nrow + 2);
+            snprintf(err, 256, "%s: malformed quoted field in row %d", path, nrow + rowbase);
             free(buf);
             return NULL;
         }
         if (nf == 0) break;
         if (nf == 1 && !*rec.v[0]) { free(rec.v[0]); free(rec.v); continue; } /* blank line */
         if (nf != ncol) {
-            sprintf(err, "%s: row %d has %d fields, expected %d", path, nrow + 2, nf, ncol);
+            sprintf(err, "%s: row %d has %d fields, expected %d", path, nrow + rowbase, nf, ncol);
             return NULL;
         }
         for (int c = 0; c < ncol; c++) sv_push(&cells[c], rec.v[c]);
@@ -149,7 +158,8 @@ DataFrame *df_read_csv(const char *path, char *err) {
     df->cols = calloc(ncol, sizeof(Column));
     for (int c = 0; c < ncol; c++) {
         Column *col = &df->cols[c];
-        col->name = header.v[c];
+        if (noh) { col->name = malloc(16); snprintf(col->name, 16, "V%d", c + 1); }
+        else       col->name = header.v[c];
         int numeric = 1;
         for (int r = 0; r < nrow && numeric; r++) {
             const char *s = cells[c].v[r];

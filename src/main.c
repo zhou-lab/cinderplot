@@ -64,6 +64,7 @@ static void print_help(void) {
     printf("    %s-o%s FILE %sor%s FILE  output %s(required)%s — format from the extension (%s.pdf .svg .png%s)\n", G, R, D, R, D, R, K, R);
     printf("    %s--size%s WxH     inches; a partial %sWx%s or %sxH%s auto-fits the other axis %s(omit = auto)%s\n", G, R, K, R, K, R, D, R);
     printf("    %s--dpi%s N        raster density for %s.png%s %s(default 96)%s\n", G, R, K, R, D, R);
+    printf("    %s--no-header%s    headerless input — columns become %sV1, V2, …%s %s(R style)%s\n", G, R, K, R, D, R);
     printf("    %s-x -y -c -f -t -m --log%s   shortcut flags that desugar to the grammar\n", G, R);
     printf("    %s--dump-spec%s    print the desugared DSL and exit\n", G, R);
     printf("    %s--version%s  ·  %s--help%s\n", G, R, G, R);
@@ -141,6 +142,7 @@ int main(int argc, char **argv) {
             }
         }
         else if (!strcmp(a, "--dump-spec")) dump = 1;
+        else if (!strcmp(a, "--no-header") || !strcmp(a, "-H")) cp_set_no_header(1);
         else if (!strcmp(a, "--version") || !strcmp(a, "-V")) { printf("cinderplot %s\n", CINDERPLOT_VERSION); return 0; }
         else if (!strcmp(a, "-h") || !strcmp(a, "--help")) { print_help(); return 0; }
         else if (strchr(a, '(')) expr = a;
