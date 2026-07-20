@@ -20,7 +20,7 @@ output is missing and always rebuilds the HTML. Re-render specific figures with
 `python3 docs/build.py <slug> ...`, everything with `--all`, or just the HTML
 with `--html`. (Editing one figure only re-renders that one.)
 """
-import base64, html, os, pathlib, subprocess
+import base64, html, os, pathlib, re, subprocess
 
 HERE     = pathlib.Path(__file__).resolve().parent      # <repo>/docs
 REPO     = HERE.parent                                  # <repo>
@@ -672,6 +672,11 @@ LANDING_STYLE = """<style>
   @keyframes ember{0%,100%{box-shadow:0 0 8px 1px rgba(255,120,55,.65),0 0 18px 5px rgba(255,90,40,.28);transform:scale(1);}
                    50%{box-shadow:0 0 13px 2px rgba(255,160,80,.9),0 0 28px 9px rgba(255,100,45,.45);transform:scale(1.08);}}
   .ey-em{color:#ff9e4d;}
+  .hbrand .verbadge{align-self:center;font-family:var(--mono);font-size:.7rem;font-weight:600;
+    letter-spacing:.02em;color:#ffd291;background:rgba(255,140,60,.14);
+    border:1px solid rgba(255,140,60,.38);border-radius:99px;padding:2px 9px;text-decoration:none;
+    transition:background .15s,border-color .15s;}
+  .hbrand .verbadge:hover{background:rgba(255,140,60,.24);border-color:rgba(255,140,60,.62);}
   @media (prefers-reduced-motion:reduce){.hbrand .ember{animation:none;}}
   .panel{background:var(--bg);border:1px solid var(--line);border-radius:var(--radius);
          box-shadow:var(--shadow);margin-bottom:18px;overflow:hidden;}
@@ -722,7 +727,7 @@ LANDING_STYLE = """<style>
 LANDING_BODY = """<main>
   <div class="wrap">
     <section class="panel hero">
-      <div class="hbrand" title="C + Cairo render -> cinder"><span class="ember" aria-hidden="true"></span><span class="wm"><span class="cinder">cinder</span>plot</span></div>
+      <div class="hbrand" title="C + Cairo render -> cinder"><span class="ember" aria-hidden="true"></span><span class="wm"><span class="cinder">cinder</span>plot</span><a class="verbadge" href="https://anaconda.org/zhou-lab/cinderplot" title="Latest release on the zhou-lab conda channel">v__VERSION__</a></div>
       <p class="eyebrow">C&#8239;+&#8239;Cairo&#8239;re<span class="ey-em">nder</span> &#8594; cinder</p>
       <h1>Publication-ready graphics from one small, fast binary.</h1>
       <p>cinderplot turns a CSV into a PDF, SVG or PNG with a ggplot2-inspired grammar — panels, hue palettes,
@@ -730,6 +735,7 @@ LANDING_BODY = """<main>
       <div class="cta">
         <a class="btn pri" href="gallery.html">See the gallery →</a>
         <a class="btn" href="https://github.com/zhou-lab/cinderplot">GitHub</a>
+        <a class="btn" href="https://anaconda.org/zhou-lab/cinderplot">conda</a>
       </div>
       <div class="hstats">
         <div class="hstat"><b>__NGEOM__</b><span>geoms</span></div>
@@ -781,10 +787,16 @@ cinderplot 'data.csv
   </div>
 </main>"""
 
+def cinder_version():
+    m = re.search(r'#define\s+CINDERPLOT_VERSION\s+"([^"]+)"',
+                  (REPO / "include" / "cinderplot.h").read_text())
+    return m.group(1) if m else ""
+
 def landing_html():
     def chips(items):
         return "".join(f'<span class="chip">{esc(x)}</span>' for x in items)
     body = (LANDING_BODY
+            .replace("__VERSION__", cinder_version())
             .replace("__NGEOM__", str(len(GEOMS)))
             .replace("__NSCALE__", str(len(SCALES)))
             .replace("__GEOMS__", chips(f"geom_{g}" for g in GEOMS))
