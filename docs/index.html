@@ -33,13 +33,25 @@
                  animation:ember 3.4s ease-in-out infinite;}
   @keyframes ember{0%,100%{box-shadow:0 0 8px 1px rgba(255,120,55,.65),0 0 18px 5px rgba(255,90,40,.28);transform:scale(1);}
                    50%{box-shadow:0 0 13px 2px rgba(255,160,80,.9),0 0 28px 9px rgba(255,100,45,.45);transform:scale(1.08);}}
-  .ey-em{color:#ff9e4d;}
   .hbrand .verbadge{align-self:center;font-family:var(--mono);font-size:.7rem;font-weight:600;
     letter-spacing:.02em;color:#ffd291;background:rgba(255,140,60,.14);
     border:1px solid rgba(255,140,60,.38);border-radius:99px;padding:2px 9px;text-decoration:none;
     transition:background .15s,border-color .15s;}
   .hbrand .verbadge:hover{background:rgba(255,140,60,.24);border-color:rgba(255,140,60,.62);}
-  @media (prefers-reduced-motion:reduce){.hbrand .ember{animation:none;}}
+  /* hover/focus tooltip that reveals the install command */
+  .conda-btn{position:relative;}
+  .conda-btn::after{content:attr(data-hint);position:absolute;bottom:calc(100% + 9px);left:50%;
+    transform:translateX(-50%) translateY(4px);white-space:nowrap;font-family:var(--mono);
+    font-size:.74rem;color:#eaf1fb;background:#071627;border:1px solid rgba(255,255,255,.14);
+    border-radius:8px;padding:7px 11px;box-shadow:0 8px 24px rgba(0,0,0,.4);
+    opacity:0;pointer-events:none;transition:opacity .15s ease,transform .15s ease;z-index:20;}
+  .conda-btn::before{content:"";position:absolute;bottom:calc(100% + 3px);left:50%;
+    transform:translateX(-50%);border:6px solid transparent;border-top-color:#071627;
+    opacity:0;pointer-events:none;transition:opacity .15s ease;z-index:20;}
+  .conda-btn:hover::after,.conda-btn:focus-visible::after{opacity:1;transform:translateX(-50%) translateY(0);}
+  .conda-btn:hover::before,.conda-btn:focus-visible::before{opacity:1;}
+  @media (prefers-reduced-motion:reduce){.hbrand .ember{animation:none;}
+    .conda-btn::after{transition:opacity .15s ease;}}
   .panel{background:var(--bg);border:1px solid var(--line);border-radius:var(--radius);
          box-shadow:var(--shadow);margin-bottom:18px;overflow:hidden;}
   .panel__head{display:flex;align-items:baseline;gap:.5rem;padding:13px 18px;border-bottom:1px solid var(--line);}
@@ -90,15 +102,15 @@
 <main>
   <div class="wrap">
     <section class="panel hero">
-      <div class="hbrand" title="C + Cairo render -> cinder"><span class="ember" aria-hidden="true"></span><span class="wm"><span class="cinder">cinder</span>plot</span><a class="verbadge" href="https://anaconda.org/zhou-lab/cinderplot" title="Latest release on the zhou-lab conda channel">v0.5.2</a></div>
-      <p class="eyebrow">C&#8239;+&#8239;Cairo&#8239;re<span class="ey-em">nder</span> &#8594; cinder</p>
+      <div class="hbrand" title="the name: C + Cairo re[nder] &rarr; cinder"><span class="ember" aria-hidden="true"></span><span class="wm"><span class="cinder">cinder</span>plot</span><a class="verbadge" href="https://anaconda.org/zhou-lab/cinderplot" title="Latest release on the zhou-lab conda channel">v0.5.2</a></div>
+      <p class="eyebrow">The grammar of graphics, in C</p>
       <h1>Publication-ready graphics from one small, fast binary.</h1>
       <p>cinderplot turns a CSV into a PDF, SVG or PNG with a ggplot2-inspired grammar — panels, hue palettes,
          scales, legends — rendered by a single C binary with Cairo. No R, no Python at plot time.</p>
       <div class="cta">
         <a class="btn pri" href="gallery.html">See the gallery →</a>
         <a class="btn" href="https://github.com/zhou-lab/cinderplot">GitHub</a>
-        <a class="btn" href="https://anaconda.org/zhou-lab/cinderplot">conda</a>
+        <a class="btn conda-btn" href="https://anaconda.org/zhou-lab/cinderplot" data-hint="conda install -c zhou-lab cinderplot">conda</a>
       </div>
       <div class="hstats">
         <div class="hstat"><b>16</b><span>geoms</span></div>
