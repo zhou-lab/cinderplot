@@ -60,7 +60,7 @@
   .thumb{position:relative;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#f5f6f8;
          box-shadow:var(--shadow);transition:border-color .15s,transform .15s;
          aspect-ratio:4 / 3;display:flex;align-items:center;justify-content:center;}
-  .thumb img{display:block;max-width:100%;max-height:100%;width:auto;height:auto;}
+  .thumb img{display:block;max-width:100%;max-height:100%;width:auto;height:auto;background:#fff;}
   .cell:hover .thumb,.cell:focus-visible .thumb{border-color:var(--accent);transform:translateY(-2px);}
   .cell.on .thumb{border-color:var(--accent);}
   .zoom{position:absolute;top:8px;right:8px;z-index:2;width:26px;height:26px;padding:0;border:0;
@@ -126,11 +126,11 @@
   @media (max-width:760px){.drawer.open{max-height:62vh;}.drawer__panel{max-height:62vh;}
                            .drawer__body{grid-template-columns:1fr;}}
   .snip{position:relative;}
-  .snip .k{display:block;font-family:var(--head);font-weight:600;font-size:.64rem;letter-spacing:.09em;
-           text-transform:uppercase;color:var(--accent-bright);margin-bottom:7px;}
-  .copy{position:absolute;top:-2px;right:0;font-family:var(--head);font-size:.66rem;letter-spacing:.04em;
+  .snip .k{display:inline-block;vertical-align:middle;font-family:var(--head);font-weight:600;font-size:.64rem;
+           letter-spacing:.09em;text-transform:uppercase;color:var(--accent-bright);margin-bottom:7px;}
+  .copy{margin-left:10px;vertical-align:middle;font-family:var(--head);font-size:.66rem;letter-spacing:.04em;
         color:var(--code-dim);background:rgba(127,168,216,.10);border:1px solid rgba(127,168,216,.28);
-        border-radius:6px;padding:3px 9px;cursor:pointer;transition:color .15s,background .15s,border-color .15s;}
+        border-radius:6px;padding:2px 9px;cursor:pointer;transition:color .15s,background .15s,border-color .15s;}
   .copy:hover{color:#fff;background:rgba(127,168,216,.20);border-color:rgba(127,168,216,.5);}
   .copy.done{color:#0d1522;background:var(--accent-bright);border-color:var(--accent-bright);}
   .snip pre{margin:0;font-family:var(--mono);font-size:12.5px;line-height:1.6;color:var(--code-ink);
