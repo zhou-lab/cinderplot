@@ -69,7 +69,7 @@ static void print_help(void) {
     printf("    %s--dump-spec%s    print the desugared DSL and exit\n", G, R);
     printf("    %s--version%s  ·  %s--help%s\n", G, R, G, R);
 
-    printf("\n  %sdocs%s  https://github.com/zhou-lab/cinderplot\n\n", D, R);
+    printf("\n  %sdocs%s  https://zhou-lab.github.io/cinderplot\n\n", D, R);
 }
 
 static int appendf(char *buf, size_t cap, size_t *len, const char *fmt, ...) {
