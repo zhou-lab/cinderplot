@@ -38,7 +38,8 @@
      inline divider that grows to fill the rest of its row, so there are no
      per-section blocks and no ragged gaps between sections. */
   .galtools{position:sticky;top:0;z-index:6;display:flex;justify-content:flex-end;
-    margin:0 0 -4px;padding:12px 0 8px;background:var(--bg);}
+    margin:0 0 -4px;padding:12px 0 8px;pointer-events:none;}
+  .galtools .foldbtn{pointer-events:auto;}
   .foldbtn{font-family:var(--head);font-weight:600;font-size:.72rem;letter-spacing:.04em;
     color:var(--muted);background:var(--bg);border:1px solid var(--line);border-radius:7px;
     padding:5px 13px;cursor:pointer;box-shadow:var(--shadow);
