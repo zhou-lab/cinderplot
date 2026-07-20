@@ -103,6 +103,8 @@ int main(int argc, char **argv) {
     double w_in = 0, h_in = 0, dpi = 96;   /* 0 = auto-fit that axis */
     int dump = 0;
 
+    if (argc == 1) { print_help(); return 0; }   /* bare invocation -> full help */
+
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
         if (!strcmp(a, "-o") && i + 1 < argc) out = argv[++i];
