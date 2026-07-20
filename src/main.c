@@ -17,15 +17,12 @@
 #include <unistd.h>
 
 static const char *USAGE =
-    "usage: cinderplot [DSL-expr | flags] [data.csv] [-o out.pdf|.svg|.png] [--size WxH] [--dpi N] [--dump-spec]\n"
-    "         (--size also takes a partial Wx or xH; the missing / omitted axis auto-fits to content)\n"
-    "         (output format is chosen from the -o extension: .svg -> SVG, .png -> PNG, else PDF)\n"
-    "  DSL:   'data.csv + aes(x, y, colour=factor(g)) + geom_point()\n"
-    "          + labs(title=\"...\") + facet_wrap(~g)'\n"
-    "  flags: -x COL -y COL [-c COL] [-f COL] [-t TITLE] [-m point|line|col|histogram]\n"
-    "         [--log x|y|xy]                              (desugar to the DSL)\n"
-    "  data \"-\" or omitted = stdin\n"
-    "  --version, --help\n";
+    "usage: cinderplot [DSL-expr | flags] [data] out.{pdf,svg,png}\n"
+    "         output is REQUIRED — a trailing filename or -o FILE (format from the extension)\n"
+    "         data: a leading DSL token, or omitted / '-' / 'stdin' = read stdin\n"
+    "  DSL:   'data.csv + aes(x, y, colour=factor(g)) + geom_point() + facet_wrap(~g)'\n"
+    "  flags: -x COL -y COL [-c COL] [-f COL] [-t TITLE] [-m point|line|col|histogram] [--log x|y|xy]\n"
+    "         --size WxH (partial Wx / xH auto-fits) · --dpi N · --dump-spec · --version · --help\n";
 
 /* A modern, sectioned --help. Colour is enabled for a TTY (or CLICOLOR_FORCE)
  * and suppressed by NO_COLOR, so piped/redirected output stays plain text. */
@@ -42,12 +39,13 @@ static void print_help(void) {
            E, R, D, CINDERPLOT_VERSION, R, D, R);
 
     printf("  %sUSAGE%s\n", H, R);
-    printf("    cinderplot %s'<expr>'%s [data] %s-o%s out.{pdf,svg,png} [options]\n", K, R, G, R);
-    printf("    cinderplot %s-x%s COL %s-y%s COL [flags] data.csv %s-o%s out.pdf   %s# shortcut flags → grammar%s\n\n",
-           G, R, G, R, G, R, D, R);
+    printf("    cinderplot %s'<expr>'%s out.{pdf,svg,png} [options]      %s# output required (or -o FILE)%s\n", K, R, D, R);
+    printf("    cat data.tsv | cinderplot %s'heatmap(…)'%s out.png       %s# data piped on stdin%s\n", K, R, D, R);
+    printf("    cinderplot %s-x%s COL %s-y%s COL data.csv out.pdf            %s# shortcut flags → grammar%s\n\n",
+           G, R, G, R, D, R);
 
     printf("  %sGRAMMAR%s   %s(compose layers with %s+%s%s)%s\n", H, R, D, K, R, D, R);
-    printf("    %sdata.csv%s        a CSV/TSV — or %s-%s for stdin, %s.gz%s for gzip/bgzip\n", K, R, K, R, K, R);
+    printf("    %sdata.csv%s        a CSV/TSV path — or %s-%s / %sstdin%s / omitted = pipe, %s.gz%s = gzip/bgzip\n", K, R, K, R, K, R, K, R);
     printf("    %saes%s(x, y, …)    map columns to aesthetics\n", G, R);
     printf("    %sgeom_*%s()        point · line · col · histogram · text · segment · h/v/abline\n", G, R);
     printf("    %sfacet_wrap%s(~g)  small multiples · %sscale_*%s · %stheme_*%s · %slabs%s(title=…)\n", G, R, G, R, G, R, G, R);
@@ -63,7 +61,7 @@ static void print_help(void) {
     printf("    %scinderplot%s %s'region() + genes(\"genes.bed.gz\") + matrix(\"betas.tsv\")'%s -o r.svg\n", D, R, K, R);
 
     printf("\n  %sOPTIONS%s\n", H, R);
-    printf("    %s-o%s FILE        output; format from the extension (%s.pdf .svg .png%s)\n", G, R, K, R);
+    printf("    %s-o%s FILE %sor%s FILE  output %s(required)%s — format from the extension (%s.pdf .svg .png%s)\n", G, R, D, R, D, R, K, R);
     printf("    %s--size%s WxH     inches; a partial %sWx%s or %sxH%s auto-fits the other axis %s(omit = auto)%s\n", G, R, K, R, K, R, D, R);
     printf("    %s--dpi%s N        raster density for %s.png%s %s(default 96)%s\n", G, R, K, R, D, R);
     printf("    %s-x -y -c -f -t -m --log%s   shortcut flags that desugar to the grammar\n", G, R);
@@ -97,9 +95,10 @@ static int append_quoted(char *buf, size_t cap, size_t *len, const char *s) {
 }
 
 int main(int argc, char **argv) {
-    const char *out = "plot.pdf", *expr = NULL, *data = NULL;
+    const char *out = NULL, *expr = NULL, *data = NULL;   /* output is required */
     const char *fx = NULL, *fy = NULL, *fc = NULL, *ff = NULL, *ft = NULL;
     const char *fm = "point", *flog = NULL, *fregion = NULL;
+    const char *pos[8]; int npos = 0;                     /* bare positionals */
     double w_in = 0, h_in = 0, dpi = 96;   /* 0 = auto-fit that axis */
     int dump = 0;
 
@@ -146,7 +145,18 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "-h") || !strcmp(a, "--help")) { print_help(); return 0; }
         else if (strchr(a, '(')) expr = a;
         else if (a[0] == '-' && a[1]) { fprintf(stderr, "cinderplot: unknown flag %s\n%s", a, USAGE); return 1; }
-        else data = a;
+        else if (npos < 8) pos[npos++] = a;
+    }
+
+    /* Resolve output + primary data from bare positionals. Output is required:
+     * -o wins, else the LAST positional. A remaining leading positional is the
+     * (flag-mode) data file. In DSL mode the data lives in the expression, so
+     * the sole positional is the output. */
+    if (!out && !dump && npos > 0) out = pos[--npos];   /* dump takes no output */
+    if (npos > 0) data = pos[0];
+    if (!out && !dump) {                             /* --dump-spec just inspects */
+        fprintf(stderr, "cinderplot: no output file — give -o FILE or a trailing FILENAME\n%s", USAGE);
+        return 1;
     }
 
     char buf[4096];
@@ -176,7 +186,8 @@ int main(int argc, char **argv) {
         }
         expr = buf;
     }
-    if (dump) printf("%s\n", expr);
+    if (dump) printf("%s\n", expr);                 /* inspect the desugared DSL */
+    if (!out) return 0;                             /* --dump-spec with no output: print only */
     cp_set_dpi(dpi);
 
     char err[256] = "";
@@ -185,6 +196,11 @@ int main(int argc, char **argv) {
         fprintf(stderr, "cinderplot: %s\n", err);
         return 1;
     }
+    /* primary data precedence: a leading DSL token (sets spec.data_path in the
+     * parser) -> a positional data arg -> stdin. So 'heatmap(...)' alone reads a
+     * pipe, and a bare data filename is honoured instead of silently ignored. */
+    if (!spec.data_path) spec.data_path = (char *)(data ? data : "-");
+
     /* 0 = auto-fit: track & heatmap modes size themselves from content;
      * grammar mode keeps the classic 6x4in default. */
     double w_pt = w_in * 72, h_pt = h_in * 72;

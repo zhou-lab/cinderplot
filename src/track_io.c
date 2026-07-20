@@ -8,6 +8,7 @@
 #include <string.h>
 
 static char *slurp(const char *path, char *err) {
+    if (!strcmp(path, "stdin")) path = "-";          /* alias for stdin */
     size_t pl = strlen(path);
     if (pl > 3 && !strcmp(path + pl - 3, ".gz")) return gz_read_all(path, err);
     FILE *f = !strcmp(path, "-") ? stdin : fopen(path, "rb");

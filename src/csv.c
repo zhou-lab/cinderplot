@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 typedef struct { char **v; int n, cap; } StrVec;
 
@@ -85,6 +86,11 @@ static int is_na(const char *s) {
 }
 
 DataFrame *df_read_csv(const char *path, char *err) {
+    if (!strcmp(path, "stdin")) path = "-";          /* alias for stdin */
+    if (!strcmp(path, "-") && isatty(fileno(stdin))) {
+        snprintf(err, 256, "no input: stdin is a terminal — pipe data in or name a file");
+        return NULL;
+    }
     char *buf;
     size_t pl = strlen(path);
     if (pl > 3 && !strcmp(path + pl - 3, ".gz")) {      /* gzip / bgzip TSV */
