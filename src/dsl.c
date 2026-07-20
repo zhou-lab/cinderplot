@@ -235,8 +235,14 @@ static int parse_trk_args(P *p, TrackObj *o) {
                 if (!strcmp(v, "off") || !strcmp(v, "none") || !strcmp(v, "hide")) o->hide_rownames = 1;
                 else if (!strcmp(v, "on") || !strcmp(v, "show")) o->hide_rownames = 0;
                 else return fail(p, "rownames=%s invalid; use on or off", v);
-            } else return fail(p, "track option `%s` not implemented; supported: "
-                                  "name, height, max, color, data, cluster, rownames", key);
+            } else if (!strcmp(key, "transcripts")) {
+                char *v = ident(p);
+                if (!v) return fail(p, "transcripts= expects all or canonical", "");
+                if (!strcmp(v, "all")) o->all_transcripts = 1;
+                else if (!strcmp(v, "canonical") || !strcmp(v, "longest")) o->all_transcripts = 0;
+                else return fail(p, "transcripts=%s invalid; use all or canonical", v);
+            } else return fail(p, "track option `%s` not implemented; supported: name, "
+                                  "height, max, color, data, cluster, rownames, transcripts", key);
         } else {
             p->s = save;
             char *v = raw_token(p);

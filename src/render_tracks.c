@@ -159,6 +159,43 @@ static MatData *read_matrix(const TrackObj *t, char *err) {
     return m;                          /* mf leaked: colid/rowname borrow from it */
 }
 
+/* gene symbol = transcript name up to the last '-' (e.g. "PKIG-206" -> "PKIG") */
+static void gene_symbol(const char *name, char *out, size_t cap) {
+    const char *dash = strrchr(name, '-');
+    size_t n = dash ? (size_t)(dash - name) : strlen(name);
+    if (n >= cap) n = cap - 1;
+    memcpy(out, name, n); out[n] = 0;
+}
+
+/* read a gene track's BED12, sort by tx_start; by default keep one transcript per
+ * gene (the longest; ties -> first) relabelled with the gene symbol. all=1 keeps
+ * every isoform with its transcript name. Fresh array; ng_out set. */
+static GeneModel *load_genes(const char *data, const char *chrom, long rs, long re,
+                             int all, int *ng_out, char *err) {
+    int ng; GeneModel *gm = bed12_read(data, chrom, rs, re, &ng, err);
+    if (!gm) return NULL;
+    qsort(gm, ng, sizeof *gm, cmp_gene);
+    if (!all && ng > 0) {
+        int m2 = 0;
+        for (int k = 0; k < ng; k++) {
+            char sk[128]; gene_symbol(gm[k].name, sk, sizeof sk);
+            long lk = gm[k].tx_end - gm[k].tx_start;
+            int canon = 1;
+            for (int j = 0; j < ng && canon; j++) {
+                if (j == k) continue;
+                char sj[128]; gene_symbol(gm[j].name, sj, sizeof sj);
+                if (strcmp(sj, sk)) continue;
+                long lj = gm[j].tx_end - gm[j].tx_start;
+                if (lj > lk || (lj == lk && j < k)) canon = 0;
+            }
+            if (canon) { gm[k].name = strdup(sk); gm[m2++] = gm[k]; }
+        }
+        ng = m2;
+    }
+    *ng_out = ng;
+    return gm;
+}
+
 int render_tracks(const PlotSpec *spec, const char *out,
                   double w_pt, double h_pt, char *err) {
     if (!spec->region) {
@@ -214,7 +251,8 @@ int render_tracks(const PlotSpec *spec, const char *out,
     double gene_labw = 0;
     for (int i = 0; i < ntr; i++)
         if (spec->tobjs[i].type == TRK_GENES) {
-            int ng; GeneModel *gm = bed12_read(spec->tobjs[i].data, chrom, rstart, rend, &ng, err);
+            int ng; GeneModel *gm = load_genes(spec->tobjs[i].data, chrom, rstart, rend,
+                                               spec->tobjs[i].all_transcripts, &ng, err);
             if (gm) for (int k = 0; k < ng; k++)
                 if (gm[k].name) {
                     double w = text_w(cr, SZ_AXIS_TEXT, gm[k].name);
@@ -322,10 +360,11 @@ int render_tracks(const PlotSpec *spec, const char *out,
             g->tx = 0.004; g->ty = 0.98; g->hj = 0; g->va = V_TOP;
         } else if (t->type == TRK_GENES) {
             /* gene models (BED12): exon boxes (thin UTR / thick CDS), intron
-             * center line, strand chevrons, transcript name; lane-packed */
-            int ng; GeneModel *gm = bed12_read(t->data, chrom, rstart, rend, &ng, err);
+             * center line, strand chevrons, name; lane-packed. Default keeps the
+             * canonical (longest) transcript per gene; transcripts=all shows all. */
+            int ng; GeneModel *gm = load_genes(t->data, chrom, rstart, rend,
+                                               t->all_transcripts, &ng, err);
             if (!gm) return -1;
-            qsort(gm, ng, sizeof *gm, cmp_gene);
             /* lane-pack, reserving the transcript's LABEL width so names don't
              * collide (as pyGenomeTracks / plotgardener do). The label sits to the
              * right of tx_end, so a lane is free only past tx_end + label width. */

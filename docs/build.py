@@ -132,7 +132,7 @@ SECTIONS = [
         ("region", "Region view (anchored heatmap)",
          'region(chr20:44616522-44655233)'
          ' + cytoband("data/hg38.cytoband.tsv", height=0.5)'
-         ' + genes("data/region_genes.bed", height=5)'
+         ' + genes("data/region_genes.bed", height=1.5)'
          ' + matrix("data/region_betas_long.tsv", name="betas", cluster=samples, height=18)',
          "# ADA locus methylation, HM450 (sesame)\n"
          "library(sesame)\n"
