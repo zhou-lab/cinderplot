@@ -660,10 +660,10 @@ LANDING_STYLE = """<style>
        line-height:1.5;-webkit-font-smoothing:antialiased;}
   h1,h2,h3{font-family:var(--head);color:var(--ink);line-height:1.14;margin:0;letter-spacing:-.02em;font-weight:600;}
   a{color:inherit;}
-  .wrap{max-width:1000px;margin:0 auto;padding:0 24px;}
-  main{padding:34px 0 56px;}
-  .hbrand{display:flex;align-items:center;gap:14px;font-family:var(--head);font-weight:800;
-          font-size:clamp(2rem,5vw,2.7rem);line-height:1;letter-spacing:-.025em;margin-bottom:11px;}
+  .wrap{max-width:1280px;margin:0 auto;padding:0 24px;}
+  main{padding:22px 0 36px;}
+  .hbrand{display:flex;align-items:center;gap:12px;font-family:var(--head);font-weight:800;
+          font-size:clamp(1.7rem,3.2vw,2.15rem);line-height:1;letter-spacing:-.025em;margin:0;}
   .hbrand .wm{color:#eef4fc;}
   .hbrand .cinder{color:#ff9e4d;background:linear-gradient(95deg,#ffd291,#ff9e4d 45%,#ff6a35);
                   -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;}
@@ -678,22 +678,27 @@ LANDING_STYLE = """<style>
     border:1px solid rgba(255,140,60,.38);border-radius:99px;padding:2px 9px;text-decoration:none;
     transition:background .15s,border-color .15s;}
   .hbrand .verbadge:hover{background:rgba(255,140,60,.24);border-color:rgba(255,140,60,.62);}
-  /* hover/focus tooltip that reveals the install command */
-  .conda-btn{position:relative;}
-  .conda-btn::after{content:attr(data-hint);position:absolute;bottom:calc(100% + 9px);left:50%;
-    transform:translateX(-50%) translateY(4px);white-space:nowrap;font-family:var(--mono);
-    font-size:.74rem;color:#eaf1fb;background:#071627;border:1px solid rgba(255,255,255,.14);
-    border-radius:8px;padding:7px 11px;box-shadow:0 8px 24px rgba(0,0,0,.4);
-    opacity:0;pointer-events:none;transition:opacity .15s ease,transform .15s ease;z-index:20;}
-  .conda-btn::before{content:"";position:absolute;bottom:calc(100% + 3px);left:50%;
-    transform:translateX(-50%);border:6px solid transparent;border-top-color:#071627;
-    opacity:0;pointer-events:none;transition:opacity .15s ease;z-index:20;}
-  .conda-btn:hover::after,.conda-btn:focus-visible::after{opacity:1;transform:translateX(-50%) translateY(0);}
-  .conda-btn:hover::before,.conda-btn:focus-visible::before{opacity:1;}
-  @media (prefers-reduced-motion:reduce){.hbrand .ember{animation:none;}
-    .conda-btn::after{transition:opacity .15s ease;}}
+  /* click-to-copy install command box */
+  .install{display:inline-flex;align-items:center;gap:10px;max-width:100%;
+    font-family:var(--mono);font-size:.85rem;color:#eaf1fb;text-align:left;
+    background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.16);border-radius:9px;
+    padding:9px 9px 9px 14px;cursor:pointer;transition:border-color .15s,background .15s;}
+  .install:hover{border-color:rgba(255,255,255,.34);background:rgba(0,0,0,.36);}
+  .install:focus-visible{outline:2px solid var(--accent-bright);outline-offset:2px;}
+  .install code{font-family:inherit;font-size:inherit;color:inherit;white-space:nowrap;
+    overflow-x:auto;scrollbar-width:none;}
+  .install code::-webkit-scrollbar{display:none;}
+  .install .ic{display:flex;align-items:center;justify-content:center;width:26px;height:26px;
+    flex:0 0 auto;border-radius:6px;color:#9db3d2;transition:color .15s,background .15s;}
+  .install .ic svg{width:15px;height:15px;}
+  .install:hover .ic{color:#fff;background:rgba(255,255,255,.1);}
+  .install .ic-ok{display:none;color:#7ee0a5;}
+  .install.copied{border-color:#7ee0a5;background:rgba(126,224,165,.10);}
+  .install.copied .ic-copy{display:none;}
+  .install.copied .ic-ok{display:flex;background:none;color:#7ee0a5;}
+  @media (prefers-reduced-motion:reduce){.hbrand .ember{animation:none;}}
   .panel{background:var(--bg);border:1px solid var(--line);border-radius:var(--radius);
-         box-shadow:var(--shadow);margin-bottom:18px;overflow:hidden;}
+         box-shadow:var(--shadow);margin-bottom:14px;overflow:hidden;}
   .panel__head{display:flex;align-items:baseline;gap:.5rem;padding:13px 18px;border-bottom:1px solid var(--line);}
   .panel__head h2{font-size:1rem;}
   .count{font-family:var(--head);font-size:.68rem;font-weight:600;color:var(--accent);background:var(--accent-tint);
@@ -702,21 +707,36 @@ LANDING_STYLE = """<style>
   .panel__head .r:hover{color:var(--accent);}
   .panel__body{padding:16px 18px;}
   /* hero (dark navy, like the lab intro) */
-  .hero{background:var(--accent-deep);border-color:transparent;padding:30px 26px 24px;color:#c2d3ea;}
+  .hero{background:var(--accent-deep);border-color:transparent;padding:20px 24px 16px;color:#c2d3ea;}
+  /* brand and eyebrow share one line so the hero stays short */
+  .hero__top{display:flex;align-items:baseline;gap:16px;flex-wrap:wrap;margin-bottom:12px;}
   .hero .eyebrow{font-family:var(--head);font-size:.7rem;letter-spacing:.16em;text-transform:uppercase;
-                 color:var(--accent-bright);font-weight:600;margin-bottom:.55rem;}
-  .hero h1{color:#fff;font-size:clamp(1.55rem,3.4vw,2.05rem);margin-bottom:.55rem;max-width:22ch;}
-  .hero p{color:#c2d3ea;max-width:58ch;margin:0 0 1.1rem;font-size:.97rem;}
-  .cta{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:1.4rem;}
+                 color:var(--accent-bright);font-weight:600;margin:0;}
+  .hero h1{color:#fff;font-size:clamp(1.3rem,2.3vw,1.68rem);margin-bottom:.35rem;max-width:34ch;}
+  .hero .lede{color:#c2d3ea;max-width:76ch;margin:0 0 .85rem;font-size:.92rem;}
+  .cta{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:1.1rem;}
   .btn{font-family:var(--head);font-weight:600;font-size:.84rem;text-decoration:none;padding:.5rem 1rem;
        border-radius:8px;border:1px solid rgba(255,255,255,.2);color:#fff;transition:background .15s,border-color .15s;}
   .btn:hover{border-color:var(--accent-bright);}
   .btn.pri{background:var(--accent);border-color:var(--accent);}
   .btn.pri:hover{background:var(--accent-hover);}
-  .hstats{display:flex;flex-wrap:wrap;gap:28px;border-top:1px solid rgba(255,255,255,.1);padding-top:16px;}
-  .hstat b{font-family:var(--head);font-size:1.22rem;color:#fff;display:block;line-height:1;}
-  .hstat span{font-size:.7rem;color:#8ba1c2;}
-  .cols{display:grid;grid-template-columns:1.05fr .95fr;gap:18px;}
+  /* icon links (GitHub / Anaconda) sit inline with the copyable install box */
+  .iconbtn{display:flex;align-items:center;justify-content:center;width:38px;height:38px;flex:0 0 auto;
+    border:1px solid rgba(255,255,255,.2);border-radius:8px;color:#dbe7f7;
+    transition:color .15s,border-color .15s,background .15s;}
+  .iconbtn:hover{color:#fff;border-color:var(--accent-bright);background:rgba(255,255,255,.06);}
+  .iconbtn:focus-visible{outline:2px solid var(--accent-bright);outline-offset:2px;}
+  .iconbtn svg{width:18px;height:18px;}
+  /* stats read as one compact strip, not a block of stacked figures */
+  .hstats{display:flex;flex-wrap:wrap;gap:6px 20px;align-items:baseline;
+          border-top:1px solid rgba(255,255,255,.1);padding-top:10px;}
+  .hstat{display:flex;align-items:baseline;gap:5px;}
+  .hstat b{font-family:var(--head);font-size:.95rem;color:#fff;line-height:1;}
+  .hstat span{font-size:.72rem;color:#8ba1c2;}
+  .cols{display:grid;grid-template-columns:1.05fr .95fr;gap:14px;}
+  /* chips flow across the full panel width — far more compact on a wide screen
+     than narrow columns, which stack the long lists into many short rows */
+  .chipgrid{display:flex;flex-direction:column;gap:11px;}
   .cols .panel{margin:0;}
   @media (max-width:860px){.cols{grid-template-columns:1fr;}}
   pre.code{margin:0;background:var(--code-bg);color:var(--code-ink);border-radius:9px;padding:14px 16px;
@@ -730,6 +750,7 @@ LANDING_STYLE = """<style>
   .chips{display:flex;flex-wrap:wrap;gap:7px;}
   .chipset{margin-bottom:13px;}
   .chipset:last-child{margin-bottom:0;}
+  .chipgrid .chipset{margin-bottom:0;}   /* grid gap handles spacing */
   .chipset .k{font-family:var(--head);font-size:.68rem;letter-spacing:.08em;text-transform:uppercase;
               color:var(--muted);font-weight:600;margin:0 0 7px;}
   .chip{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.76rem;color:var(--ink);
@@ -741,21 +762,28 @@ LANDING_STYLE = """<style>
 LANDING_BODY = """<main>
   <div class="wrap">
     <section class="panel hero">
-      <div class="hbrand" title="the name: C + Cairo re[nder] &rarr; cinder"><span class="ember" aria-hidden="true"></span><span class="wm"><span class="cinder">cinder</span>plot</span><a class="verbadge" href="https://anaconda.org/zhou-lab/cinderplot" title="Latest release on the zhou-lab conda channel">v__VERSION__</a></div>
-      <p class="eyebrow">The grammar of graphics, in C</p>
+      <div class="hero__top">
+        <div class="hbrand" title="the name: C + Cairo re[nder] &rarr; cinder"><span class="ember" aria-hidden="true"></span><span class="wm"><span class="cinder">cinder</span>plot</span><a class="verbadge" href="https://anaconda.org/zhou-lab/cinderplot" title="Latest release on the zhou-lab conda channel">v__VERSION__</a></div>
+        <p class="eyebrow">The grammar of graphics, in C</p>
+      </div>
       <h1>Publication-ready graphics from one small, fast binary.</h1>
-      <p>cinderplot turns a CSV into a PDF, SVG or PNG with a ggplot2-inspired grammar — panels, hue palettes,
-         scales, legends — rendered by a single C binary with Cairo. No R, no Python at plot time.</p>
+      <p class="lede">CSV or TSV in — PDF, SVG or PNG out. No R, no Python at plot time.</p>
       <div class="cta">
         <a class="btn pri" href="gallery.html">See the gallery →</a>
-        <a class="btn" href="https://github.com/zhou-lab/cinderplot">GitHub</a>
-        <a class="btn conda-btn" href="https://anaconda.org/zhou-lab/cinderplot" data-hint="conda install -c zhou-lab cinderplot">conda</a>
+        <a class="iconbtn" href="https://github.com/zhou-lab/cinderplot" aria-label="GitHub" title="GitHub"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
+        <a class="iconbtn" href="https://anaconda.org/zhou-lab/cinderplot" aria-label="Anaconda channel" title="Anaconda (zhou-lab channel)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16.5 9.4 7.5 4.21"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.27 6.96 12 12.01l8.73-5.05"/><path d="M12 22.08V12"/></svg></a>
+        <button class="install" id="installBox" type="button"
+                data-cmd="conda install -c zhou-lab cinderplot"
+                aria-label="Copy install command to clipboard">
+          <code>conda install -c zhou-lab cinderplot</code>
+          <span class="ic ic-copy" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></span>
+          <span class="ic ic-ok" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span>
+        </button>
       </div>
       <div class="hstats">
         <div class="hstat"><b>__NGEOM__</b><span>geoms</span></div>
         <div class="hstat"><b>__NSCALE__</b><span>scales</span></div>
         <div class="hstat"><b>3</b><span>modes</span></div>
-        <div class="hstat"><b>PDF·SVG·PNG</b><span>output</span></div>
         <div class="hstat"><b>C11</b><span>+ Cairo</span></div>
       </div>
     </section>
@@ -787,11 +815,13 @@ cinderplot 'data.csv
       <div class="panel__head"><h2>Supported grammar</h2><span class="count">growing</span>
         <a class="r" href="gallery.html">see it drawn →</a></div>
       <div class="panel__body">
-        <div class="chipset"><p class="k">Geoms</p><div class="chips">__GEOMS__</div></div>
-        <div class="chipset"><p class="k">Scales</p><div class="chips">__SCALES__</div></div>
-        <div class="chipset"><p class="k">Positions</p><div class="chips">__POS__</div></div>
-        <div class="chipset"><p class="k">Modes</p><div class="chips">__MODES__</div></div>
-        <div class="chipset"><p class="k">Themes</p><div class="chips">__THEMES__</div></div>
+        <div class="chipgrid">
+          <div class="chipset"><p class="k">Geoms</p><div class="chips">__GEOMS__</div></div>
+          <div class="chipset"><p class="k">Scales</p><div class="chips">__SCALES__</div></div>
+          <div class="chipset"><p class="k">Positions</p><div class="chips">__POS__</div></div>
+          <div class="chipset"><p class="k">Modes</p><div class="chips">__MODES__</div></div>
+          <div class="chipset"><p class="k">Themes</p><div class="chips">__THEMES__</div></div>
+        </div>
       </div>
     </section>
     <p class="foot"><a href="gallery.html">Gallery</a> ·
@@ -799,7 +829,32 @@ cinderplot 'data.csv
       <a href="https://github.com/zhou-lab/cinderplot-examples">Examples</a> ·
       MIT · <a href="https://github.com/zhou-lab">zhou-lab</a></p>
   </div>
-</main>"""
+</main>
+<script>
+(function () {
+  var box = document.getElementById('installBox');
+  if (!box) return;
+  function fallbackCopy(text) {
+    var ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); } catch (e) {}
+    document.body.removeChild(ta);
+  }
+  var timer;
+  function flash() {
+    box.classList.add('copied');
+    clearTimeout(timer);
+    timer = setTimeout(function () { box.classList.remove('copied'); }, 1600);
+  }
+  box.addEventListener('click', function () {          /* <button>: Enter/Space too */
+    var cmd = box.getAttribute('data-cmd') || '';
+    if (navigator.clipboard && navigator.clipboard.writeText)
+      navigator.clipboard.writeText(cmd).then(flash, function () { fallbackCopy(cmd); flash(); });
+    else { fallbackCopy(cmd); flash(); }
+  });
+})();
+</script>"""
 
 def cinder_version():
     m = re.search(r'#define\s+CINDERPLOT_VERSION\s+"([^"]+)"',
