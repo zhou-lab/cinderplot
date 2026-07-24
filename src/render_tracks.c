@@ -98,7 +98,7 @@ static MatData *read_matrix(const TrackObj *t, char *err) {
     const Column *ec = df_col(mf, "end");
     const Column *pid = df_col(mf, "Probe_ID");
     if (!sc || !ec || sc->type != COL_NUM || ec->type != COL_NUM) {
-        sprintf(err, "matrix needs numeric position columns (beg/start, end)"); return NULL;
+        snprintf(err, CP_ERRLEN, "matrix needs numeric position columns (beg/start, end)"); return NULL;
     }
     const Column *samp = NULL;                        /* string col => long/tidy */
     for (int c = 0; c < mf->ncol; c++)
@@ -107,12 +107,12 @@ static MatData *read_matrix(const TrackObj *t, char *err) {
     MatData *m = calloc(1, sizeof *m);
     int nr = 0, nc = 0;
     if (samp) {                                       /* --- long/tidy --- */
-        if (!pid) { sprintf(err, "long matrix needs a Probe_ID column"); return NULL; }
+        if (!pid) { snprintf(err, CP_ERRLEN, "long matrix needs a Probe_ID column"); return NULL; }
         const Column *val = NULL;
         for (int c = 0; c < mf->ncol; c++)
             if (mf->cols[c].type == COL_NUM && &mf->cols[c] != sc && &mf->cols[c] != ec)
                 { val = &mf->cols[c]; break; }
-        if (!val) { sprintf(err, "long matrix needs a numeric value column"); return NULL; }
+        if (!val) { snprintf(err, CP_ERRLEN, "long matrix needs a numeric value column"); return NULL; }
         char **pn = malloc(mf->nrow * sizeof(char *));
         double *pp = malloc(mf->nrow * sizeof(double));
         char **sn = malloc(mf->nrow * sizeof(char *));
@@ -124,7 +124,7 @@ static MatData *read_matrix(const TrackObj *t, char *err) {
             for (int i = 0; i < nr; i++) if (!strcmp(sn[i], s)) { f = i; break; }
             if (f < 0) sn[nr++] = (char *)s;
         }
-        if (nc < 1 || nr < 1) { sprintf(err, "matrix is empty"); return NULL; }
+        if (nc < 1 || nr < 1) { snprintf(err, CP_ERRLEN, "matrix is empty"); return NULL; }
         int *ord = malloc(nc * sizeof(int));
         for (int i = 0; i < nc; i++) ord[i] = i;
         for (int a = 1; a < nc; a++) { int k = ord[a]; double kp = pp[k]; int b2 = a - 1;
@@ -146,7 +146,8 @@ static MatData *read_matrix(const TrackObj *t, char *err) {
         for (int c = 0; c < mf->ncol && ns < 2048; c++)
             if (mf->cols[c].type == COL_NUM && &mf->cols[c] != sc && &mf->cols[c] != ec)
                 scol[ns++] = c;
-        if (ns < 1) { sprintf(err, "matrix has no numeric sample columns"); return NULL; }
+        if (ns < 1) { snprintf(err, CP_ERRLEN, "matrix has no numeric sample columns"); return NULL; }
+        if (mf->nrow < 1) { snprintf(err, CP_ERRLEN, "matrix is empty"); return NULL; }
         int *ord = malloc(mf->nrow * sizeof(int));
         double *pp = malloc(mf->nrow * sizeof(double));
         for (int r = 0; r < mf->nrow; r++) { pp[r] = (sc->num[r] + ec->num[r]) * 0.5; ord[nc++] = r; }
@@ -244,14 +245,14 @@ int render_tracks(const PlotSpec *spec, const char *out,
     char chrom[64]; long rstart, rend;
     if (spec->region) {
         if (region_parse(spec->region, chrom, &rstart, &rend)) {
-            sprintf(err, "bad region `%s`; expected chr:start-end", spec->region); return -1;
+            snprintf(err, CP_ERRLEN, "bad region `%s`; expected chr:start-end", spec->region); return -1;
         }
     } else {
         MatData *src = NULL;
         for (int i = 0; i < ntr; i++) if (md[i]) { src = md[i]; break; }
-        if (!src) { sprintf(err, "region() needs coordinates or a matrix() track to infer from"); return -1; }
-        if (!src->chrom) { sprintf(err, "region() cannot infer: matrix has no chrom column; use region(chr:start-end)"); return -1; }
-        if (src->multichrom) { sprintf(err, "region() cannot infer: matrix spans multiple chromosomes; use region(chr:start-end)"); return -1; }
+        if (!src) { snprintf(err, CP_ERRLEN, "region() needs coordinates or a matrix() track to infer from"); return -1; }
+        if (!src->chrom) { snprintf(err, CP_ERRLEN, "region() cannot infer: matrix has no chrom column; use region(chr:start-end)"); return -1; }
+        if (src->multichrom) { snprintf(err, CP_ERRLEN, "region() cannot infer: matrix spans multiple chromosomes; use region(chr:start-end)"); return -1; }
         snprintf(chrom, sizeof chrom, "%s", src->chrom);
         long pad = (long)((src->gend - src->gbeg) * 0.05 + 0.5);
         if (pad < 1) pad = 1;
@@ -553,12 +554,12 @@ int render_tracks(const PlotSpec *spec, const char *out,
             const Column *bc = df_col(cb, "chrom"), *bs = df_col(cb, "start"),
                          *be = df_col(cb, "end"), *bt = df_col(cb, "stain");
             if (!bc || !bs || !be || !bt) {
-                sprintf(err, "cytoband needs chrom,start,end,stain columns"); return -1;
+                snprintf(err, CP_ERRLEN, "cytoband needs chrom,start,end,stain columns"); return -1;
             }
             double clen = 0; int nband = 0;
             for (int r2 = 0; r2 < cb->nrow; r2++)
                 if (!strcmp(bc->str[r2], chrom)) { nband++; if (be->num[r2] > clen) clen = be->num[r2]; }
-            if (clen <= 0) { sprintf(err, "chromosome %s not in cytoband file", chrom); return -1; }
+            if (clen <= 0) { snprintf(err, CP_ERRLEN, "chromosome %s not in cytoband file", chrom); return -1; }
             double *bst = malloc(nband * sizeof(double)), *ben = malloc(nband * sizeof(double));
             Col *bcol = malloc(nband * sizeof(Col));
             double cen_lo = 1, cen_hi = 0;                   /* centromere (acen) extent, npc */
@@ -679,6 +680,6 @@ int render_tracks(const PlotSpec *spec, const char *out,
     cairo_destroy(cr);
     cairo_status_t st = cp_surface_emit(surf, out);
     cairo_surface_destroy(surf);
-    if (st != CAIRO_STATUS_SUCCESS) { sprintf(err, "cairo: %s", cairo_status_to_string(st)); return -1; }
+    if (st != CAIRO_STATUS_SUCCESS) { snprintf(err, CP_ERRLEN, "cairo: %s", cairo_status_to_string(st)); return -1; }
     return 0;
 }

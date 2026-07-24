@@ -38,13 +38,13 @@ static void order_expand(const HClust *h, int node, int *order, int *no) {
 
 /* cluster n observations of length p (row-major x); NULL on failure */
 HClust *hclust_ward(const double *x, int n, int p, char *err) {
-    if (n < 2) { sprintf(err, "need at least 2 observations to cluster"); return NULL; }
+    if (n < 2) { snprintf(err, CP_ERRLEN, "need at least 2 observations to cluster"); return NULL; }
     double *D = malloc((size_t)n * n * sizeof(double));
     for (int i = 0; i < n; i++)
         for (int j = i + 1; j < n; j++) {
             double d = eucl(x, p, i, j);
             if (isnan(d)) {
-                sprintf(err, "cannot cluster: observations %d and %d share no complete values", i + 1, j + 1);
+                snprintf(err, CP_ERRLEN, "cannot cluster: observations %d and %d share no complete values", i + 1, j + 1);
                 free(D);
                 return NULL;
             }

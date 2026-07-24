@@ -20,7 +20,7 @@ typedef struct { const char *s; char *err; } P;
 static void skip_ws(P *p) { while (isspace((unsigned char)*p->s)) p->s++; }
 
 static int fail(P *p, const char *fmt, const char *a) {
-    sprintf(p->err, fmt, a);
+    snprintf(p->err, CP_ERRLEN, fmt, a);
     return -1;
 }
 

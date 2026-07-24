@@ -22,13 +22,13 @@
 /* ---------------- whole-file gzip inflate ---------------- */
 static char *gz_slurp(const char *path, size_t *outlen, char *err) {
     gzFile g = gzopen(path, "rb");
-    if (!g) { sprintf(err, "cannot open %s", path); return NULL; }
+    if (!g) { snprintf(err, CP_ERRLEN, "cannot open %s", path); return NULL; }
     size_t cap = 1 << 16, n = 0;
     char *b = malloc(cap);
     for (;;) {
         if (cap - n < 4096) { cap *= 2; b = realloc(b, cap); }
         int r = gzread(g, b + n, (unsigned)(cap - n - 1));
-        if (r < 0) { snprintf(err, 256, "%s: gzip read error", path); free(b); gzclose(g); return NULL; }
+        if (r < 0) { snprintf(err, CP_ERRLEN, "%s: gzip read error", path); free(b); gzclose(g); return NULL; }
         n += (size_t)r;
         if (r == 0) break;
     }
@@ -72,6 +72,9 @@ static int bgzf_block(const unsigned char *c, size_t clen, size_t co,
         i += 4 + slen;
     }
     if (!have || co + bsize > clen) return -1;
+    /* a valid block is >= 12 header + xlen extra + 8 trailer; a smaller BSIZE
+     * (corrupt block) would underflow dlen/isize below into huge indices */
+    if (bsize < xlen + 20) return -1;
     size_t dstart = xo + xlen;                               /* deflate payload */
     size_t dlen = bsize - (xlen + 12) - 8;                   /* -header -extra -trailer */
     uint32_t isize = c[co + bsize - 4] | (uint32_t)c[co + bsize - 3] << 8
@@ -131,17 +134,17 @@ char *tabix_slurp_region(const char *path, const char *chrom, long beg, long end
     snprintf(tbi, sizeof tbi, "%s.tbi", path);
     size_t ilen = 0;
     char *idx = gz_slurp(tbi, &ilen, ierr);
-    if (!idx) { snprintf(err, 256, "%s: no tabix index (%s)", path, ierr); return NULL; }
+    if (!idx) { snprintf(err, CP_ERRLEN, "%s: no tabix index (%s)", path, ierr); return NULL; }
 
     Rd rd = { (const unsigned char *)idx, ilen, 0, 1 };
-    if (ilen < 4 || memcmp(idx, "TBI\1", 4)) { snprintf(err, 256, "%s: bad tabix magic", tbi); free(idx); return NULL; }
+    if (ilen < 4 || memcmp(idx, "TBI\1", 4)) { snprintf(err, CP_ERRLEN, "%s: bad tabix magic", tbi); free(idx); return NULL; }
     rd.off = 4;
     int32_t n_ref = rd_i32(&rd);
     rd_i32(&rd);                                   /* format */
     rd_i32(&rd); rd_i32(&rd); rd_i32(&rd);         /* col_seq, col_beg, col_end */
     rd_i32(&rd); rd_i32(&rd);                      /* meta, skip */
     int32_t l_nm = rd_i32(&rd);
-    if (!rd.ok || rd.off + (size_t)l_nm > ilen) { snprintf(err, 256, "%s: truncated tabix header", tbi); free(idx); return NULL; }
+    if (!rd.ok || rd.off + (size_t)l_nm > ilen) { snprintf(err, CP_ERRLEN, "%s: truncated tabix header", tbi); free(idx); return NULL; }
 
     /* find the reference id whose name matches chrom */
     const char *names = idx + rd.off;
@@ -200,10 +203,10 @@ char *tabix_slurp_region(const char *path, const char *chrom, long beg, long end
 
     /* 4. read the compressed file and inflate the merged chunk ranges */
     FILE *cf = fopen(path, "rb");
-    if (!cf) { sprintf(err, "cannot open %s", path); free(chunks); return NULL; }
+    if (!cf) { snprintf(err, CP_ERRLEN, "cannot open %s", path); free(chunks); return NULL; }
     fseek(cf, 0, SEEK_END); long csz = ftell(cf); fseek(cf, 0, SEEK_SET);
     unsigned char *cbuf = malloc(csz > 0 ? csz : 1);
-    if (csz > 0 && fread(cbuf, 1, (size_t)csz, cf) != (size_t)csz) { sprintf(err, "%s: read error", path); fclose(cf); free(cbuf); free(chunks); return NULL; }
+    if (csz > 0 && fread(cbuf, 1, (size_t)csz, cf) != (size_t)csz) { snprintf(err, CP_ERRLEN, "%s: read error", path); fclose(cf); free(cbuf); free(chunks); return NULL; }
     fclose(cf);
 
     Buf ob = {0};

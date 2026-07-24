@@ -146,6 +146,16 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--version") || !strcmp(a, "-V")) { printf("cinderplot %s\n", CINDERPLOT_VERSION); return 0; }
         else if (!strcmp(a, "-h") || !strcmp(a, "--help")) { print_help(); return 0; }
         else if (strchr(a, '(')) expr = a;
+        /* a recognized value-flag that fell through the branches above was given
+         * as the final token with no value: report that, not "unknown flag". */
+        else if (!strcmp(a, "-o") || !strcmp(a, "-x") || !strcmp(a, "-y") ||
+                 !strcmp(a, "-c") || !strcmp(a, "-f") || !strcmp(a, "-t") ||
+                 !strcmp(a, "-m") || !strcmp(a, "--log") || !strcmp(a, "-r") ||
+                 !strcmp(a, "--region") || !strcmp(a, "--size") ||
+                 !strcmp(a, "--dpi")) {
+            fprintf(stderr, "cinderplot: missing argument for %s\n%s", a, USAGE);
+            return 1;
+        }
         else if (a[0] == '-' && a[1]) { fprintf(stderr, "cinderplot: unknown flag %s\n%s", a, USAGE); return 1; }
         else if (npos < 8) pos[npos++] = a;
     }
@@ -192,7 +202,7 @@ int main(int argc, char **argv) {
     if (!out) return 0;                             /* --dump-spec with no output: print only */
     cp_set_dpi(dpi);
 
-    char err[256] = "";
+    char err[CP_ERRLEN] = "";
     PlotSpec spec;
     if (dsl_parse(expr, &spec, err)) {
         fprintf(stderr, "cinderplot: %s\n", err);

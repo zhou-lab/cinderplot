@@ -103,14 +103,14 @@ static Matrix *matrix_from_df(const DataFrame *df, char *err) {
     Matrix *m = malloc(sizeof *m);
     m->nr = df->nrow;
     m->nc = df->ncol - c0;
-    if (m->nc < 1) { sprintf(err, "matrix csv has no numeric columns"); return NULL; }
+    if (m->nc < 1) { snprintf(err, CP_ERRLEN, "matrix csv has no numeric columns"); return NULL; }
     m->rn = c0 ? df->cols[0].str : NULL;
     m->cn = malloc(m->nc * sizeof(char *));
     m->v = malloc((size_t)m->nr * m->nc * sizeof(double));
     for (int c = 0; c < m->nc; c++) {
         const Column *col = &df->cols[c + c0];
         if (col->type != COL_NUM) {
-            sprintf(err, "matrix column `%s` is not numeric", col->name);
+            snprintf(err, CP_ERRLEN, "matrix column `%s` is not numeric", col->name);
             return NULL;
         }
         m->cn[c] = col->name;
@@ -384,21 +384,30 @@ int render_heatmap(const PlotSpec *spec, const char *out,
         if (pl->kind != PL_FULL) {
             if (pl->anchor) {
                 int ai = find_obj(ro, i, pl->anchor);
-                if (ai < 0) { sprintf(err, "unknown object `%s` in placement", pl->anchor); return -1; }
+                if (ai < 0) { snprintf(err, CP_ERRLEN, "unknown object `%s` in placement", pl->anchor); return -1; }
                 a = &ro[ai];
             } else if (i > 0) a = &ro[i - 1];
-            else { sprintf(err, "first object cannot have a relative placement"); return -1; }
+            else { snprintf(err, CP_ERRLEN, "first object cannot have a relative placement"); return -1; }
         }
 
         if (o->type == HM_ANNOTATION) {
+            if (!a) {   /* PL_FULL: no anchor to size/orient against */
+                snprintf(err, CP_ERRLEN, "annotation must be placed relative to "
+                         "another object (top_of/beneath/left_of/right_of)");
+                return -1;
+            }
             DataFrame *df = df_read_csv(o->data, err);
             if (!df) return -1;
+            if (df->ncol < 1) {
+                snprintf(err, CP_ERRLEN, "annotation `%s` has no columns", o->data);
+                return -1;
+            }
             const Column *col = &df->cols[df->ncol - 1];
             ro[i].ann_n = df->nrow;
             ro[i].ann_horiz = pl->kind == PL_TOP_OF || pl->kind == PL_BENEATH;
             int need = ro[i].ann_horiz ? a->nc : a->nr;
             if (df->nrow != need) {
-                sprintf(err, "annotation `%s` has %d values; anchor `%s` needs %d",
+                snprintf(err, CP_ERRLEN, "annotation `%s` has %d values; anchor `%s` needs %d",
                         o->data, df->nrow, a->o->name, need);
                 return -1;
             }
@@ -427,8 +436,8 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                 ro[i].ann_dmin = lo; ro[i].ann_dmax = hi; ro[i].ann_fill = vir;
             }
             if (o->label_data) {
-                if (ro[i].ann_horiz) { sprintf(err, "labels=data needs a vertical annotation (place with left_of/right_of)"); return -1; }
-                if (ro[i].ann_continuous) { sprintf(err, "labels=data needs a categorical annotation"); return -1; }
+                if (ro[i].ann_horiz) { snprintf(err, CP_ERRLEN, "labels=data needs a vertical annotation (place with left_of/right_of)"); return -1; }
+                if (ro[i].ann_continuous) { snprintf(err, CP_ERRLEN, "labels=data needs a categorical annotation"); return -1; }
             }
             ro[i].nr = ro[i].ann_horiz ? 1 : ro[i].ann_n;
             ro[i].nc = ro[i].ann_horiz ? ro[i].ann_n : 1;
@@ -440,13 +449,13 @@ int render_heatmap(const PlotSpec *spec, const char *out,
         }
         if (o->type == HM_DENDROGRAM) {
             if (!a || a->o->type != HM_HEATMAP) {
-                sprintf(err, "dendrogram() must be placed relative to a heatmap");
+                snprintf(err, CP_ERRLEN, "dendrogram() must be placed relative to a heatmap");
                 return -1;
             }
             int horiz = pl->kind == PL_TOP_OF || pl->kind == PL_BENEATH;
             HClust *tree = horiz ? a->colclust : a->rowclust;
             if (!tree) {
-                sprintf(err, "dendrogram() needs the heatmap `%s` clustered on that axis "
+                snprintf(err, CP_ERRLEN, "dendrogram() needs the heatmap `%s` clustered on that axis "
                              "(add cluster=%s)", a->o->name, horiz ? "cols" : "rows");
                 return -1;
             }
@@ -477,12 +486,12 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                     if (ro[k].o->type == HM_HEATMAP) { ro[i].target = k; break; }
             }
             if (ro[i].target < 0) {
-                sprintf(err, "legend() found nothing to describe; place it relative to a "
+                snprintf(err, CP_ERRLEN, "legend() found nothing to describe; place it relative to a "
                              "heatmap or an annotation");
                 return -1;
             }
             if (ro[i].leg_discrete && (pl->kind == PL_TOP_OF || pl->kind == PL_BENEATH)) {
-                sprintf(err, "discrete legends must be vertical; use right_of()/left_of()");
+                snprintf(err, CP_ERRLEN, "discrete legends must be vertical; use right_of()/left_of()");
                 return -1;
             }
             /* rigid chrome placed in the margin; not a canvas rect */
@@ -549,10 +558,10 @@ int render_heatmap(const PlotSpec *spec, const char *out,
         }
     }
     if (ncells > RASTER_MAX_CELLS) {
-        sprintf(err, "matrix too large (%ld cells > %ld); downsample first", ncells, RASTER_MAX_CELLS);
+        snprintf(err, CP_ERRLEN, "matrix too large (%ld cells > %ld); downsample first", ncells, RASTER_MAX_CELLS);
         return -1;
     }
-    if (dmin > dmax) { sprintf(err, "no finite values in matrix"); return -1; }
+    if (dmin > dmax) { snprintf(err, CP_ERRLEN, "no finite values in matrix"); return -1; }
 
     /* ---- outer gtable: MEASURED chrome, canvas as the null cell ----
      * wheatmap's auto_margin: measure every outward-facing label and
@@ -916,7 +925,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
     cairo_status_t st = cp_surface_emit(surf, out);
     cairo_surface_destroy(surf);
     if (st != CAIRO_STATUS_SUCCESS) {
-        sprintf(err, "cairo: %s", cairo_status_to_string(st));
+        snprintf(err, CP_ERRLEN, "cairo: %s", cairo_status_to_string(st));
         return -1;
     }
     return 0;

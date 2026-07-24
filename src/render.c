@@ -250,7 +250,11 @@ static GenomeScale *genome_load(const char *path, char *err) {
     if (!sq) return NULL;
     const Column *sc = df_col(sq, "chrom"), *lc = df_col(sq, "length");
     if (!sc || sc->type != COL_STR || !lc || lc->type != COL_NUM) {
-        sprintf(err, "seqinfo `%s` needs a text `chrom` and numeric `length` column", path);
+        snprintf(err, CP_ERRLEN, "seqinfo `%s` needs a text `chrom` and numeric `length` column", path);
+        return NULL;
+    }
+    if (sq->nrow < 1) {
+        snprintf(err, CP_ERRLEN, "seqinfo `%s` has no rows", path);
         return NULL;
     }
     GenomeScale *g = malloc(sizeof *g);
@@ -263,6 +267,11 @@ static GenomeScale *genome_load(const char *path, char *err) {
         g->chr[i] = sc->str[i]; g->len[i] = lc->num[i]; g->off[i] = cum; cum += g->len[i];
     }
     g->total = cum;
+    if (!(cum > 0)) {   /* all-zero/negative lengths: axis would divide by 0 */
+        snprintf(err, CP_ERRLEN, "seqinfo `%s` has no positive total length", path);
+        free(g->chr); free(g->off); free(g->len); free(g);
+        return NULL;
+    }
     return g;
 }
 static double genome_off(const GenomeScale *g, const char *chr) {
@@ -287,36 +296,43 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
 
     /* ---- resolve columns ---- */
     const Column *xc = df_col(df, spec->x.col);
-    if (!xc) { sprintf(err, "column `%s` not found", spec->x.col); return -1; }
+    if (!xc) { snprintf(err, CP_ERRLEN, "column `%s` not found", spec->x.col); return -1; }
     /* discrete x when the column is a string or wrapped in factor() */
     int disc_x = (xc->type == COL_STR) || spec->x.is_factor;
     Factor *xf = disc_x ? factor_make(df, xc) : NULL;
+    /* discrete x draws one break per category into the fixed xbr[40]/xlabs[40]
+     * axis buffers below; reject more categories than those buffers hold. */
+    if (disc_x && xf->nlev > 40) {
+        snprintf(err, CP_ERRLEN, "discrete x `%s` has %d categories; at most 40 "
+                 "are supported", spec->x.col, xf->nlev);
+        return -1;
+    }
     if (!disc_x && (xc->type != COL_NUM)) {
-        sprintf(err, "x column `%s` is not numeric", spec->x.col); return -1;
+        snprintf(err, CP_ERRLEN, "x column `%s` is not numeric", spec->x.col); return -1;
     }
     if (disc_x && spec->log_x) {
-        sprintf(err, "scale_x_log10() needs a continuous x"); return -1;
+        snprintf(err, CP_ERRLEN, "scale_x_log10() needs a continuous x"); return -1;
     }
     if (disc_x && nhist) {
-        sprintf(err, "geom_histogram() needs a continuous x"); return -1;
+        snprintf(err, CP_ERRLEN, "geom_histogram() needs a continuous x"); return -1;
     }
     if (disc_x && hasdens) {
-        sprintf(err, "geom_density() needs a continuous x"); return -1;
+        snprintf(err, CP_ERRLEN, "geom_density() needs a continuous x"); return -1;
     }
     if (hasbox && !disc_x) {
-        sprintf(err, "geom_boxplot() needs a discrete x; use aes(x=factor(%s), ...)", spec->x.col);
+        snprintf(err, CP_ERRLEN, "geom_boxplot() needs a discrete x; use aes(x=factor(%s), ...)", spec->x.col);
         return -1;
     }
     if (hasbar && !disc_x) {
-        sprintf(err, "geom_bar() needs a discrete x; use aes(x=factor(%s), ...)", spec->x.col);
+        snprintf(err, CP_ERRLEN, "geom_bar() needs a discrete x; use aes(x=factor(%s), ...)", spec->x.col);
         return -1;
     }
     const Column *yc = NULL;
     if (spec->y.col) {
         yc = df_col(df, spec->y.col);
-        if (!yc) { sprintf(err, "column `%s` not found", spec->y.col); return -1; }
+        if (!yc) { snprintf(err, CP_ERRLEN, "column `%s` not found", spec->y.col); return -1; }
         if (yc->type != COL_NUM || spec->y.is_factor) {
-            sprintf(err, "discrete positional scales are not implemented; y must be numeric");
+            snprintf(err, CP_ERRLEN, "discrete positional scales are not implemented; y must be numeric");
             return -1;
         }
     }
@@ -332,20 +348,20 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     const Column *xec = NULL, *yec = NULL;
     if (spec->xend.col) {
         xec = df_col(df, spec->xend.col);
-        if (!xec) { sprintf(err, "column `%s` not found", spec->xend.col); return -1; }
+        if (!xec) { snprintf(err, CP_ERRLEN, "column `%s` not found", spec->xend.col); return -1; }
     }
     if (spec->yend.col) {
         yec = df_col(df, spec->yend.col);
-        if (!yec) { sprintf(err, "column `%s` not found", spec->yend.col); return -1; }
+        if (!yec) { snprintf(err, CP_ERRLEN, "column `%s` not found", spec->yend.col); return -1; }
     }
     if (hasseg && !xec && !disc_x) {
-        sprintf(err, "geom_segment() needs aes(xend=...)"); return -1;
+        snprintf(err, CP_ERRLEN, "geom_segment() needs aes(xend=...)"); return -1;
     }
     if (hasrect && !xec) {
-        sprintf(err, "geom_rect() needs aes(xmin, xmax)"); return -1;
+        snprintf(err, CP_ERRLEN, "geom_rect() needs aes(xmin, xmax)"); return -1;
     }
     if (rect_top && !yec) {
-        sprintf(err, "geom_rect() needs aes(ymin, ymax) (or data= for a full-height band)"); return -1;
+        snprintf(err, CP_ERRLEN, "geom_rect() needs aes(ymin, ymax) (or data= for a full-height band)"); return -1;
     }
     /* genome coordinate x-scale: concatenate chromosomes via seqinfo offsets */
     int genome_x = spec->genome_seqinfo != NULL;
@@ -353,15 +369,15 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     double *roff = NULL;             /* per-row genome offset (-1 = drop) */
     if (genome_x) {
         if (disc_x || spec->log_x) {
-            sprintf(err, "scale_x_genome() needs a continuous, non-log x"); return -1;
+            snprintf(err, CP_ERRLEN, "scale_x_genome() needs a continuous, non-log x"); return -1;
         }
         if (!spec->chrom.col) {
-            sprintf(err, "scale_x_genome() needs a chromosome column: aes(chrom=...)"); return -1;
+            snprintf(err, CP_ERRLEN, "scale_x_genome() needs a chromosome column: aes(chrom=...)"); return -1;
         }
         if (!(gs = genome_load(spec->genome_seqinfo, err))) return -1;
         const Column *cc = df_col(df, spec->chrom.col);
         if (!cc || cc->type != COL_STR) {
-            sprintf(err, "chrom column `%s` must be text", spec->chrom.col); return -1;
+            snprintf(err, CP_ERRLEN, "chrom column `%s` must be text", spec->chrom.col); return -1;
         }
         roff = malloc(df->nrow * sizeof(double));
         for (int r = 0; r < df->nrow; r++) roff[r] = genome_off(gs, cc->str[r]);
@@ -372,11 +388,11 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     FillScale cscale = spec->colour_scale;
     if (spec->colour.col) {
         if (hascol || nhist) {
-            sprintf(err, "colour/fill on bars (stacking/dodging) is not implemented yet");
+            snprintf(err, CP_ERRLEN, "colour/fill on bars (stacking/dodging) is not implemented yet");
             return -1;
         }
         const Column *cc = df_col(df, spec->colour.col);
-        if (!cc) { sprintf(err, "column `%s` not found", spec->colour.col); return -1; }
+        if (!cc) { snprintf(err, CP_ERRLEN, "column `%s` not found", spec->colour.col); return -1; }
         if (!spec->colour.is_factor && cc->type == COL_NUM) {
             cont_col = 1; colc = cc;    /* continuous colour aesthetic */
             if (!spec->has_colour_scale) {     /* ggplot default: blue gradient */
@@ -386,14 +402,23 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             }
         } else {
             cf = factor_make(df, cc);
+            /* the legend gt reserves 2*nlev+1 rows in a GT_MAXDIM grid, so a
+             * discrete colour/fill scale is bounded to what that grid holds. */
+            if (2 * cf->nlev + 1 > GT_MAXDIM) {
+                snprintf(err, CP_ERRLEN,
+                         "colour/fill `%s` has %d levels; the discrete legend "
+                         "supports at most %d", spec->colour.col, cf->nlev,
+                         (GT_MAXDIM - 1) / 2);
+                return -1;
+            }
         }
     }
     Factor *ff = NULL;
     if (spec->facet_var) {
         const Column *fc = df_col(df, spec->facet_var);
-        if (!fc) { sprintf(err, "column `%s` not found", spec->facet_var); return -1; }
+        if (!fc) { snprintf(err, CP_ERRLEN, "column `%s` not found", spec->facet_var); return -1; }
         ff = factor_make(df, fc);
-        if (ff->nlev < 1) { sprintf(err, "facet column `%s` has no values", spec->facet_var); return -1; }
+        if (ff->nlev < 1) { snprintf(err, CP_ERRLEN, "facet column `%s` has no values", spec->facet_var); return -1; }
     }
 
     /* ---- usable rows (NA and log-domain filtering) ---- */
@@ -411,7 +436,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         use[r] = ok;
         nuse += ok;
     }
-    if (nuse == 0) { sprintf(err, "no complete rows to plot"); return -1; }
+    if (nuse == 0) { snprintf(err, CP_ERRLEN, "no complete rows to plot"); return -1; }
     if (d_na) fprintf(stderr, "cinderplot: removed %d rows with missing values\n", d_na);
     if (d_log) fprintf(stderr, "cinderplot: removed %d rows with non-positive values on a log axis\n", d_log);
 
@@ -450,7 +475,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         nrowp = (npan + ncolp - 1) / ncolp;
     }
     if (2 * ncolp + 6 > GT_MAXDIM || 3 * nrowp + 6 > GT_MAXDIM) {
-        sprintf(err, "too many facet panels (%d)", npan);
+        snprintf(err, CP_ERRLEN, "too many facet panels (%d)", npan);
         return -1;
     }
 
@@ -704,7 +729,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         int dec = axis_decimals(xbr, nxbr), pdec = dec - 2 < 0 ? 0 : dec - 2;
         for (int i = 0; i < nxbr; i++) {
             xlabs[i] = malloc(32);
-            if (spec->x_pct) sprintf(xlabs[i], "%.*f%%", pdec, xbr[i] * 100);
+            if (spec->x_pct) snprintf(xlabs[i], 32, "%.*f%%", pdec, xbr[i] * 100);
             else fmt_break(xbr[i], dec, xlabs[i]);
         }
     }
@@ -717,7 +742,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         int dec = axis_decimals(ybr, nybr), pdec = dec - 2 < 0 ? 0 : dec - 2;
         for (int i = 0; i < nybr; i++) {
             ylabs[i] = malloc(32);
-            if (spec->y_pct) sprintf(ylabs[i], "%.*f%%", pdec, ybr[i] * 100);
+            if (spec->y_pct) snprintf(ylabs[i], 32, "%.*f%%", pdec, ybr[i] * 100);
             else fmt_break(ybr[i], dec, ylabs[i]);
         }
     }
@@ -1017,17 +1042,22 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             } else if (gt == GEOM_BAR) {
                 /* stat_count bars, width 0.9, stacked by colour group with
                  * the last factor level at the bottom (ggplot position_stack) */
+                double base = spec->log_y ? 0.0 : NPCY(0.0);
                 for (int cat = 0; cat < xf->nlev; cat++) {
                     double xi = cat + 1, cum = 0;
                     for (int grp = barng - 1; grp >= 0; grp--) {
                         int cnt = barcount[((size_t)(p * xf->nlev + cat)) * barng + grp];
                         if (!cnt) continue;
+                        double top = cum + cnt;
                         g = gt_add(T, G_RECT, R, C, R, C);
                         g->col = cf ? pal[grp] : spec->layers[li].has_color ? spec->layers[li].color : C_BAR;
                         g->sub = 1; g->clip = 1;
                         g->x0 = NPCX(xi - 0.45); g->x1 = NPCX(xi + 0.45);
-                        g->y0 = NPCY(cum); g->y1 = NPCY(cum + cnt);
-                        cum += cnt;
+                        /* honour scale_y_log10 like geom_histogram/geom_col; the
+                         * bottom segment starts at the axis base (log10(0) = -inf) */
+                        g->y0 = cum <= 0 ? base : NPCY(spec->log_y ? log10(cum) : cum);
+                        g->y1 = NPCY(spec->log_y ? log10(top) : top);
+                        cum = top;
                     }
                 }
             } else if (gt == GEOM_POINT) {
@@ -1087,7 +1117,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 const Column *c_xe = spec->xend.col ? df_col(d2, spec->xend.col) : NULL;
                 const Column *c_y = df_col(d2, L->ycol ? L->ycol : spec->y.col);
                 if (!c_x || !c_y || (genome_x && !c_chr)) {
-                    sprintf(err, "geom_segment(data=%s): missing chrom/x/y column", L->data);
+                    snprintf(err, CP_ERRLEN, "geom_segment(data=%s): missing chrom/x/y column", L->data);
                     return -1;
                 }
                 Col lcol = L->has_color ? L->color : C_BLACK;
@@ -1127,7 +1157,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 const Column *c_x = df_col(d2, spec->x.col);
                 const Column *c_xe = spec->xend.col ? df_col(d2, spec->xend.col) : NULL;
                 if (!c_x || !c_xe || (genome_x && !c_chr)) {
-                    sprintf(err, "geom_rect(data=%s): needs chrom/xmin/xmax columns", L->data);
+                    snprintf(err, CP_ERRLEN, "geom_rect(data=%s): needs chrom/xmin/xmax columns", L->data);
                     return -1;
                 }
                 Col fixed = L->has_color ? L->color : (Col){0.85, 0.85, 0.85};
@@ -1218,31 +1248,38 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 }
             } else if (gt == GEOM_HLINE) {
                 const Layer *L = &spec->layers[li];
-                if (L->has_intercept) {
+                /* a reference value <= 0 has no place on a log axis; ggplot
+                 * drops such a line rather than drawing at log10(<=0) = NaN */
+                double yt = NPCY(TY(L->intercept));
+                if (L->has_intercept && isfinite(yt)) {
                     g = gt_add(T, G_LINE, R, C, R, C);
                     g->col = L->has_color ? L->color : C_BLACK;
                     g->lw = lw_pt(0.5); g->clip = 1;
-                    g->x0 = 0; g->x1 = 1; g->y0 = g->y1 = NPCY(TY(L->intercept));
+                    g->x0 = 0; g->x1 = 1; g->y0 = g->y1 = yt;
                 }
             } else if (gt == GEOM_VLINE) {
                 const Layer *L = &spec->layers[li];
-                if (L->has_intercept) {
-                    double xt = spec->log_x ? log10(L->intercept) : L->intercept;
+                double xt = spec->log_x ? log10(L->intercept) : L->intercept;
+                double xn = NPCX(xt);
+                if (L->has_intercept && isfinite(xn)) {
                     g = gt_add(T, G_LINE, R, C, R, C);
                     g->col = L->has_color ? L->color : C_BLACK;
                     g->lw = lw_pt(0.5); g->clip = 1;
-                    g->y0 = 0; g->y1 = 1; g->x0 = g->x1 = NPCX(xt);
+                    g->y0 = 0; g->y1 = 1; g->x0 = g->x1 = xn;
                 }
             } else if (gt == GEOM_ABLINE) {
                 const Layer *L = &spec->layers[li];
                 double xl = spec->log_x ? pow(10, x0) : x0;   /* data-space edges */
                 double xr = spec->log_x ? pow(10, x1) : x1;
-                g = gt_add(T, G_LINE, R, C, R, C);
-                g->col = L->has_color ? L->color : C_BLACK;
-                g->lw = lw_pt(0.5); g->clip = 1;
-                g->x0 = 0; g->x1 = 1;
-                g->y0 = NPCY(TY(L->intercept + L->slope * xl));
-                g->y1 = NPCY(TY(L->intercept + L->slope * xr));
+                double yl = NPCY(TY(L->intercept + L->slope * xl));
+                double yr = NPCY(TY(L->intercept + L->slope * xr));
+                if (isfinite(yl) && isfinite(yr)) {
+                    g = gt_add(T, G_LINE, R, C, R, C);
+                    g->col = L->has_color ? L->color : C_BLACK;
+                    g->lw = lw_pt(0.5); g->clip = 1;
+                    g->x0 = 0; g->x1 = 1;
+                    g->y0 = yl; g->y1 = yr;
+                }
             } else if (gt == GEOM_TEXT || gt == GEOM_LABEL) {
                 const Layer *L = &spec->layers[li];
                 double fs = (L->txt_size > 0 ? L->txt_size : 3.88) * 2.845276; /* mm -> pt */
@@ -1318,7 +1355,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             const Column *bc = df_col(cb, "chrom"), *bs = df_col(cb, "start"),
                          *be = df_col(cb, "end"), *bt = df_col(cb, "stain");
             if (!bc || !bs || !be || !bt) {
-                sprintf(err, "ideogram cytoband needs chrom,start,end,stain columns"); return -1;
+                snprintf(err, CP_ERRLEN, "ideogram cytoband needs chrom,start,end,stain columns"); return -1;
             }
             double yb0 = 0.010, yb1 = ideo_npc - 0.010;   /* npc band at panel bottom */
             for (int r2 = 0; r2 < cb->nrow; r2++) {
@@ -1362,7 +1399,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     cairo_status_t st = cp_surface_emit(surf, out);
     cairo_surface_destroy(surf);
     if (st != CAIRO_STATUS_SUCCESS) {
-        sprintf(err, "cairo: %s", cairo_status_to_string(st));
+        snprintf(err, CP_ERRLEN, "cairo: %s", cairo_status_to_string(st));
         return -1;
     }
     return 0;

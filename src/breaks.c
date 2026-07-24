@@ -40,6 +40,14 @@ static double density_max(int k, int m) {
 }
 
 int extended_breaks(double dmin, double dmax, int m, double *out, int max_out) {
+    /* degenerate range: a constant-valued axis (dmax <= dmin) makes delta 0
+     * (log10(0) = -inf, UB in the ceil below) and step 0 (an infinite emit
+     * loop). R's extended() returns the single value; do the same. */
+    if (!(dmax > dmin)) {
+        if (max_out < 1) return 0;
+        out[0] = dmin;
+        return 1;
+    }
     double best_score = -2, blmin = dmin, blmax = dmax, bstep = dmax - dmin;
     for (int j = 1; j <= 2; j++)
         for (int i = 0; i < NQ; i++) {

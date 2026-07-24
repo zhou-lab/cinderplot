@@ -91,7 +91,7 @@ void cp_set_no_header(int on) { g_no_header = on; }
 DataFrame *df_read_csv(const char *path, char *err) {
     if (!strcmp(path, "stdin")) path = "-";          /* alias for stdin */
     if (!strcmp(path, "-") && isatty(fileno(stdin))) {
-        snprintf(err, 256, "no input: stdin is a terminal — pipe data in or name a file");
+        snprintf(err, CP_ERRLEN, "no input: stdin is a terminal — pipe data in or name a file");
         return NULL;
     }
     char *buf;
@@ -101,7 +101,7 @@ DataFrame *df_read_csv(const char *path, char *err) {
         if (!buf) return NULL;
     } else {
         FILE *f = !strcmp(path, "-") ? stdin : fopen(path, "rb");
-        if (!f) { sprintf(err, "cannot open %s", path); return NULL; }
+        if (!f) { snprintf(err, CP_ERRLEN, "cannot open %s", path); return NULL; }
         buf = read_all(f);
         if (f != stdin) fclose(f);
     }
@@ -115,12 +115,12 @@ DataFrame *df_read_csv(const char *path, char *err) {
     StrVec header = {0};
     int hn = split_record(&p, &header, delim);
     if (hn < 0) {
-        snprintf(err, 256, "%s: malformed quoted field in header", path);
+        snprintf(err, CP_ERRLEN, "%s: malformed quoted field in header", path);
         free(buf);
         return NULL;
     }
     if (!hn || header.n == 0) {
-        sprintf(err, "%s: empty file", path);
+        snprintf(err, CP_ERRLEN, "%s: empty file", path);
         return NULL;
     }
     int ncol = header.n;
@@ -137,14 +137,14 @@ DataFrame *df_read_csv(const char *path, char *err) {
         StrVec rec = {0};
         int nf = split_record(&p, &rec, delim);
         if (nf < 0) {
-            snprintf(err, 256, "%s: malformed quoted field in row %d", path, nrow + rowbase);
+            snprintf(err, CP_ERRLEN, "%s: malformed quoted field in row %d", path, nrow + rowbase);
             free(buf);
             return NULL;
         }
         if (nf == 0) break;
         if (nf == 1 && !*rec.v[0]) { free(rec.v[0]); free(rec.v); continue; } /* blank line */
         if (nf != ncol) {
-            sprintf(err, "%s: row %d has %d fields, expected %d", path, nrow + rowbase, nf, ncol);
+            snprintf(err, CP_ERRLEN, "%s: row %d has %d fields, expected %d", path, nrow + rowbase, nf, ncol);
             return NULL;
         }
         for (int c = 0; c < ncol; c++) sv_push(&cells[c], rec.v[c]);
@@ -235,12 +235,16 @@ Factor *factor_make(const DataFrame *df, const Column *c) {
         }
         qsort(uniq, nu, sizeof(char *), cmp_str);
         f->nlev = nu;
-        f->levels = uniq;
+        /* own the level strings (strdup), matching the numeric branch above, so
+         * a Factor never borrows into the DataFrame's column storage */
+        f->levels = malloc(nu * sizeof(char *));
+        for (int i = 0; i < nu; i++) f->levels[i] = strdup(uniq[i]);
         for (int r = 0; r < df->nrow; r++) {
             f->idx[r] = -1;
             for (int i = 0; i < nu; i++)
                 if (!is_na(c->str[r]) && !strcmp(c->str[r], uniq[i])) { f->idx[r] = i; break; }
         }
+        free(uniq);
     }
     return f;
 }

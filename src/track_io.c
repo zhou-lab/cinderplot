@@ -12,7 +12,7 @@ static char *slurp(const char *path, char *err) {
     size_t pl = strlen(path);
     if (pl > 3 && !strcmp(path + pl - 3, ".gz")) return gz_read_all(path, err);
     FILE *f = !strcmp(path, "-") ? stdin : fopen(path, "rb");
-    if (!f) { sprintf(err, "cannot open %s", path); return NULL; }
+    if (!f) { snprintf(err, CP_ERRLEN, "cannot open %s", path); return NULL; }
     size_t cap = 1 << 16, n = 0, r;
     char *b = malloc(cap);
     while ((r = fread(b + n, 1, cap - n, f)) > 0) {
@@ -139,6 +139,7 @@ GeneModel *bed12_read(const char *path, const char *chrom, long rs, long re, int
         g->strand = f[5][0];
         long sizes[1024], starts[1024];
         int bc = atoi(f[9]);
+        if (bc < 0) bc = 0;   /* corrupt blockCount: don't malloc a negative nexon */
         int ns = commalist(f[10], sizes, 1024), nst = commalist(f[11], starts, 1024);
         g->nexon = bc < ns ? bc : ns; if (nst < g->nexon) g->nexon = nst;
         g->exons = malloc(g->nexon * sizeof(Exon));

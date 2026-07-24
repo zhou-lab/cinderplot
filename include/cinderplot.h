@@ -4,6 +4,12 @@
 
 #define CINDERPLOT_VERSION "0.5.2"
 
+/* Size of the caller-supplied error buffer passed to every *_read / render /
+ * dsl_parse entry point (see main.c: char err[CP_ERRLEN]). All error
+ * formatting must be bounded to this length. Sized to hold the longest
+ * message — the DSL "not implemented; supported: ..." list is ~730 bytes. */
+#define CP_ERRLEN 1024
+
 #include <cairo.h>
 
 typedef struct { double r, g, b; } Col;
