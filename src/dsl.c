@@ -106,9 +106,10 @@ static int parse_aes(P *p, PlotSpec *spec) {
             else if (!strcmp(key, "yend") || !strcmp(key, "ymax")) e = &spec->yend;
             else if (!strcmp(key, "chrom") || !strcmp(key, "chr")) e = &spec->chrom;
             else if (!strcmp(key, "label")) e = &spec->label;
+            else if (!strcmp(key, "size")) e = &spec->size;
             else if (!strcmp(key, "colour") || !strcmp(key, "color")
                   || !strcmp(key, "fill")) e = &spec->colour;
-            else return fail(p, "aes(%s=...) is not implemented; supported: x, y, xend, yend, label, chrom, colour, fill", key);
+            else return fail(p, "aes(%s=...) is not implemented; supported: x, y, xend, yend, label, size, chrom, colour, fill", key);
             free(key);
         } else {
             p->s = save;                     /* positional: x then y */
@@ -672,6 +673,10 @@ static int parse_term(P *p, PlotSpec *spec) {
         spec->has_colour_scale = 1;
         return parse_grad_scale(p, &spec->colour_scale, k, "scale_colour_");
     }
+    if (!strcmp(name, "coord_flip")) {          /* swap the x and y axes */
+        spec->coord_flip = 1;
+        return expect(p, ')');
+    }
     if (!strcmp(name, "facet_wrap")) {
         skip_ws(p);
         if (*p->s != '~') return fail(p, "facet_wrap() expects a formula: facet_wrap(~var)", "");
@@ -701,7 +706,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                    "geom_density(), geom_hline(), geom_vline(), geom_abline(), "
                    "geom_text()/geom_text_repel(), geom_label()/geom_label_repel(), "
                    "labs()/xlab()/ylab()/ggtitle(), "
-                   "facet_wrap(~var), scale_x_log10(), scale_y_log10(), scale_*_continuous(), xlim(), ylim(), "
+                   "facet_wrap(~var), coord_flip(), scale_x_log10(), scale_y_log10(), scale_*_continuous(), xlim(), ylim(), "
                    "scale_*_manual(), theme_bw()/theme_minimal()/theme_classic()/..., "
                    "heatmap(), annotation(), legend(), scale_fill_*(), "
                    "region(), coverage(), interval(), genes(), arcs(), matrix(), cytoband()", name);

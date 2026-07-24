@@ -139,6 +139,104 @@ static GTable *build_colorbar_legend(cairo_t *cr, const Theme *th, const char *t
     return t;
 }
 
+/* ---- aes(size=): map a numeric value to a point radius. ggplot's default
+ * scale_size_continuous uses area_pal(range=c(1,6)): the value is rescaled to
+ * [0,1], then the SIZE aesthetic = 1 + 5*sqrt(t) (so radius scales as sqrt of
+ * value -> area is linear in value). The size aesthetic is converted to a pt
+ * radius with the same factor geom_point(size=) uses (PT_RADIUS at size 1.5). */
+static double size_to_radius(double v, double lo, double hi) {
+    double t = hi > lo ? (v - lo) / (hi - lo) : 0.5;
+    if (t < 0) t = 0; else if (t > 1) t = 1;
+    double sz = 1.0 + (6.0 - 1.0) * sqrt(t);   /* area_pal(range = c(1, 6)) */
+    return PT_RADIUS * sz / 1.5;
+}
+
+/* size legend: a few representative breaks, each a black circle at its mapped
+ * radius plus the value label (mirrors build_legend's discrete-key layout) */
+static GTable *build_size_legend(cairo_t *cr, const Theme *th, const char *title,
+                                 const double *br, const double *radii, int nb, int dec) {
+    GTable *t = cp_xcalloc(1, sizeof(GTable));
+    /* the table needs 2 + 2*nb - 1 rows in rowh[GT_MAXDIM]; cap the break
+     * count so it can never overflow (defensive: extended_breaks(m=5) stays
+     * well under this today, but the bound must not depend on that). */
+    int nbmax = (GT_MAXDIM - 1) / 2;
+    if (nb > nbmax) nb = nbmax;
+    char **labs = cp_xmalloc(nb * sizeof(char *));
+    double label_w = 0;
+    for (int i = 0; i < nb; i++) {
+        labs[i] = cp_xmalloc(32); fmt_break(br[i], dec, labs[i], 32);
+        double w = text_w(cr, SZ_AXIS_TEXT, labs[i]);
+        if (w > label_w) label_w = w;
+    }
+    double title_w = title ? text_w(cr, SZ_BASE, title) : 0;
+    if (title_w > KEY_SIZE + TXT_GAP + label_w)
+        label_w = title_w - KEY_SIZE - TXT_GAP;
+
+    t->ncol = 3;
+    t->colw[0] = upt(KEY_SIZE);
+    t->colw[1] = upt(TXT_GAP);
+    t->colw[2] = upt(label_w);
+    t->nrow = 2 + 2 * nb - 1;
+    t->rowh[0] = upt(title ? font_h(cr, SZ_BASE) : 0);
+    t->rowh[1] = upt(title ? HALF_LINE : 0);
+    for (int i = 0; i < nb; i++) {
+        t->rowh[2 + 2 * i] = upt(KEY_SIZE);
+        if (i < nb - 1) t->rowh[3 + 2 * i] = upt(HALF_LINE * 0.4);
+    }
+
+    Grob *g;
+    if (title) {
+        g = gt_add(t, G_TEXT, 0, 0, 0, 2);
+        g->str = title; g->size = SZ_BASE; g->col = th->title;
+        g->tx = 0; g->ty = 1; g->hj = 0; g->va = V_TOP;
+    }
+    static const double half = 0.5;
+    Col *black = cp_xmalloc(sizeof(Col)); *black = C_BLACK;
+    for (int i = 0; i < nb; i++) {
+        int r = 2 + 2 * i;
+        if (th->key_bg_on) { g = gt_add(t, G_RECT, r, 0, r, 0); g->col = th->key_bg; }
+        g = gt_add(t, G_POINTS, r, 0, r, 0);
+        g->n = 1; g->px = &half; g->py = &half;
+        g->pcol = black; g->radius = radii[i];
+        g = gt_add(t, G_TEXT, r, 2, r, 2);
+        g->str = labs[i]; g->size = SZ_AXIS_TEXT; g->col = th->title;
+        g->tx = 0; g->ty = 0.5; g->hj = 0; g->va = V_INKCENTER;
+    }
+    return t;
+}
+
+/* Vertically stack several guide sub-tables (colour + size) into one legend
+ * block, ggplot-style: each guide centred in a fixed-height row, gaps between,
+ * column width = the widest guide. A single guide is returned unchanged. */
+static GTable *stack_guides(GTable **gs, int n) {
+    if (n == 1) return gs[0];
+    GTable *c = cp_xcalloc(1, sizeof(GTable));
+    double w = 0;
+    for (int i = 0; i < n; i++) w = fmax(w, gt_fixed_w(gs[i]));
+    c->ncol = 1; c->colw[0] = upt(w);
+    c->nrow = 2 * n - 1;
+    for (int i = 0; i < n; i++) {
+        c->rowh[2 * i] = upt(gt_fixed_h(gs[i]));
+        if (i < n - 1) c->rowh[2 * i + 1] = upt(2 * HALF_LINE);   /* legend.spacing */
+    }
+    for (int i = 0; i < n; i++) {
+        Grob *g = gt_add(c, G_TABLE, 2 * i, 0, 2 * i, 0);
+        g->child = gs[i];
+    }
+    return c;
+}
+
+/* coord_flip(): transpose a panel-content grob's npc coordinates (x <-> y).
+ * Every panel grob is placed in npc [0,1]^2 within the panel cell, so swapping
+ * the two axes is a valid flip; the axes/gridlines are re-pointed separately. */
+static void flip_grob(Grob *g) {
+    double t;
+    t = g->x0; g->x0 = g->y0; g->y0 = t;
+    t = g->x1; g->x1 = g->y1; g->y1 = t;
+    t = g->tx; g->tx = g->ty; g->ty = t;
+    const double *p = g->px; g->px = g->py; g->py = p;
+}
+
 /* minor breaks: midpoints between majors in transformed space, extended
  * one gap beyond each end, filtered to the limits */
 static int make_minors(const double *maj, int nmaj, double lo, double hi, double *out) {
@@ -293,6 +391,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         if (spec->layers[i].type == GEOM_DENSITY) hasdens = 1;
         if (spec->layers[i].type == GEOM_TEXT || spec->layers[i].type == GEOM_LABEL) hastext = 1;
     }
+    int flip = spec->coord_flip;   /* coord_flip(): x and y axes swapped */
 
     /* ---- resolve columns ---- */
     const Column *xc = df_col(df, spec->x.col);
@@ -365,6 +464,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     }
     /* genome coordinate x-scale: concatenate chromosomes via seqinfo offsets */
     int genome_x = spec->genome_seqinfo != NULL;
+    if (flip && genome_x) {
+        snprintf(err, CP_ERRLEN, "coord_flip() is not supported with scale_x_genome()"); return -1;
+    }
     GenomeScale *gs = NULL;
     double *roff = NULL;             /* per-row genome offset (-1 = drop) */
     if (genome_x) {
@@ -413,6 +515,20 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             }
         }
     }
+    /* aes(size=): numeric column mapped to point area (geom_point) */
+    const Column *szc = NULL;
+    if (spec->size.col) {
+        szc = df_col(df, spec->size.col);
+        if (!szc) { snprintf(err, CP_ERRLEN, "column `%s` not found", spec->size.col); return -1; }
+        if (szc->type != COL_NUM || spec->size.is_factor) {
+            snprintf(err, CP_ERRLEN, "aes(size=) needs a numeric column; `%s` is not numeric", spec->size.col);
+            return -1;
+        }
+        if (!haspoint) {
+            snprintf(err, CP_ERRLEN, "aes(size=) is only implemented for geom_point()");
+            return -1;
+        }
+    }
     Factor *ff = NULL;
     if (spec->facet_var) {
         const Column *fc = df_col(df, spec->facet_var);
@@ -428,7 +544,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 : genome_x ? (roff[r] >= 0 && !isnan(xc->num[r]))
                 : !isnan(xc->num[r]);
         int ok = xok && (!yc || !isnan(yc->num[r]))
-              && (!cf || cf->idx[r] >= 0) && (!ff || ff->idx[r] >= 0);
+              && (!cf || cf->idx[r] >= 0) && (!ff || ff->idx[r] >= 0)
+              && (!szc || !isnan(szc->num[r]));
         if (!ok) d_na++;
         else if ((spec->log_x && xc->num[r] <= 0) || (spec->log_y && yc && yc->num[r] <= 0)) {
             ok = 0; d_log++;
@@ -455,6 +572,18 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         }
     }
 #define CCOL(r) fill_map_value(&cscale, colc->num[r], cdmin, cdmax)
+
+    /* size domain (data range over the used rows) */
+    double szmin = 0, szmax = 1;
+    if (szc) {
+        szmin = 1e300; szmax = -1e300;
+        for (int r = 0; r < df->nrow; r++)
+            if (use[r] && !isnan(szc->num[r])) {
+                if (szc->num[r] < szmin) szmin = szc->num[r];
+                if (szc->num[r] > szmax) szmax = szc->num[r];
+            }
+        if (szmax <= szmin) szmax = szmin + 1;
+    }
 
 #define TY(v) (spec->log_y ? log10(v) : (v))
 /* transformed x for row r: category position (discrete), genome offset+pos
@@ -704,6 +833,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     double y0 = tymin - 0.05 * (tymax - tymin), y1 = tymax + 0.05 * (tymax - tymin);
     /* reserve the bottom `ideo_npc` of the panel for the ideogram track */
     double ideo_npc = (spec->ideogram_path && genome_x) ? 0.06 : 0;
+    if (flip && ideo_npc > 0) {
+        snprintf(err, CP_ERRLEN, "coord_flip() is not supported with ideogram()"); return -1;
+    }
     if (ideo_npc > 0) y0 -= (y1 - y0) * ideo_npc / (1 - ideo_npc);
 #define NPCX(t) (((t) - x0) / (x1 - x0))
 #define NPCY(t) (((t) - y0) / (y1 - y0))
@@ -833,9 +965,21 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                            CAIRO_FONT_WEIGHT_NORMAL);
     const Theme *th = &THEMES[spec->theme];   /* active theme (THEME_GRAY = default) */
 
-    double ylab_w = 0;
-    for (int i = 0; i < nybr; i++) {
-        double w = cp_label_w(cr, SZ_AXIS_TEXT, ylabs[i]);   /* superscript-aware */
+    /* Under coord_flip the x aesthetic is drawn on the LEFT (vertical) axis and
+     * y on the BOTTOM; otherwise the usual y-left / x-bottom. lax = left axis
+     * (ticks at npc-y positions), bax = bottom axis (ticks at npc-x). */
+    int lax_n, bax_n; double *lax_pos, *bax_pos; char **lax_lab, **bax_lab;
+    if (flip) {
+        lax_n = nxbr; lax_pos = xnpc; lax_lab = xlabs;
+        bax_n = nybr; bax_pos = ynpc; bax_lab = ylabs;
+    } else {
+        lax_n = nybr; lax_pos = ynpc; lax_lab = ylabs;
+        bax_n = nxbr; bax_pos = xnpc; bax_lab = xlabs;
+    }
+
+    double ylab_w = 0;                          /* width reserved for the left axis labels */
+    for (int i = 0; i < lax_n; i++) {
+        double w = cp_label_w(cr, SZ_AXIS_TEXT, lax_lab[i]);   /* superscript-aware */
         if (w > ylab_w) ylab_w = w;
     }
     double labh = font_h(cr, SZ_AXIS_TEXT), baseh = font_h(cr, SZ_BASE);
@@ -844,10 +988,17 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     const char *xtitle = spec->lab_x ? spec->lab_x : genome_x ? "" : spec->x.expr;
     const char *ytitle = spec->lab_y ? spec->lab_y
                        : nhist || hasbar ? "count" : hasdens ? "density" : spec->y.expr;
+    /* axis titles follow the flip: the left (rotated) title names the vertical
+     * axis, the bottom title the horizontal axis */
+    const char *left_title   = flip ? xtitle : ytitle;
+    const char *bottom_title = flip ? ytitle : xtitle;
 
     Col *pal = NULL;
     GTable *leg = NULL;
     const char *col_title = spec->lab_colour ? spec->lab_colour : spec->colour.expr;
+    /* Guides stack top-to-bottom: colour (or fill) first, then size — the
+     * order ggplot uses for a point layer mapping both. */
+    GTable *guides[2]; int nguide = 0;
     if (cf) {
         pal = cp_xmalloc(cf->nlev * sizeof(Col));
         if (spec->has_manual) {                 /* scale_*_manual(values=) */
@@ -862,11 +1013,22 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 pal[i] = c;
             }
         } else hue_palette(cf->nlev, pal);
-        leg = build_legend(cr, th, col_title, cf, pal, haspoint,
+        guides[nguide++] = build_legend(cr, th, col_title, cf, pal, haspoint,
                            hasline || hasseg || hasdens, hasbox || hasbar || hasrect, hastext);
     } else if (cont_col) {
-        leg = build_colorbar_legend(cr, th, col_title, &cscale, cdmin, cdmax);
+        guides[nguide++] = build_colorbar_legend(cr, th, col_title, &cscale, cdmin, cdmax);
     }
+    if (szc) {                                   /* size legend: representative breaks */
+        double sbr[16]; int nsb = extended_breaks(szmin, szmax, 5, sbr, 16), nf = 0;
+        for (int i = 0; i < nsb; i++) if (sbr[i] >= szmin && sbr[i] <= szmax) sbr[nf++] = sbr[i];
+        if (nf == 0) { sbr[0] = szmin; sbr[1] = szmax; nf = szmax > szmin ? 2 : 1; }
+        double srad[16];
+        for (int i = 0; i < nf; i++) srad[i] = size_to_radius(sbr[i], szmin, szmax);
+        int sdec = axis_decimals(sbr, nf);
+        const char *sz_title = spec->size.expr;
+        guides[nguide++] = build_size_legend(cr, th, sz_title, sbr, srad, nf, sdec);
+    }
+    if (nguide) leg = stack_guides(guides, nguide);
 
     /* ---- outer table ---- */
     GTable *T = cp_xcalloc(1, sizeof(GTable));
@@ -918,10 +1080,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     }
     if (th->axis_title_on) {
         g = gt_add(T, G_TEXT, r_axis + 2, PC(0), r_axis + 2, PC(ncolp - 1));
-        g->str = xtitle; g->size = SZ_BASE; g->col = th->axis_title;
+        g->str = bottom_title; g->size = SZ_BASE; g->col = th->axis_title;
         g->tx = 0.5; g->ty = 1; g->hj = 0.5; g->va = V_TOP;
         g = gt_add(T, G_TEXT, PR(0), 1, PR(nrowp - 1), 1);
-        g->str = ytitle; g->size = SZ_BASE; g->col = th->axis_title;
+        g->str = left_title; g->size = SZ_BASE; g->col = th->axis_title;
         g->tx = 0.5; g->ty = 0.5; g->rot90 = 1;
     }
     if (leg) {
@@ -954,6 +1116,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             g->tx = 0.5; g->ty = 0.5; g->hj = 0.5; g->va = V_INKCENTER;
         }
 
+        int gstart = T->ngrobs;   /* first panel-content grob (all in cell R,C); */
+                                  /* under coord_flip these get transposed below */
         if (th->panel_bg_on) { g = gt_add(T, G_RECT, R, C, R, C); g->col = th->panel_bg; }
         if (th->grid_minor_on) {
             for (int i = 0; i < nxmin; i++) {
@@ -1076,16 +1240,18 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     if (use[r] && (!ff || ff->idx[r] == p)) np++;
                 double *px = cp_xmalloc(np * sizeof(double)), *py = cp_xmalloc(np * sizeof(double));
                 Col *pcol = cp_xmalloc(np * sizeof(Col));
+                double *prad = szc ? cp_xmalloc(np * sizeof(double)) : NULL;   /* size aes */
                 np = 0;
                 for (int r = 0; r < df->nrow; r++) {
                     if (!use[r] || (ff && ff->idx[r] != p)) continue;
                     px[np] = NPCX(TXR(r)); py[np] = NPCY(TY(yc->num[r]));
                     pcol[np] = spec->layers[li].has_color ? spec->layers[li].color
                              : cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BLACK;
+                    if (prad) prad[np] = size_to_radius(szc->num[r], szmin, szmax);
                     np++;
                 }
                 g = gt_add(T, G_POINTS, R, C, R, C);
-                g->n = np; g->px = px; g->py = py; g->pcol = pcol;
+                g->n = np; g->px = px; g->py = py; g->pcol = pcol; g->pradius = prad;
                 g->radius = spec->layers[li].point_size > 0
                           ? PT_RADIUS * spec->layers[li].point_size / 1.5 : PT_RADIUS;
                 g->clip = 1;
@@ -1378,15 +1544,21 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             }
         }
 
+        /* coord_flip: transpose every panel-content grob (x <-> y npc). The
+         * gridlines therefore align with the re-pointed left/bottom axes. */
+        if (flip)
+            for (int gi = gstart; gi < T->ngrobs; gi++) flip_grob(&T->grobs[gi]);
+
         if (pc == 0) {
-            g = gt_add(T, G_AXIS_Y, R, 3, R, 3);
-            g->n = nybr; g->py = ynpc; g->labels = ylabs;   /* log ticks are drawn inside the panel */
+            g = gt_add(T, G_AXIS_Y, R, 3, R, 3);   /* left axis: y (or x under flip) */
+            g->n = lax_n; g->py = lax_pos; g->labels = lax_lab;
             g->axis_styled = 1; g->tick_col = th->tick; g->hide_ticks = !th->tick_on;
             g->text_col = th->axis_text; g->hide_text = !th->axis_text_on;
         }
     }
 
-    /* x axes: under the bottom-most panel of each column */
+    /* x axes: under the bottom-most panel of each column (bottom axis: x, or y
+     * under flip). Genome mode (never flipped) keeps its chrom-name axis. */
     for (int c = 0; c < ncolp && c < npan; c++) {
         int rb = (npan - 1 - c) / ncolp;
         if (rb == nrowp - 1)
@@ -1395,7 +1567,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             g = gt_add(T, G_AXIS_X, PR(rb) + 1, PC(c), PR(rb + 1), PC(c));
         if (genome_x) { g->n = gax_n; g->px = gax_pos; g->labels = gax_lab; }
         else {
-            g->n = nxbr; g->px = xnpc; g->labels = xlabs;   /* log ticks are drawn inside the panel */
+            g->n = bax_n; g->px = bax_pos; g->labels = bax_lab;   /* log ticks drawn inside the panel */
         }
         g->axis_styled = 1; g->tick_col = th->tick; g->hide_ticks = !th->tick_on;
         g->text_col = th->axis_text; g->hide_text = !th->axis_text_on;

@@ -173,6 +173,7 @@ typedef struct {
     int text_box; Col box_fill, box_line;      /* G_TEXT: bg box (geom_label) */
     int n;                                     /* points / axis breaks */
     const double *px, *py; const Col *pcol; double radius;
+    const double *pradius;                     /* G_POINTS: per-point radius (size aes); NULL = use `radius` */
     char **labels;                             /* axis tick labels */
     const double *mtpos, *mtlen; int mtn;      /* minor axis ticks (log): npc pos + length (pt) */
     Col tick_col, text_col;                    /* G_AXIS_*: themed colours (opt-in) */
@@ -272,7 +273,9 @@ typedef struct {
     AesEntry x, y, colour;          /* colour also accepts fill= */
     AesEntry xend, yend;            /* geom_segment endpoints */
     AesEntry label;                 /* geom_text/geom_label label column */
+    AesEntry size;                  /* geom_point size: numeric -> point area */
     AesEntry chrom;                 /* genome scale: chromosome column */
+    int coord_flip;                 /* coord_flip(): swap the x and y axes */
     char *genome_seqinfo;           /* scale_x_genome: seqinfo TSV path */
     char *ideogram_path;            /* ideogram(): cytoband TSV path */
     Layer layers[MAX_LAYERS];

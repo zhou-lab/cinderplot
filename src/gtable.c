@@ -217,7 +217,8 @@ void gt_render(GTable *t, cairo_t *cr) {
         case G_POINTS:
             for (int i = 0; i < g->n; i++) {
                 set_col(cr, g->pcol[i]);
-                cairo_arc(cr, DX(g->px[i]), DY(g->py[i]), g->radius, 0, 2 * M_PI);
+                double rad = g->pradius ? g->pradius[i] : g->radius;   /* size aes = per-point */
+                cairo_arc(cr, DX(g->px[i]), DY(g->py[i]), rad, 0, 2 * M_PI);
                 cairo_fill(cr);
             }
             break;
