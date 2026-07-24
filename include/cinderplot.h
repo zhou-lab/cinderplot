@@ -11,6 +11,30 @@
 #define CP_ERRLEN 1024
 
 #include <cairo.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+
+/* Fail-fast allocation wrappers. cinderplot is a one-shot CLI, so the sane
+ * response to an allocation failure is a clear message and exit, not error
+ * plumbing through every render path. Use these instead of raw
+ * malloc/calloc/realloc/strdup so a NULL return can never be dereferenced. */
+static inline void cp_oom(void) {
+    fputs("cinderplot: out of memory\n", stderr);
+    exit(1);
+}
+static inline void *cp_xmalloc(size_t n) {
+    void *p = malloc(n ? n : 1);   if (!p) cp_oom();   return p;
+}
+static inline void *cp_xcalloc(size_t n, size_t sz) {
+    void *p = calloc(n ? n : 1, sz ? sz : 1);   if (!p) cp_oom();   return p;
+}
+static inline void *cp_xrealloc(void *old, size_t n) {
+    void *p = realloc(old, n ? n : 1);   if (!p) cp_oom();   return p;
+}
+static inline char *cp_xstrdup(const char *s) {
+    char *p = strdup(s);   if (!p) cp_oom();   return p;
+}
 
 typedef struct { double r, g, b; } Col;
 
@@ -82,9 +106,9 @@ static const Theme THEMES[] = {
 
 /* ---------- breaks.c: extended Wilkinson labeling ---------- */
 int extended_breaks(double dmin, double dmax, int m, double *out, int max_out);
-void fmt_num(double v, char *buf);
+void fmt_num(double v, char *buf, size_t cap);
 int axis_decimals(const double *br, int n);
-void fmt_break(double v, int decimals, char *buf);
+void fmt_break(double v, int decimals, char *buf, size_t cap);
 /* majors for a log10 scale, positions in TRANSFORMED (log10) space,
  * labels in data space; returns count */
 int log10_breaks(double tlo, double thi, double *tmaj, char **labs, int max_out);

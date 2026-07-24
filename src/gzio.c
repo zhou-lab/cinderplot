@@ -24,9 +24,9 @@ static char *gz_slurp(const char *path, size_t *outlen, char *err) {
     gzFile g = gzopen(path, "rb");
     if (!g) { snprintf(err, CP_ERRLEN, "cannot open %s", path); return NULL; }
     size_t cap = 1 << 16, n = 0;
-    char *b = malloc(cap);
+    char *b = cp_xmalloc(cap);
     for (;;) {
-        if (cap - n < 4096) { cap *= 2; b = realloc(b, cap); }
+        if (cap - n < 4096) { cap *= 2; b = cp_xrealloc(b, cap); }
         int r = gzread(g, b + n, (unsigned)(cap - n - 1));
         if (r < 0) { snprintf(err, CP_ERRLEN, "%s: gzip read error", path); free(b); gzclose(g); return NULL; }
         n += (size_t)r;
@@ -79,7 +79,7 @@ static int bgzf_block(const unsigned char *c, size_t clen, size_t co,
     size_t dlen = bsize - (xlen + 12) - 8;                   /* -header -extra -trailer */
     uint32_t isize = c[co + bsize - 4] | (uint32_t)c[co + bsize - 3] << 8
                    | (uint32_t)c[co + bsize - 2] << 16 | (uint32_t)c[co + bsize - 1] << 24;
-    unsigned char *ub = malloc(isize ? isize : 1);
+    unsigned char *ub = cp_xmalloc(isize ? isize : 1);
     if (isize) {
         z_stream zs; memset(&zs, 0, sizeof zs);
         if (inflateInit2(&zs, -15) != Z_OK) { free(ub); return -1; }
@@ -123,7 +123,7 @@ static void buf_add(Buf *bf, const unsigned char *s, size_t n) {
     if (bf->n + n + 1 > bf->cap) {
         if (!bf->cap) bf->cap = 1 << 16;
         while (bf->n + n + 1 > bf->cap) bf->cap *= 2;
-        bf->b = realloc(bf->b, bf->cap);
+        bf->b = cp_xrealloc(bf->b, bf->cap);
     }
     memcpy(bf->b + bf->n, s, n); bf->n += n;
 }
@@ -156,10 +156,13 @@ char *tabix_slurp_region(const char *path, const char *chrom, long beg, long end
         if (!strcmp(nm, chrom)) { target = id; break; }
     }
     rd.off += (size_t)l_nm;
-    if (target < 0) { free(idx); char *e = malloc(1); e[0] = 0; return e; }   /* chrom not indexed */
+    if (target < 0) { free(idx); char *e = cp_xmalloc(1); e[0] = 0; return e; }   /* chrom not indexed */
 
-    int qcap = (int)((end - beg) >> 13) + 64;
-    int *qbins = malloc(qcap * sizeof(int));
+    /* clamp to reg2bins' own [0, 2^29) domain before sizing qbins, so a huge
+     * raw span can't overflow the int qcap into a too-small allocation */
+    long qb = beg < 0 ? 0 : beg, qe = end > (1L << 29) ? (1L << 29) : end;
+    int qcap = (int)(((qe > qb ? qe - qb : 0)) >> 13) + 64;
+    int *qbins = cp_xmalloc(qcap * sizeof(int));
     int nq = reg2bins(beg, end, qbins, qcap);
 
     /* 2. walk refs, collecting chunks from matching bins + the linear-index min offset */
@@ -176,7 +179,7 @@ char *tabix_slurp_region(const char *path, const char *chrom, long beg, long end
             if (!want) { rd_skip(&rd, (size_t)n_chunk * 16); continue; }
             for (int ch = 0; ch < n_chunk && rd.ok; ch++) {
                 uint64_t cb = rd_u64(&rd), ce = rd_u64(&rd);
-                if (nchunk == ccap) { ccap = ccap ? ccap * 2 : 16; chunks = realloc(chunks, ccap * sizeof(Chunk)); }
+                if (nchunk == ccap) { ccap = ccap ? ccap * 2 : 16; chunks = cp_xrealloc(chunks, ccap * sizeof(Chunk)); }
                 chunks[nchunk].b = cb; chunks[nchunk].e = ce; nchunk++;
             }
         }
@@ -205,7 +208,7 @@ char *tabix_slurp_region(const char *path, const char *chrom, long beg, long end
     FILE *cf = fopen(path, "rb");
     if (!cf) { snprintf(err, CP_ERRLEN, "cannot open %s", path); free(chunks); return NULL; }
     fseek(cf, 0, SEEK_END); long csz = ftell(cf); fseek(cf, 0, SEEK_SET);
-    unsigned char *cbuf = malloc(csz > 0 ? csz : 1);
+    unsigned char *cbuf = cp_xmalloc(csz > 0 ? csz : 1);
     if (csz > 0 && fread(cbuf, 1, (size_t)csz, cf) != (size_t)csz) { snprintf(err, CP_ERRLEN, "%s: read error", path); fclose(cf); free(cbuf); free(chunks); return NULL; }
     fclose(cf);
 
@@ -229,7 +232,7 @@ char *tabix_slurp_region(const char *path, const char *chrom, long beg, long end
     free(cbuf);
     free(chunks);
 
-    if (!ob.b) { ob.b = malloc(1); ob.n = 0; }
+    if (!ob.b) { ob.b = cp_xmalloc(1); ob.n = 0; }
     ob.b[ob.n] = 0;
     return ob.b;
 }

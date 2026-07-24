@@ -79,7 +79,7 @@ enum { DEND_LEFT, DEND_RIGHT, DEND_TOP, DEND_BENEATH };
 static HClust *cluster_dim(const Matrix *m, int dim, int **ord, char *err) {
     int n = dim == 0 ? m->nr : m->nc;
     int p = dim == 0 ? m->nc : m->nr;
-    double *obs = malloc((size_t)n * p * sizeof(double));
+    double *obs = cp_xmalloc((size_t)n * p * sizeof(double));
     for (int i = 0; i < n; i++)
         for (int k = 0; k < p; k++)
             obs[(size_t)i * p + k] = dim == 0 ? m->v[(size_t)i * m->nc + k]
@@ -87,30 +87,31 @@ static HClust *cluster_dim(const Matrix *m, int dim, int **ord, char *err) {
     HClust *h = hclust_ward(obs, n, p, err);
     free(obs);
     if (!h) return NULL;
-    *ord = malloc(n * sizeof(int));
+    *ord = cp_xmalloc(n * sizeof(int));
     memcpy(*ord, h->order, n * sizeof(int));
     return h;
 }
 
 static int *identity(int n) {
-    int *v = malloc(n * sizeof(int));
+    int *v = cp_xmalloc(n * sizeof(int));
     for (int i = 0; i < n; i++) v[i] = i;
     return v;
 }
 
 static Matrix *matrix_from_df(const DataFrame *df, char *err) {
     int c0 = df->ncol && df->cols[0].type == COL_STR ? 1 : 0;
-    Matrix *m = malloc(sizeof *m);
+    Matrix *m = cp_xmalloc(sizeof *m);
     m->nr = df->nrow;
     m->nc = df->ncol - c0;
-    if (m->nc < 1) { snprintf(err, CP_ERRLEN, "matrix csv has no numeric columns"); return NULL; }
+    if (m->nc < 1) { snprintf(err, CP_ERRLEN, "matrix csv has no numeric columns"); free(m); return NULL; }
     m->rn = c0 ? df->cols[0].str : NULL;
-    m->cn = malloc(m->nc * sizeof(char *));
-    m->v = malloc((size_t)m->nr * m->nc * sizeof(double));
+    m->cn = cp_xmalloc(m->nc * sizeof(char *));
+    m->v = cp_xmalloc((size_t)m->nr * m->nc * sizeof(double));
     for (int c = 0; c < m->nc; c++) {
         const Column *col = &df->cols[c + c0];
         if (col->type != COL_NUM) {
             snprintf(err, CP_ERRLEN, "matrix column `%s` is not numeric", col->name);
+            free(m->cn); free(m->v); free(m);
             return NULL;
         }
         m->cn[c] = col->name;
@@ -159,7 +160,7 @@ static void legend_scale(const RObj *tg, const PlotSpec *spec,
  * column that happens to collide with an object name unambiguous. */
 static int find_obj(RObj *ro, int n, const char *name) {
     for (int i = 0; i < n; i++)
-        if (!strcmp(ro[i].o->name, name)) return i;
+        if (ro[i].o->name && !strcmp(ro[i].o->name, name)) return i;
     for (int i = 0; i < n; i++)
         if (ro[i].o->type == HM_ANNOTATION && ro[i].ann_name
             && !strcmp(ro[i].ann_name, name)) return i;
@@ -194,7 +195,7 @@ static void draw_dendro(GTable *T, int CR, int CC, const RObj *r) {
     int nn = t->n;
     double maxh = nn > 1 ? t->height[nn - 2] : 1;
     if (maxh <= 0) maxh = 1;
-    double *npos = malloc((nn - 1) * sizeof(double));   /* node leaf-fraction */
+    double *npos = cp_xmalloc((nn - 1) * sizeof(double));   /* node leaf-fraction */
     for (int s = 0; s < nn - 1; s++) {
         int a = t->merge[s][0], b = t->merge[s][1];
         double pa = a < 0 ? (r->slot[-a - 1] + 0.5) / nn : npos[a - 1];
@@ -233,8 +234,8 @@ static void spread_labels(const double *y0, int n, double gap,
     if (n <= 0) return;
     /* a[i] = -y0[i] is INCREASING; a spacing q[i+1]-q[i] >= gap becomes
      * "r[i] = q[i] - i*gap is non-decreasing" — isotonic regression of c[i]. */
-    double *val = malloc(n * sizeof(double));
-    int *len = malloc(n * sizeof(int));
+    double *val = cp_xmalloc(n * sizeof(double));
+    int *len = cp_xmalloc(n * sizeof(int));
     int m = 0;
     for (int i = 0; i < n; i++) {
         val[m] = -y0[i] - i * gap; len[m] = 1; m++;
@@ -314,8 +315,8 @@ static void draw_one_legend(GTable *T, const RObj *r, const RObj *tg,
         int dec = axis_decimals(br, nf);
         for (int k = 0; k < nf; k++) {
             double frac = hi > lo ? (br[k] - lo) / (hi - lo) : 0.5;
-            char *lab = malloc(32);
-            fmt_break(br[k], dec, lab);
+            char *lab = cp_xmalloc(32);
+            fmt_break(br[k], dec, lab, 32);
             g = gt_add(T, G_LINE, RR, CCc, RR, CCc);
             g->col = C_TICK; g->lw = lw_pt(0.5);
             if (vert) {
@@ -411,11 +412,11 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                         o->data, df->nrow, a->o->name, need);
                 return -1;
             }
-            ro[i].ann_col = malloc(df->nrow * sizeof(Col));
+            ro[i].ann_col = cp_xmalloc(df->nrow * sizeof(Col));
             ro[i].ann_name = col->name;
             if (col->type == COL_STR) {
                 Factor *f = factor_make(df, col);
-                Col *pal = malloc(f->nlev * sizeof(Col));
+                Col *pal = cp_xmalloc(f->nlev * sizeof(Col));
                 hue_palette(f->nlev, pal);
                 for (int r = 0; r < df->nrow; r++)
                     ro[i].ann_col[r] = f->idx[r] >= 0 ? pal[f->idx[r]] : C_NA;
@@ -426,6 +427,10 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                     if (isnan(col->num[r])) continue;
                     if (col->num[r] < lo) lo = col->num[r];
                     if (col->num[r] > hi) hi = col->num[r];
+                }
+                if (hi < lo) {   /* every value NA: no colorbar scale to build */
+                    snprintf(err, CP_ERRLEN, "annotation `%s` has no finite values", o->data);
+                    return -1;
                 }
                 FillScale vir = {0};
                 vir.kind = FILL_VIRIDIS;
@@ -465,7 +470,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                       : pl->kind == PL_RIGHT_OF ? DEND_RIGHT
                       : pl->kind == PL_TOP_OF ? DEND_TOP : DEND_BENEATH;
             int *word = horiz ? a->coword : a->roword;
-            ro[i].slot = malloc(tree->n * sizeof(int));
+            ro[i].slot = cp_xmalloc(tree->n * sizeof(int));
             for (int s = 0; s < tree->n; s++) ro[i].slot[word[s]] = s;
             ro[i].nr = 1; ro[i].nc = 1;
         }
@@ -492,6 +497,13 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             }
             if (ro[i].leg_discrete && (pl->kind == PL_TOP_OF || pl->kind == PL_BENEATH)) {
                 snprintf(err, CP_ERRLEN, "discrete legends must be vertical; use right_of()/left_of()");
+                return -1;
+            }
+            /* only the four side placements are emitted by the draw loops; a
+             * full/default-placed legend would be measured but never drawn */
+            if (pl->kind == PL_FULL) {
+                snprintf(err, CP_ERRLEN, "legend() must be placed relative to an "
+                         "object (right_of/left_of/top_of/beneath)");
                 return -1;
             }
             /* rigid chrome placed in the margin; not a canvas rect */
@@ -658,7 +670,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             int dec = axis_decimals(br, nf);
             double wmax = 0;
             for (int k = 0; k < nf; k++) {
-                char b[32]; fmt_break(br[k], dec, b);
+                char b[32]; fmt_break(br[k], dec, b, sizeof b);
                 double tw = text_w(cr, SZ_AXIS_TEXT, b);
                 if (tw > wmax) wmax = tw;
             }
@@ -707,7 +719,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
     cr = cairo_create(surf);
     cairo_select_font_face(cr, FONT_FAMILY, CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
 
-    GTable *T = calloc(1, sizeof(GTable));
+    GTable *T = cp_xcalloc(1, sizeof(GTable));
     T->ncol = 3;
     T->colw[0] = upt(marL);
     T->colw[1] = unull(1);
@@ -741,7 +753,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                 /* raster: fill an ARGB image (one pixel per display cell)
                  * and embed it as a single grob */
                 int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, m->nc);
-                unsigned char *buf = malloc((size_t)m->nr * stride);
+                unsigned char *buf = cp_xmalloc((size_t)m->nr * stride);
                 for (int rr = 0; rr < m->nr; rr++) {
                     uint32_t *row = (uint32_t *)(buf + (size_t)rr * stride);
                     for (int cc = 0; cc < m->nc; cc++) {
@@ -776,7 +788,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                 int iw = r->ann_horiz ? r->ann_n : 1;
                 int ih = r->ann_horiz ? 1 : r->ann_n;
                 int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, iw);
-                unsigned char *buf = malloc((size_t)ih * stride);
+                unsigned char *buf = cp_xmalloc((size_t)ih * stride);
                 for (int k = 0; k < r->ann_n; k++) {
                     uint32_t px = col_argb(r->ann_col[r->ann_ord[k]]);
                     if (r->ann_horiz) ((uint32_t *)buf)[k] = px;   /* slot k -> column k */
@@ -809,9 +821,9 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                 int right = r->o->place.kind != PL_LEFT_OF;
                 double edge = right ? r->l + r->w : r->l;
                 double txt_x = right ? edge + PTX(ANN_LEAD) : edge - PTX(ANN_LEAD);
-                double *cy = malloc(r->ann_n * sizeof(double));   /* run true centre (npc) */
-                double *ty = malloc(r->ann_n * sizeof(double));   /* spread label position */
-                int *rlev = malloc(r->ann_n * sizeof(int));
+                double *cy = cp_xmalloc(r->ann_n * sizeof(double));   /* run true centre (npc) */
+                double *ty = cp_xmalloc(r->ann_n * sizeof(double));   /* spread label position */
+                int *rlev = cp_xmalloc(r->ann_n * sizeof(int));
                 int nrun = 0;
                 for (int s = 0; s < r->ann_n; ) {
                     int lev = r->ann_f->idx[r->ann_ord[s]], e = s;
@@ -825,7 +837,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                     Col c = r->ann_pal[rlev[k]];
                     const int NB = 16;                            /* cubic bezier, horizontal
                         * tangents: P0,P1 at the strip edge, P2,P3 at the label */
-                    double *px = malloc(NB * sizeof(double)), *py = malloc(NB * sizeof(double));
+                    double *px = cp_xmalloc(NB * sizeof(double)), *py = cp_xmalloc(NB * sizeof(double));
                     double ym = (cy[k] + ty[k]) / 2;
                     for (int j = 0; j < NB; j++) {
                         double u = 1.0 - (double)j / (NB - 1), tt = 1.0 - u;

@@ -104,7 +104,7 @@ static MatData *read_matrix(const TrackObj *t, char *err) {
     for (int c = 0; c < mf->ncol; c++)
         if (mf->cols[c].type == COL_STR && &mf->cols[c] != chr_c && &mf->cols[c] != pid)
             { samp = &mf->cols[c]; break; }
-    MatData *m = calloc(1, sizeof *m);
+    MatData *m = cp_xcalloc(1, sizeof *m);
     int nr = 0, nc = 0;
     if (samp) {                                       /* --- long/tidy --- */
         if (!pid) { snprintf(err, CP_ERRLEN, "long matrix needs a Probe_ID column"); return NULL; }
@@ -113,9 +113,9 @@ static MatData *read_matrix(const TrackObj *t, char *err) {
             if (mf->cols[c].type == COL_NUM && &mf->cols[c] != sc && &mf->cols[c] != ec)
                 { val = &mf->cols[c]; break; }
         if (!val) { snprintf(err, CP_ERRLEN, "long matrix needs a numeric value column"); return NULL; }
-        char **pn = malloc(mf->nrow * sizeof(char *));
-        double *pp = malloc(mf->nrow * sizeof(double));
-        char **sn = malloc(mf->nrow * sizeof(char *));
+        char **pn = cp_xmalloc(mf->nrow * sizeof(char *));
+        double *pp = cp_xmalloc(mf->nrow * sizeof(double));
+        char **sn = cp_xmalloc(mf->nrow * sizeof(char *));
         for (int r = 0; r < mf->nrow; r++) {
             const char *id = pid->str[r]; int f = -1;
             for (int i = 0; i < nc; i++) if (!strcmp(pn[i], id)) { f = i; break; }
@@ -125,14 +125,14 @@ static MatData *read_matrix(const TrackObj *t, char *err) {
             if (f < 0) sn[nr++] = (char *)s;
         }
         if (nc < 1 || nr < 1) { snprintf(err, CP_ERRLEN, "matrix is empty"); return NULL; }
-        int *ord = malloc(nc * sizeof(int));
+        int *ord = cp_xmalloc(nc * sizeof(int));
         for (int i = 0; i < nc; i++) ord[i] = i;
         for (int a = 1; a < nc; a++) { int k = ord[a]; double kp = pp[k]; int b2 = a - 1;
             while (b2 >= 0 && pp[ord[b2]] > kp) { ord[b2+1] = ord[b2]; b2--; } ord[b2+1] = k; }
-        m->colpos = malloc(nc * sizeof(double)); m->colid = malloc(nc * sizeof(char *));
+        m->colpos = cp_xmalloc(nc * sizeof(double)); m->colid = cp_xmalloc(nc * sizeof(char *));
         for (int c = 0; c < nc; c++) { m->colpos[c] = pp[ord[c]]; m->colid[c] = pn[ord[c]]; }
         m->rowname = sn;
-        m->mv = malloc((size_t)nr * nc * sizeof(double));
+        m->mv = cp_xmalloc((size_t)nr * nc * sizeof(double));
         for (size_t i = 0; i < (size_t)nr * nc; i++) m->mv[i] = NAN;
         for (int r = 0; r < mf->nrow; r++) {
             const char *id = pid->str[r], *s = samp->str[r];
@@ -148,17 +148,17 @@ static MatData *read_matrix(const TrackObj *t, char *err) {
                 scol[ns++] = c;
         if (ns < 1) { snprintf(err, CP_ERRLEN, "matrix has no numeric sample columns"); return NULL; }
         if (mf->nrow < 1) { snprintf(err, CP_ERRLEN, "matrix is empty"); return NULL; }
-        int *ord = malloc(mf->nrow * sizeof(int));
-        double *pp = malloc(mf->nrow * sizeof(double));
+        int *ord = cp_xmalloc(mf->nrow * sizeof(int));
+        double *pp = cp_xmalloc(mf->nrow * sizeof(double));
         for (int r = 0; r < mf->nrow; r++) { pp[r] = (sc->num[r] + ec->num[r]) * 0.5; ord[nc++] = r; }
         for (int a = 1; a < nc; a++) { int k = ord[a]; double kp = pp[k]; int b2 = a - 1;
             while (b2 >= 0 && pp[ord[b2]] > kp) { ord[b2+1] = ord[b2]; b2--; } ord[b2+1] = k; }
         nr = ns;
-        m->colpos = malloc(nc * sizeof(double)); m->colid = malloc(nc * sizeof(char *));
+        m->colpos = cp_xmalloc(nc * sizeof(double)); m->colid = cp_xmalloc(nc * sizeof(char *));
         for (int c = 0; c < nc; c++) { m->colpos[c] = pp[ord[c]]; m->colid[c] = pid ? pid->str[ord[c]] : NULL; }
-        m->rowname = malloc(nr * sizeof(char *));
+        m->rowname = cp_xmalloc(nr * sizeof(char *));
         for (int r = 0; r < nr; r++) m->rowname[r] = mf->cols[scol[r]].name;
-        m->mv = malloc((size_t)nr * nc * sizeof(double));
+        m->mv = cp_xmalloc((size_t)nr * nc * sizeof(double));
         for (int r = 0; r < nr; r++)
             for (int c = 0; c < nc; c++)
                 m->mv[(size_t)r * nc + c] = mf->cols[scol[r]].num[ord[c]];
@@ -179,7 +179,7 @@ static MatData *read_matrix(const TrackObj *t, char *err) {
                 if (strcmp(chr_c->str[r], m->chrom)) { m->multichrom = 1; break; }
         }
     }
-    m->roword = malloc(nr * sizeof(int));
+    m->roword = cp_xmalloc(nr * sizeof(int));
     for (int r = 0; r < nr; r++) m->roword[r] = r;
     if (t->cluster && nr >= 2) {                      /* cluster the sample rows */
         char cerr[256]; HClust *h = hclust_ward(m->mv, nr, nc, cerr);
@@ -217,7 +217,7 @@ static GeneModel *load_genes(const char *data, const char *chrom, long rs, long 
                 long lj = gm[j].tx_end - gm[j].tx_start;
                 if (lj > lk || (lj == lk && j < k)) canon = 0;
             }
-            if (canon) { gm[k].name = strdup(sk); gm[m2++] = gm[k]; }
+            if (canon) { gm[k].name = cp_xstrdup(sk); gm[m2++] = gm[k]; }
         }
         ng = m2;
     }
@@ -282,8 +282,8 @@ int render_tracks(const PlotSpec *spec, const char *out,
         double bp = ubr[i] * unit;
         if (bp < x0 || bp > x1) continue;
         xpos[nx] = NPCX(bp);
-        char num[32]; fmt_break(ubr[i], dec, num);                 /* number, with commas */
-        xlab[nx] = malloc(40); commafy(xlab[nx], 40, num);
+        char num[32]; fmt_break(ubr[i], dec, num, sizeof num);                 /* number, with commas */
+        xlab[nx] = cp_xmalloc(40); commafy(xlab[nx], 40, num);
         nx++;
     }
     if (nx > 0) {                              /* unit suffix once, on the last tick */
@@ -365,7 +365,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
 
     /* ---- outer gtable: [MARGIN|label|gap|PANEL|MARGIN] cols;
      * [MARGIN|title|gap| tracks+gaps |axis|MARGIN] rows ---- */
-    GTable *T = calloc(1, sizeof(GTable));
+    GTable *T = cp_xcalloc(1, sizeof(GTable));
     T->ncol = 5;
     T->colw[0] = upt(MARGIN);
     T->colw[1] = upt(labw);
@@ -437,7 +437,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
                 g->x0 = NPCX(sb[k].start); g->x1 = NPCX(sb[k].end);
                 g->y0 = 0; g->y1 = sb[k].val / ymax;
             }
-            char *rd = malloc(32); snprintf(rd, 32, "[0 - %g]", ymax);   /* readout */
+            char *rd = cp_xmalloc(32); snprintf(rd, 32, "[0 - %g]", ymax);   /* readout */
             g = gt_add(T, G_TEXT, R, CC, R, CC);
             g->str = rd; g->size = SZ_AXIS_TEXT; g->col = C_AXTXT;
             g->tx = 0.004; g->ty = 0.98; g->hj = 0; g->va = V_TOP;
@@ -452,7 +452,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
              * collide (as pyGenomeTracks / plotgardener do). The label sits to the
              * right of tx_end, so a lane is free only past tx_end + label width. */
             double bp_per_pt = (double)(rend - rstart) / panel_w;
-            long laneend[64]; int nlanes = 0, *lane = malloc(ng * sizeof(int));
+            long laneend[64]; int nlanes = 0, *lane = cp_xmalloc(ng * sizeof(int));
             for (int k = 0; k < ng; k++) {
                 long lw_bp = gm[k].name
                     ? (long)((text_w(cr, SZ_AXIS_TEXT, gm[k].name) + HALF_LINE) * bp_per_pt) : 0;
@@ -505,7 +505,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
             int ni; Interval *iv = bed_read(t->data, chrom, rstart, rend, &ni, err);
             if (!iv) return -1;
             qsort(iv, ni, sizeof *iv, cmp_iv);
-            long laneend[64]; int nlanes = 0, *lane = malloc(ni * sizeof(int));
+            long laneend[64]; int nlanes = 0, *lane = cp_xmalloc(ni * sizeof(int));
             for (int k = 0; k < ni; k++) {
                 int L = -1;
                 for (int j = 0; j < nlanes; j++) if (laneend[j] <= iv[k].start) { L = j; break; }
@@ -537,7 +537,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
                 double xa = NPCX((lk[k].a_start + lk[k].a_end) / 2.0);
                 double xb = NPCX((lk[k].b_start + lk[k].b_end) / 2.0);
                 double h = fmin(0.92, fabs(xb - xa) + 0.08);     /* wider span -> taller */
-                double *px = malloc(NS * sizeof(double)), *py = malloc(NS * sizeof(double));
+                double *px = cp_xmalloc(NS * sizeof(double)), *py = cp_xmalloc(NS * sizeof(double));
                 for (int s = 0; s < NS; s++) {
                     double f = (double)s / (NS - 1);
                     px[s] = xa + f * (xb - xa); py[s] = h * sin(M_PI * f);
@@ -560,8 +560,8 @@ int render_tracks(const PlotSpec *spec, const char *out,
             for (int r2 = 0; r2 < cb->nrow; r2++)
                 if (!strcmp(bc->str[r2], chrom)) { nband++; if (be->num[r2] > clen) clen = be->num[r2]; }
             if (clen <= 0) { snprintf(err, CP_ERRLEN, "chromosome %s not in cytoband file", chrom); return -1; }
-            double *bst = malloc(nband * sizeof(double)), *ben = malloc(nband * sizeof(double));
-            Col *bcol = malloc(nband * sizeof(Col));
+            double *bst = cp_xmalloc(nband * sizeof(double)), *ben = cp_xmalloc(nband * sizeof(double));
+            Col *bcol = cp_xmalloc(nband * sizeof(Col));
             double cen_lo = 1, cen_hi = 0;                   /* centromere (acen) extent, npc */
             int nb2 = 0;
             for (int r2 = 0; r2 < cb->nrow; r2++) {
@@ -608,7 +608,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
             double lblband = cell_pt > 0 ? (lbl_pt + lab_pad) / cell_pt : 0.10;  /* labels + lab_pad gap */
             double lbltop  = cell_pt > 0 ? lbl_pt / cell_pt : lblband * 0.85;    /* label tops = lab_pad below heatmap */
             int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, nc);
-            unsigned char *buf = malloc((size_t)nr * stride);
+            unsigned char *buf = cp_xmalloc((size_t)nr * stride);
             for (int rr = 0; rr < nr; rr++) {
                 uint32_t *row = (uint32_t *)(buf + (size_t)rr * stride);
                 for (int c = 0; c < nc; c++) {
@@ -643,7 +643,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
                 * tangents at both ends (control points stacked below/above each end). */
             for (int c = 0; c < nc; c++) {
                 double gx = NPCX(m->colpos[c]), cx = (c + 0.5) / nc, ym = (axline + hmtop) / 2;
-                double *px = malloc(NB * sizeof(double)), *py = malloc(NB * sizeof(double));
+                double *px = cp_xmalloc(NB * sizeof(double)), *py = cp_xmalloc(NB * sizeof(double));
                 for (int s = 0; s < NB; s++) {
                     double u = 1.0 - (double)s / (NB - 1), tt = 1.0 - u;
                     double b0 = u*u*u, b1 = 3*u*u*tt, b2 = 3*u*tt*tt, b3 = tt*tt*tt;

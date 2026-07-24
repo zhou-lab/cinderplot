@@ -30,7 +30,7 @@ static double font_h(cairo_t *cr, double size) {
 
 static GTable *build_legend(cairo_t *cr, const Theme *th, const char *title, const Factor *f,
                             const Col *pal, int haspoint, int hasline, int hasbox, int hastext) {
-    GTable *t = calloc(1, sizeof(GTable));
+    GTable *t = cp_xcalloc(1, sizeof(GTable));
     double label_w = 0;
     for (int i = 0; i < f->nlev; i++) {
         double w = text_w(cr, SZ_AXIS_TEXT, f->levels[i]);
@@ -96,7 +96,7 @@ static GTable *build_colorbar_legend(cairo_t *cr, const Theme *th, const char *t
     int dec = axis_decimals(br, nf);
     double labw = 0;
     for (int i = 0; i < nf; i++) {
-        char b[32]; fmt_break(br[i], dec, b);
+        char b[32]; fmt_break(br[i], dec, b, sizeof b);
         double w = text_w(cr, SZ_AXIS_TEXT, b);
         if (w > labw) labw = w;
     }
@@ -104,7 +104,7 @@ static GTable *build_colorbar_legend(cairo_t *cr, const Theme *th, const char *t
     double titlew = title ? text_w(cr, SZ_BASE, title) : 0;
     double w = fmax(barcol, titlew);
 
-    GTable *t = calloc(1, sizeof(GTable));
+    GTable *t = cp_xcalloc(1, sizeof(GTable));
     t->ncol = 1; t->colw[0] = upt(w);
     t->nrow = 3;
     t->rowh[0] = upt(title ? font_h(cr, SZ_BASE) : 0);
@@ -128,7 +128,7 @@ static GTable *build_colorbar_legend(cairo_t *cr, const Theme *th, const char *t
     }
     for (int i = 0; i < nf; i++) {           /* ticks + labels */
         double frac = hi > lo ? (br[i] - lo) / (hi - lo) : 0.5;
-        char *lab = malloc(32); fmt_break(br[i], dec, lab);
+        char *lab = cp_xmalloc(32); fmt_break(br[i], dec, lab, 32);
         g = gt_add(t, G_LINE, 2, 0, 2, 0);
         g->col = th->tick; g->lw = lw_pt(0.5);
         g->x0 = barw_npc; g->x1 = barw_npc + TICK_LEN / w; g->y0 = g->y1 = frac;
@@ -257,11 +257,11 @@ static GenomeScale *genome_load(const char *path, char *err) {
         snprintf(err, CP_ERRLEN, "seqinfo `%s` has no rows", path);
         return NULL;
     }
-    GenomeScale *g = malloc(sizeof *g);
+    GenomeScale *g = cp_xmalloc(sizeof *g);
     g->n = sq->nrow;
-    g->chr = malloc(g->n * sizeof(char *));
-    g->off = malloc(g->n * sizeof(double));
-    g->len = malloc(g->n * sizeof(double));
+    g->chr = cp_xmalloc(g->n * sizeof(char *));
+    g->off = cp_xmalloc(g->n * sizeof(double));
+    g->len = cp_xmalloc(g->n * sizeof(double));
     double cum = 0;
     for (int i = 0; i < g->n; i++) {
         g->chr[i] = sc->str[i]; g->len[i] = lc->num[i]; g->off[i] = cum; cum += g->len[i];
@@ -379,7 +379,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         if (!cc || cc->type != COL_STR) {
             snprintf(err, CP_ERRLEN, "chrom column `%s` must be text", spec->chrom.col); return -1;
         }
-        roff = malloc(df->nrow * sizeof(double));
+        roff = cp_xmalloc(df->nrow * sizeof(double));
         for (int r = 0; r < df->nrow; r++) roff[r] = genome_off(gs, cc->str[r]);
     }
     Factor *cf = NULL;
@@ -422,7 +422,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     }
 
     /* ---- usable rows (NA and log-domain filtering) ---- */
-    int *use = malloc(df->nrow * sizeof(int)), nuse = 0, d_na = 0, d_log = 0;
+    int *use = cp_xmalloc(df->nrow * sizeof(int)), nuse = 0, d_na = 0, d_log = 0;
     for (int r = 0; r < df->nrow; r++) {
         int xok = disc_x ? (xf->idx[r] >= 0)
                 : genome_x ? (roff[r] >= 0 && !isnan(xc->num[r]))
@@ -517,7 +517,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         if (hs->width <= 0) hs->width = 1;
         hs->start = txmin - hs->width / 2;
         hs->nbins = bins;
-        hs->counts = calloc((size_t)npan * hs->nbins, sizeof(int));
+        hs->counts = cp_xcalloc((size_t)npan * hs->nbins, sizeof(int));
         for (int r = 0; r < df->nrow; r++) {
             if (!use[r]) continue;
             int p = ff ? ff->idx[r] : 0;
@@ -534,7 +534,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     int barng = cf ? cf->nlev : 1;
     int *barcount = NULL, barmax = 0;
     if (hasbar) {
-        barcount = calloc((size_t)npan * xf->nlev * barng, sizeof(int));
+        barcount = cp_xcalloc((size_t)npan * xf->nlev * barng, sizeof(int));
         for (int r = 0; r < df->nrow; r++) {
             if (!use[r]) continue;
             int p = ff ? ff->idx[r] : 0, grp = cf ? cf->idx[r] : 0;
@@ -554,21 +554,29 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
      * (ggplot's cut=3). The x-scale stays on the data range (ggplot-style). --- */
 #define DENS_N 512
     int densg = cf ? cf->nlev : 1;
+    /* map each layer to its density-layer index so multiple geom_density()
+     * layers each keep their own bw=/adjust= and curve (not just the last) */
+    const Layer *dlayer[MAX_LAYERS]; int li2di[MAX_LAYERS], ndens = 0;
+    for (int li = 0; li < spec->nlayers; li++) {
+        li2di[li] = -1;
+        if (spec->layers[li].type == GEOM_DENSITY) {
+            li2di[li] = ndens; dlayer[ndens++] = &spec->layers[li];
+        }
+    }
     double *dens_x = NULL, *dens_y = NULL, dens_max = 0;
     if (hasdens) {
-        const Layer *densl = NULL;
-        for (int li = 0; li < spec->nlayers; li++)
-            if (spec->layers[li].type == GEOM_DENSITY) densl = &spec->layers[li];
-        dens_x = malloc((size_t)npan * densg * DENS_N * sizeof(double));
-        dens_y = malloc((size_t)npan * densg * DENS_N * sizeof(double));
-        double *buf = malloc((size_t)df->nrow * sizeof(double));
-        for (int p = 0; p < npan; p++)
+        dens_x = cp_xmalloc((size_t)ndens * npan * densg * DENS_N * sizeof(double));
+        dens_y = cp_xmalloc((size_t)ndens * npan * densg * DENS_N * sizeof(double));
+        double *buf = cp_xmalloc((size_t)df->nrow * sizeof(double));
+        for (int di = 0; di < ndens; di++) {
+          const Layer *densl = dlayer[di];
+          for (int p = 0; p < npan; p++)
             for (int gg = 0; gg < densg; gg++) {
                 int n = 0;
                 for (int r = 0; r < df->nrow; r++)
                     if (use[r] && (!ff || ff->idx[r] == p) && (!cf || cf->idx[r] == gg))
                         buf[n++] = TXR(r);
-                size_t base = ((size_t)(p * densg + gg)) * DENS_N;
+                size_t base = ((size_t)((di * npan + p) * densg + gg)) * DENS_N;
                 if (n < 2) {
                     for (int j = 0; j < DENS_N; j++) { dens_x[base+j] = txmin; dens_y[base+j] = 0; }
                     continue;
@@ -602,6 +610,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     if (d > dens_max) dens_max = d;
                 }
             }
+        }
         free(buf);
     }
 
@@ -700,25 +709,25 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
 #define NPCY(t) (((t) - y0) / (y1 - y0))
 
     double xbr[40], ybr[16];
-    char **xlabs = malloc(40 * sizeof(char *)), **ylabs = malloc(16 * sizeof(char *));
+    char **xlabs = cp_xmalloc(40 * sizeof(char *)), **ylabs = cp_xmalloc(16 * sizeof(char *));
     int nxbr, nybr;
     /* genome mode uses separate axis arrays: gridlines at chrom boundaries,
      * labels (chrom names) at chrom midpoints */
     double *gax_pos = NULL; char **gax_lab = NULL; int gax_n = 0;
     if (disc_x) {                          /* one break per category, level labels */
         nxbr = xf->nlev;
-        for (int i = 0; i < nxbr; i++) { xbr[i] = i + 1; xlabs[i] = strdup(xf->levels[i]); }
+        for (int i = 0; i < nxbr; i++) { xbr[i] = i + 1; xlabs[i] = cp_xstrdup(xf->levels[i]); }
     } else if (genome_x) {
         nxbr = gs->n > 1 ? gs->n - 1 : 0;  /* internal boundaries = faint gridlines */
-        for (int i = 0; i < nxbr; i++) { xbr[i] = gs->off[i + 1]; xlabs[i] = strdup(""); }
+        for (int i = 0; i < nxbr; i++) { xbr[i] = gs->off[i + 1]; xlabs[i] = cp_xstrdup(""); }
         gax_n = gs->n;
-        gax_pos = malloc(gax_n * sizeof(double));
-        gax_lab = malloc(gax_n * sizeof(char *));
+        gax_pos = cp_xmalloc(gax_n * sizeof(double));
+        gax_lab = cp_xmalloc(gax_n * sizeof(char *));
         for (int i = 0; i < gs->n; i++) {
             gax_pos[i] = NPCX(gs->off[i] + gs->len[i] / 2);
             const char *nm = gs->chr[i];
             if (!strncmp(nm, "chr", 3)) nm += 3;   /* compact: chr1 -> 1 */
-            gax_lab[i] = strdup(nm);
+            gax_lab[i] = cp_xstrdup(nm);
         }
     } else if (spec->log_x) {
         nxbr = log10_breaks(x0, x1, xbr, xlabs, 16);
@@ -728,9 +737,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         nxbr = n;
         int dec = axis_decimals(xbr, nxbr), pdec = dec - 2 < 0 ? 0 : dec - 2;
         for (int i = 0; i < nxbr; i++) {
-            xlabs[i] = malloc(32);
+            xlabs[i] = cp_xmalloc(32);
             if (spec->x_pct) snprintf(xlabs[i], 32, "%.*f%%", pdec, xbr[i] * 100);
-            else fmt_break(xbr[i], dec, xlabs[i]);
+            else fmt_break(xbr[i], dec, xlabs[i], 32);
         }
     }
     if (spec->log_y) {
@@ -741,12 +750,12 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         nybr = n;
         int dec = axis_decimals(ybr, nybr), pdec = dec - 2 < 0 ? 0 : dec - 2;
         for (int i = 0; i < nybr; i++) {
-            ylabs[i] = malloc(32);
+            ylabs[i] = cp_xmalloc(32);
             if (spec->y_pct) snprintf(ylabs[i], 32, "%.*f%%", pdec, ybr[i] * 100);
-            else fmt_break(ybr[i], dec, ylabs[i]);
+            else fmt_break(ybr[i], dec, ylabs[i], 32);
         }
     }
-    double *xnpc = malloc(nxbr * sizeof(double)), *ynpc = malloc(nybr * sizeof(double));
+    double *xnpc = cp_xmalloc(nxbr * sizeof(double)), *ynpc = cp_xmalloc(nybr * sizeof(double));
     for (int i = 0; i < nxbr; i++) xnpc[i] = NPCX(xbr[i]);
     for (int i = 0; i < nybr; i++) ynpc[i] = NPCY(ybr[i]);
     double xmin_br[32], ymin_br[32];
@@ -785,7 +794,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     /* ---- geom_col bar width: 0.9 x min gap between distinct x ---- */
     double colw = 0.9;
     if (hascol) {
-        double *xs = malloc(nuse * sizeof(double));
+        double *xs = cp_xmalloc(nuse * sizeof(double));
         int nx = 0;
         for (int r = 0; r < df->nrow; r++)
             if (use[r]) xs[nx++] = TXR(r);
@@ -802,7 +811,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     int box_dodge = 0;
     if (hasbox && cf && disc_x) {
         for (int cat = 0; cat < xf->nlev && !box_dodge; cat++) {
-            int *seen = calloc(cf->nlev, sizeof(int)), cnt = 0;
+            int *seen = cp_xcalloc(cf->nlev, sizeof(int)), cnt = 0;
             for (int r = 0; r < df->nrow; r++)
                 if (use[r] && xf->idx[r] == cat && cf->idx[r] >= 0 && !seen[cf->idx[r]]) {
                     seen[cf->idx[r]] = 1; cnt++;
@@ -840,7 +849,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     GTable *leg = NULL;
     const char *col_title = spec->lab_colour ? spec->lab_colour : spec->colour.expr;
     if (cf) {
-        pal = malloc(cf->nlev * sizeof(Col));
+        pal = cp_xmalloc(cf->nlev * sizeof(Col));
         if (spec->has_manual) {                 /* scale_*_manual(values=) */
             int named = spec->n_manual > 0 && spec->manual_names[0] != NULL;
             for (int i = 0; i < cf->nlev; i++) {
@@ -860,7 +869,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     }
 
     /* ---- outer table ---- */
-    GTable *T = calloc(1, sizeof(GTable));
+    GTable *T = cp_xcalloc(1, sizeof(GTable));
     T->ncol = 2 * ncolp + 6;
     T->colw[0] = upt(MARGIN);
     T->colw[1] = upt(baseh);
@@ -1014,10 +1023,11 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     g->y1 = NPCY(spec->log_y ? log10((double)cnt) : (double)cnt);
                 }
             } else if (gt == GEOM_DENSITY) {
+                int di = li2di[li];
                 for (int gg = 0; gg < densg; gg++) {
-                    size_t bse = ((size_t)(p * densg + gg)) * DENS_N;
-                    double *px = malloc(DENS_N * sizeof(double));
-                    double *py = malloc(DENS_N * sizeof(double));
+                    size_t bse = ((size_t)((di * npan + p) * densg + gg)) * DENS_N;
+                    double *px = cp_xmalloc(DENS_N * sizeof(double));
+                    double *py = cp_xmalloc(DENS_N * sizeof(double));
                     for (int j = 0; j < DENS_N; j++) {
                         px[j] = NPCX(dens_x[bse+j]);
                         py[j] = NPCY(dens_y[bse+j]);
@@ -1064,8 +1074,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 int np = 0;
                 for (int r = 0; r < df->nrow; r++)
                     if (use[r] && (!ff || ff->idx[r] == p)) np++;
-                double *px = malloc(np * sizeof(double)), *py = malloc(np * sizeof(double));
-                Col *pcol = malloc(np * sizeof(Col));
+                double *px = cp_xmalloc(np * sizeof(double)), *py = cp_xmalloc(np * sizeof(double));
+                Col *pcol = cp_xmalloc(np * sizeof(Col));
                 np = 0;
                 for (int r = 0; r < df->nrow; r++) {
                     if (!use[r] || (ff && ff->idx[r] != p)) continue;
@@ -1087,7 +1097,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         if (use[r] && (!ff || ff->idx[r] == p)
                                    && (!cf || cf->idx[r] == grp)) np++;
                     if (np < 2) continue;
-                    Pt *pts = malloc(np * sizeof(Pt));
+                    Pt *pts = cp_xmalloc(np * sizeof(Pt));
                     np = 0;
                     for (int r = 0; r < df->nrow; r++) {
                         if (!use[r] || (ff && ff->idx[r] != p)
@@ -1097,7 +1107,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         np++;
                     }
                     qsort(pts, np, sizeof(Pt), cmp_pt_x);
-                    double *px = malloc(np * sizeof(double)), *py = malloc(np * sizeof(double));
+                    double *px = cp_xmalloc(np * sizeof(double)), *py = cp_xmalloc(np * sizeof(double));
                     for (int i = 0; i < np; i++) { px[i] = pts[i].x; py[i] = pts[i].y; }
                     free(pts);
                     g = gt_add(T, G_POLYLINE, R, C, R, C);
@@ -1198,7 +1208,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                             if (use[r] && (!ff || ff->idx[r] == p) && xf->idx[r] == cat
                                 && (box_slots == 1 || cf->idx[r] == s)) ny++;
                         if (ny == 0) continue;
-                        double *ys = malloc(ny * sizeof(double));
+                        double *ys = cp_xmalloc(ny * sizeof(double));
                         ny = 0;
                         for (int r = 0; r < df->nrow; r++)
                             if (use[r] && (!ff || ff->idx[r] == p) && xf->idx[r] == cat
@@ -1232,8 +1242,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         int nout = 0;
                         for (int i = 0; i < ny; i++) if (ys[i] > b.whi || ys[i] < b.wlo) nout++;
                         if (nout) {
-                            double *ox = malloc(nout * sizeof(double)), *oy = malloc(nout * sizeof(double));
-                            Col *oc = malloc(nout * sizeof(Col));
+                            double *ox = cp_xmalloc(nout * sizeof(double)), *oy = cp_xmalloc(nout * sizeof(double));
+                            Col *oc = cp_xmalloc(nout * sizeof(Col));
                             nout = 0;
                             for (int i = 0; i < ny; i++)
                                 if (ys[i] > b.whi || ys[i] < b.wlo) {
@@ -1291,10 +1301,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     if (use[r] && (!ff || ff->idx[r] == p)
                         && !isnan(TXR(r)) && !isnan(yc->num[r])) cap++;
                 if (cap > 0) {
-                    RLabel *rl = malloc(cap * sizeof(RLabel));
-                    const char **strs = malloc(cap * sizeof(char *));
-                    Col *cols = malloc(cap * sizeof(Col));
-                    double *px = malloc(cap * sizeof(double)), *py = malloc(cap * sizeof(double));
+                    RLabel *rl = cp_xmalloc(cap * sizeof(RLabel));
+                    const char **strs = cp_xmalloc(cap * sizeof(char *));
+                    Col *cols = cp_xmalloc(cap * sizeof(Col));
+                    double *px = cp_xmalloc(cap * sizeof(double)), *py = cp_xmalloc(cap * sizeof(double));
                     double bpad = (gt == GEOM_LABEL ? fs * 0.25 : 0) + PT_RADIUS * 0.6;
                     int m = 0;
                     for (int r = 0; r < df->nrow; r++) {
@@ -1302,7 +1312,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         if (isnan(TXR(r)) || isnan(yc->num[r])) continue;
                         const char *s;
                         if (labc->type == COL_STR) s = labc->str[r];
-                        else { char *tmp = malloc(32); fmt_num(labc->num[r], tmp); s = tmp; }
+                        else { char *tmp = cp_xmalloc(32); fmt_num(labc->num[r], tmp, 32); s = tmp; }
                         double axp = NPCX(TXR(r)) * panelw_pt, ayp = NPCY(TY(yc->num[r])) * panelh_pt;
                         px[m] = axp; py[m] = ayp;
                         rl[m].hw = text_w(cr, fs, s) / 2 + bpad;

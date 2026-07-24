@@ -17,17 +17,17 @@
 typedef struct { char **v; int n, cap; } StrVec;
 
 static void sv_push(StrVec *s, char *p) {
-    if (s->n == s->cap) { s->cap = s->cap ? s->cap * 2 : 64; s->v = realloc(s->v, s->cap * sizeof(char *)); }
+    if (s->n == s->cap) { s->cap = s->cap ? s->cap * 2 : 64; s->v = cp_xrealloc(s->v, s->cap * sizeof(char *)); }
     s->v[s->n++] = p;
 }
 
 static char *read_all(FILE *f) {
     size_t cap = 1 << 16, n = 0;
-    char *buf = malloc(cap);
+    char *buf = cp_xmalloc(cap);
     size_t r;
     while ((r = fread(buf + n, 1, cap - n, f)) > 0) {
         n += r;
-        if (n == cap) { cap *= 2; buf = realloc(buf, cap); }
+        if (n == cap) { cap *= 2; buf = cp_xrealloc(buf, cap); }
     }
     buf[n] = 0;
     return buf;
@@ -51,7 +51,7 @@ static int split_record(char **p, StrVec *fields, char delim) {
                 else { len++; q++; }
             }
             if (!closed) return -1;
-            char *o = out = malloc(len + 1);
+            char *o = out = cp_xmalloc(len + 1);
             s++;
             while (*s) {
                 if (*s == '"' && s[1] == '"') { *o++ = '"'; s += 2; }
@@ -65,7 +65,7 @@ static int split_record(char **p, StrVec *fields, char delim) {
             }
         } else {
             size_t len = strcspn(s, stop);
-            out = malloc(len + 1);
+            out = cp_xmalloc(len + 1);
             memcpy(out, s, len);
             out[len] = 0;
             s += len;
@@ -116,18 +116,20 @@ DataFrame *df_read_csv(const char *path, char *err) {
     int hn = split_record(&p, &header, delim);
     if (hn < 0) {
         snprintf(err, CP_ERRLEN, "%s: malformed quoted field in header", path);
-        free(buf);
+        for (int c = 0; c < header.n; c++) free(header.v[c]);
+        free(header.v); free(buf);
         return NULL;
     }
     if (!hn || header.n == 0) {
         snprintf(err, CP_ERRLEN, "%s: empty file", path);
+        free(buf); free(header.v);
         return NULL;
     }
     int ncol = header.n;
     int noh = g_no_header;               /* headerless: names V1.. + first record is data */
     int rowbase = noh ? 1 : 2;           /* file row number of the first *data* line */
 
-    StrVec *cells = calloc(ncol, sizeof(StrVec));
+    StrVec *cells = cp_xcalloc(ncol, sizeof(StrVec));
     int nrow = 0;
     if (noh) {                           /* the first record is data, not column names */
         for (int c = 0; c < ncol; c++) sv_push(&cells[c], header.v[c]);
@@ -138,13 +140,16 @@ DataFrame *df_read_csv(const char *path, char *err) {
         int nf = split_record(&p, &rec, delim);
         if (nf < 0) {
             snprintf(err, CP_ERRLEN, "%s: malformed quoted field in row %d", path, nrow + rowbase);
-            free(buf);
+            for (int c = 0; c < rec.n; c++) free(rec.v[c]);
+            free(rec.v); free(buf);
             return NULL;
         }
         if (nf == 0) break;
         if (nf == 1 && !*rec.v[0]) { free(rec.v[0]); free(rec.v); continue; } /* blank line */
         if (nf != ncol) {
             snprintf(err, CP_ERRLEN, "%s: row %d has %d fields, expected %d", path, nrow + rowbase, nf, ncol);
+            for (int c = 0; c < nf; c++) free(rec.v[c]);
+            free(rec.v); free(buf);
             return NULL;
         }
         for (int c = 0; c < ncol; c++) sv_push(&cells[c], rec.v[c]);
@@ -153,12 +158,12 @@ DataFrame *df_read_csv(const char *path, char *err) {
     }
     free(buf);
 
-    DataFrame *df = malloc(sizeof *df);
+    DataFrame *df = cp_xmalloc(sizeof *df);
     df->nrow = nrow; df->ncol = ncol;
-    df->cols = calloc(ncol, sizeof(Column));
+    df->cols = cp_xcalloc(ncol, sizeof(Column));
     for (int c = 0; c < ncol; c++) {
         Column *col = &df->cols[c];
-        if (noh) { col->name = malloc(16); snprintf(col->name, 16, "V%d", c + 1); }
+        if (noh) { col->name = cp_xmalloc(16); snprintf(col->name, 16, "V%d", c + 1); }
         else       col->name = header.v[c];
         int numeric = 1;
         for (int r = 0; r < nrow && numeric; r++) {
@@ -170,7 +175,7 @@ DataFrame *df_read_csv(const char *path, char *err) {
         }
         if (numeric) {
             col->type = COL_NUM;
-            col->num = malloc(nrow * sizeof(double));
+            col->num = cp_xmalloc(nrow * sizeof(double));
             for (int r = 0; r < nrow; r++)
                 col->num[r] = is_na(cells[c].v[r]) ? NAN : strtod(cells[c].v[r], NULL);
         } else {
@@ -181,6 +186,8 @@ DataFrame *df_read_csv(const char *path, char *err) {
         for (int r = 0; r < nrow; r++) free(cells[c].v[r]);
         free(cells[c].v);
     }
+    free(cells);        /* per-column .v arrays are transferred to df or freed above */
+    free(header.v);     /* header strings are transferred to col->name (or into cells) */
     return df;
 }
 
@@ -200,10 +207,10 @@ static int cmp_str(const void *a, const void *b) {
 }
 
 Factor *factor_make(const DataFrame *df, const Column *c) {
-    Factor *f = malloc(sizeof *f);
-    f->idx = malloc(df->nrow * sizeof(int));
+    Factor *f = cp_xmalloc(sizeof *f);
+    f->idx = cp_xmalloc(df->nrow * sizeof(int));
     if (c->type == COL_NUM) {
-        double *uniq = malloc(df->nrow * sizeof(double));
+        double *uniq = cp_xmalloc(df->nrow * sizeof(double));
         int nu = 0;
         for (int r = 0; r < df->nrow; r++) {
             if (isnan(c->num[r])) continue;
@@ -213,10 +220,10 @@ Factor *factor_make(const DataFrame *df, const Column *c) {
         }
         qsort(uniq, nu, sizeof(double), cmp_dbl);
         f->nlev = nu;
-        f->levels = malloc(nu * sizeof(char *));
+        f->levels = cp_xmalloc(nu * sizeof(char *));
         for (int i = 0; i < nu; i++) {
-            f->levels[i] = malloc(32);
-            fmt_num(uniq[i], f->levels[i]);
+            f->levels[i] = cp_xmalloc(32);
+            fmt_num(uniq[i], f->levels[i], 32);
         }
         for (int r = 0; r < df->nrow; r++) {
             f->idx[r] = -1;
@@ -225,7 +232,7 @@ Factor *factor_make(const DataFrame *df, const Column *c) {
         }
         free(uniq);
     } else {
-        char **uniq = malloc(df->nrow * sizeof(char *));
+        char **uniq = cp_xmalloc(df->nrow * sizeof(char *));
         int nu = 0;
         for (int r = 0; r < df->nrow; r++) {
             if (is_na(c->str[r])) continue;
@@ -237,8 +244,8 @@ Factor *factor_make(const DataFrame *df, const Column *c) {
         f->nlev = nu;
         /* own the level strings (strdup), matching the numeric branch above, so
          * a Factor never borrows into the DataFrame's column storage */
-        f->levels = malloc(nu * sizeof(char *));
-        for (int i = 0; i < nu; i++) f->levels[i] = strdup(uniq[i]);
+        f->levels = cp_xmalloc(nu * sizeof(char *));
+        for (int i = 0; i < nu; i++) f->levels[i] = cp_xstrdup(uniq[i]);
         for (int r = 0; r < df->nrow; r++) {
             f->idx[r] = -1;
             for (int i = 0; i < nu; i++)

@@ -74,10 +74,8 @@ static void draw_label(cairo_t *cr, double bx, double by, double size, const cha
 
 Grob *gt_add(GTable *t, GType type, int r0, int c0, int r1, int c1) {
     if (t->ngrobs == t->cap) {
-        int ncap = t->cap ? t->cap * 2 : 64;
-        Grob *ng = realloc(t->grobs, ncap * sizeof(Grob));
-        if (!ng) { perror("cinderplot: out of memory"); exit(1); }
-        t->grobs = ng; t->cap = ncap;
+        t->cap = t->cap ? t->cap * 2 : 64;
+        t->grobs = cp_xrealloc(t->grobs, t->cap * sizeof(Grob));
     }
     Grob *g = &t->grobs[t->ngrobs++];
     memset(g, 0, sizeof *g);

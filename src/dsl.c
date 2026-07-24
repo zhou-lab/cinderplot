@@ -49,7 +49,7 @@ static char *string_lit(P *p) {
     if (*p->s != '"') return NULL;
     p->s++;
     size_t cap = strlen(p->s) + 1, n = 0;
-    char *out = malloc(cap);
+    char *out = cp_xmalloc(cap);
     while (*p->s && *p->s != '"') {
         if (*p->s == '\\' && p->s[1]) {
             p->s++;
@@ -266,7 +266,7 @@ static HMObj *hm_new(P *p, PlotSpec *spec, HMType t) {
     o->type = t;
     o->place.kind = spec->nhobjs == 1 ? PL_FULL : PL_TOP_OF;
     o->place.pad = 0.01; o->place.width = -1; o->place.height = -1;
-    o->name = malloc(8);
+    o->name = cp_xmalloc(8);
     sprintf(o->name, "h%d", spec->nhobjs);
     return o;
 }

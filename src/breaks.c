@@ -81,9 +81,9 @@ int extended_breaks(double dmin, double dmax, int m, double *out, int max_out) {
     return n;
 }
 
-void fmt_num(double v, char *buf) {
-    if (fabs(v - round(v)) < 1e-9) sprintf(buf, "%.0f", v);
-    else sprintf(buf, "%g", v);
+void fmt_num(double v, char *buf, size_t cap) {
+    if (fabs(v - round(v)) < 1e-9) snprintf(buf, cap, "%.0f", v);
+    else snprintf(buf, cap, "%g", v);
 }
 
 /* ggplot labels an axis with UNIFORM decimals: the smallest d such that
@@ -99,8 +99,8 @@ int axis_decimals(const double *br, int n) {
     return 6;
 }
 
-void fmt_break(double v, int decimals, char *buf) {
-    sprintf(buf, "%.*f", decimals, v);
+void fmt_break(double v, int decimals, char *buf, size_t cap) {
+    snprintf(buf, cap, "%.*f", decimals, v);
 }
 
 /* log10 scale majors: integer powers of ten within the range, labelled 10^k
@@ -119,7 +119,7 @@ int log10_breaks(double tlo, double thi, double *tmaj, char **labs, int max_out)
     int n = 0;
     for (int k = klo; k <= khi && n < max_out; k += by) {
         tmaj[n] = k;
-        labs[n] = malloc(16);
+        labs[n] = cp_xmalloc(16);
         sprintf(labs[n], "10^%d", k);
         n++;
     }

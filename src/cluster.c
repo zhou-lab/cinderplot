@@ -39,7 +39,7 @@ static void order_expand(const HClust *h, int node, int *order, int *no) {
 /* cluster n observations of length p (row-major x); NULL on failure */
 HClust *hclust_ward(const double *x, int n, int p, char *err) {
     if (n < 2) { snprintf(err, CP_ERRLEN, "need at least 2 observations to cluster"); return NULL; }
-    double *D = malloc((size_t)n * n * sizeof(double));
+    double *D = cp_xmalloc((size_t)n * n * sizeof(double));
     for (int i = 0; i < n; i++)
         for (int j = i + 1; j < n; j++) {
             double d = eucl(x, p, i, j);
@@ -51,15 +51,15 @@ HClust *hclust_ward(const double *x, int n, int p, char *err) {
             D[(size_t)i * n + j] = D[(size_t)j * n + i] = d;
         }
 
-    HClust *h = malloc(sizeof *h);
+    HClust *h = cp_xmalloc(sizeof *h);
     h->n = n;
-    h->merge = malloc((n - 1) * sizeof *h->merge);
-    h->height = malloc((n - 1) * sizeof(double));
-    h->order = malloc(n * sizeof(int));
+    h->merge = cp_xmalloc((n - 1) * sizeof *h->merge);
+    h->height = cp_xmalloc((n - 1) * sizeof(double));
+    h->order = cp_xmalloc(n * sizeof(int));
 
-    int *active = malloc(n * sizeof(int));
-    int *size = malloc(n * sizeof(int));
-    int *cid = malloc(n * sizeof(int));          /* R cluster id of slot */
+    int *active = cp_xmalloc(n * sizeof(int));
+    int *size = cp_xmalloc(n * sizeof(int));
+    int *cid = cp_xmalloc(n * sizeof(int));          /* R cluster id of slot */
     for (int i = 0; i < n; i++) { active[i] = 1; size[i] = 1; cid[i] = -(i + 1); }
 
     for (int step = 0; step < n - 1; step++) {
