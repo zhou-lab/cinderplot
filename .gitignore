@@ -7,3 +7,7 @@ src/*.o
 # local, uncommitted scratch
 TODO.md
 CLAUDE.md
+
+# dogfooding drop zone: local intake only, keep just the README tracked
+tmp/*
+!tmp/README.md
