@@ -54,7 +54,7 @@ static inline double lw_pt(double u) { return u * 2.845276 * 72.0 / 96.0; }
 #define PT_RADIUS    2.15
 #define PANEL_SPACE  HALF_LINE
 #define STRIP_PAD    (0.8 * HALF_LINE)
-#define FONT_FAMILY  "Helvetica"
+#define FONT_FAMILY  "Arial"
 
 static const Col C_PANEL  = {0.922, 0.922, 0.922};   /* grey92 */
 static const Col C_WHITE  = {1, 1, 1};
