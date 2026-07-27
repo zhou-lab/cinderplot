@@ -1261,6 +1261,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 }
                 g = gt_add(T, G_POINTS, R, C, R, C);
                 g->n = np; g->px = px; g->py = py; g->pcol = pcol; g->pradius = prad;
+                g->raster = spec->layers[li].raster;
                 g->radius = spec->layers[li].point_size > 0
                           ? PT_RADIUS * spec->layers[li].point_size / 1.5 : PT_RADIUS;
                 g->clip = 1;

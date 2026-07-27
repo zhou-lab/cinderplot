@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 typedef struct { char **v; int n, cap; } StrVec;
@@ -21,8 +22,22 @@ static void sv_push(StrVec *s, char *p) {
     s->v[s->n++] = p;
 }
 
+/* Grow to `want` slots up front. Callers know the row count before parsing
+ * (records are counted by newline), so the per-column arrays are sized once
+ * instead of doubling ~24 times on a 10^7-row input. */
+static void sv_reserve(StrVec *s, int want) {
+    if (s->cap >= want) return;
+    s->cap = want;
+    s->v = cp_xrealloc(s->v, (size_t)want * sizeof(char *));
+}
+
 static char *read_all(FILE *f) {
     size_t cap = 1 << 16, n = 0;
+    struct stat st;
+    /* A regular file's size is known, so allocate the image exactly once; the
+     * doubling loop below then never fires. Pipes and stdin keep the old path. */
+    if (!fstat(fileno(f), &st) && S_ISREG(st.st_mode) && st.st_size > 0)
+        cap = (size_t)st.st_size + 1;
     char *buf = cp_xmalloc(cap);
     size_t r;
     while ((r = fread(buf + n, 1, cap - n, f)) > 0) {
@@ -33,8 +48,17 @@ static char *read_all(FILE *f) {
     return buf;
 }
 
-/* split one record starting at *p using `delim` (',' or '\t'); returns fields
- * (malloc'd), advances *p past the record's newline; 0 fields at end of input */
+/* Split one record starting at *p using `delim` (',' or '\t'), advancing *p
+ * past the record's newline; returns the field count, 0 at end of input, -1 on
+ * a malformed quoted field.
+ *
+ * Fields are *borrowed slices of the input image*, not copies: the terminator
+ * after each field is overwritten with NUL in place, and a quoted field is
+ * unescaped in place (unescaping only ever shrinks, so the write cursor stays
+ * behind the read cursor). This removes one malloc and one memcpy per cell —
+ * on a 10^7-row, 3-column input that is 3x10^7 allocations avoided. The cost
+ * is that the image must outlive any COL_STR column, which DataFrame.backing
+ * now owns. */
 static int split_record(char **p, StrVec *fields, char delim) {
     char stop[4] = {delim, '\r', '\n', 0};
     char *s = *p;
@@ -43,38 +67,29 @@ static int split_record(char **p, StrVec *fields, char delim) {
     for (;;) {
         char *out;
         if (*s == '"') {
-            size_t len = 0;                      /* measure, then copy */
+            char *o = out = ++s;                 /* unescape in place */
             int closed = 0;
-            for (const char *q = s + 1; *q; ) {
-                if (*q == '"' && q[1] == '"') { len++; q += 2; }
-                else if (*q == '"') { closed = 1; break; }
-                else { len++; q++; }
-            }
-            if (!closed) return -1;
-            char *o = out = cp_xmalloc(len + 1);
-            s++;
             while (*s) {
                 if (*s == '"' && s[1] == '"') { *o++ = '"'; s += 2; }
-                else if (*s == '"') { s++; break; }
+                else if (*s == '"') { closed = 1; s++; break; }
                 else *o++ = *s++;
             }
-            *o = 0;
-            if (*s && *s != delim && *s != '\r' && *s != '\n') {
-                free(out);
-                return -1;
-            }
+            if (!closed) return -1;
+            if (*s && *s != delim && *s != '\r' && *s != '\n') return -1;
+            *o = 0;                              /* o <= s, so this is safe */
         } else {
-            size_t len = strcspn(s, stop);
-            out = cp_xmalloc(len + 1);
-            memcpy(out, s, len);
-            out[len] = 0;
-            s += len;
+            out = s;
+            s += strcspn(s, stop);
         }
+        /* Read the terminator before clobbering it — after the NUL write the
+         * character it replaced is gone, so branch on the saved copy. */
+        char t = *s;
+        if (t) *s = 0;
         sv_push(fields, out);
         nf++;
-        if (*s == delim) { s++; continue; }
-        if (*s == '\r') s++;
-        if (*s == '\n') s++;
+        if (t == delim) { s++; continue; }
+        if (t == '\r') { s++; if (*s == '\n') s++; }
+        else if (t == '\n') s++;
         break;
     }
     *p = s;
@@ -87,6 +102,20 @@ static int is_na(const char *s) {
 
 static int g_no_header = 0;                          /* treat inputs as headerless */
 void cp_set_no_header(int on) { g_no_header = on; }
+
+/* One-shot column filter naming the columns the next df_read_csv() must keep.
+ * It is consumed and cleared by that call, so only the plot's primary data
+ * file is pruned: per-layer data, seqinfo, cytoband and the heatmap/track
+ * readers, which all consume whole matrices, still see every column. NULL or
+ * a zero count keeps everything. Pruning matters because an unreferenced
+ * column otherwise costs a pointer per row plus a strtod per cell, and on wide
+ * genomic tables most columns go unplotted. */
+static char *const *g_needed = NULL;
+static int g_nneeded = 0;
+void cp_set_needed_cols(char *const *names, int n) {
+    g_needed = names;
+    g_nneeded = n;
+}
 
 DataFrame *df_read_csv(const char *path, char *err) {
     if (!strcmp(path, "stdin")) path = "-";          /* alias for stdin */
@@ -116,7 +145,6 @@ DataFrame *df_read_csv(const char *path, char *err) {
     int hn = split_record(&p, &header, delim);
     if (hn < 0) {
         snprintf(err, CP_ERRLEN, "%s: malformed quoted field in header", path);
-        for (int c = 0; c < header.n; c++) free(header.v[c]);
         free(header.v); free(buf);
         return NULL;
     }
@@ -125,69 +153,115 @@ DataFrame *df_read_csv(const char *path, char *err) {
         free(buf); free(header.v);
         return NULL;
     }
-    int ncol = header.n;
+    int ncol_file = header.n;            /* columns present in the file */
     int noh = g_no_header;               /* headerless: names V1.. + first record is data */
     int rowbase = noh ? 1 : 2;           /* file row number of the first *data* line */
 
-    StrVec *cells = cp_xcalloc(ncol, sizeof(StrVec));
+    /* Column names are copied out of the image, because the image itself may
+     * be released below once every column has typed numeric. */
+    char **fname = cp_xcalloc(ncol_file, sizeof(char *));
+    for (int c = 0; c < ncol_file; c++) {
+        if (noh) { fname[c] = cp_xmalloc(16); snprintf(fname[c], 16, "V%d", c + 1); }
+        else       fname[c] = cp_xstrdup(header.v[c]);
+    }
+
+    /* Consume the one-shot filter and mark which columns survive. Records are
+     * still split in full — the field boundaries are needed to find the end of
+     * the row — but a dropped column is never stored, typed, or converted. */
+    char *const *needed = g_needed;
+    int nneeded = g_nneeded;
+    g_needed = NULL; g_nneeded = 0;
+    char *keep = cp_xmalloc(ncol_file);
+    int ncol = 0;
+    for (int c = 0; c < ncol_file; c++) {
+        int want = 1;
+        if (needed && nneeded) {
+            want = 0;
+            for (int i = 0; i < nneeded; i++)
+                if (needed[i] && !strcmp(fname[c], needed[i])) { want = 1; break; }
+        }
+        keep[c] = (char)want;
+        ncol += want;
+    }
+
+    /* One newline per record is an upper bound on the row count (a trailing
+     * line without a newline is covered by the +1), so every column array is
+     * sized once here rather than grown by repeated doubling. */
+    int est = 1 + (noh ? 1 : 0);     /* headerless pushes the first record too */
+    for (const char *q = p; (q = strchr(q, '\n')) != NULL; q++) est++;
+
+    StrVec *cells = cp_xcalloc(ncol_file, sizeof(StrVec));
+    for (int c = 0; c < ncol_file; c++) if (keep[c]) sv_reserve(&cells[c], est);
     int nrow = 0;
     if (noh) {                           /* the first record is data, not column names */
-        for (int c = 0; c < ncol; c++) sv_push(&cells[c], header.v[c]);
+        for (int c = 0; c < ncol_file; c++) if (keep[c]) sv_push(&cells[c], header.v[c]);
         nrow = 1;
     }
+    StrVec rec = {0};                    /* reused across records, not per row */
+    sv_reserve(&rec, ncol_file);
     for (;;) {
-        StrVec rec = {0};
+        rec.n = 0;
         int nf = split_record(&p, &rec, delim);
         if (nf < 0) {
             snprintf(err, CP_ERRLEN, "%s: malformed quoted field in row %d", path, nrow + rowbase);
-            for (int c = 0; c < rec.n; c++) free(rec.v[c]);
             free(rec.v); free(buf);
             return NULL;
         }
         if (nf == 0) break;
-        if (nf == 1 && !*rec.v[0]) { free(rec.v[0]); free(rec.v); continue; } /* blank line */
-        if (nf != ncol) {
-            snprintf(err, CP_ERRLEN, "%s: row %d has %d fields, expected %d", path, nrow + rowbase, nf, ncol);
-            for (int c = 0; c < nf; c++) free(rec.v[c]);
+        if (nf == 1 && !*rec.v[0]) continue;                        /* blank line */
+        if (nf != ncol_file) {
+            snprintf(err, CP_ERRLEN, "%s: row %d has %d fields, expected %d", path, nrow + rowbase, nf, ncol_file);
             free(rec.v); free(buf);
             return NULL;
         }
-        for (int c = 0; c < ncol; c++) sv_push(&cells[c], rec.v[c]);
-        free(rec.v);
+        for (int c = 0; c < ncol_file; c++) if (keep[c]) sv_push(&cells[c], rec.v[c]);
         nrow++;
     }
-    free(buf);
+    free(rec.v);
 
     DataFrame *df = cp_xmalloc(sizeof *df);
     df->nrow = nrow; df->ncol = ncol;
     df->cols = cp_xcalloc(ncol, sizeof(Column));
-    for (int c = 0; c < ncol; c++) {
-        Column *col = &df->cols[c];
-        if (noh) { col->name = cp_xmalloc(16); snprintf(col->name, 16, "V%d", c + 1); }
-        else       col->name = header.v[c];
+    int any_str = 0;
+    int k = 0;
+    for (int c = 0; c < ncol_file; c++) {
+        if (!keep[c]) { free(fname[c]); continue; }   /* pruned: never stored */
+        Column *col = &df->cols[k++];
+        col->name = fname[c];
+        /* Type and convert in a single pass: write into the double array while
+         * checking, and abandon it at the first non-numeric cell. The old code
+         * ran strtod over every cell twice, once to decide the type and once to
+         * convert. A string column bails at its first cell, so the speculative
+         * allocation is cheap. */
+        col->num = cp_xmalloc((size_t)nrow * sizeof(double));
         int numeric = 1;
-        for (int r = 0; r < nrow && numeric; r++) {
+        for (int r = 0; r < nrow; r++) {
             const char *s = cells[c].v[r];
-            if (is_na(s)) continue;
+            if (is_na(s)) { col->num[r] = NAN; continue; }
             char *end;
-            strtod(s, &end);
-            if (end == s || *end) numeric = 0;
+            double d = strtod(s, &end);
+            if (end == s || *end) { numeric = 0; break; }
+            col->num[r] = d;
         }
         if (numeric) {
             col->type = COL_NUM;
-            col->num = cp_xmalloc(nrow * sizeof(double));
-            for (int r = 0; r < nrow; r++)
-                col->num[r] = is_na(cells[c].v[r]) ? NAN : strtod(cells[c].v[r], NULL);
+            free(cells[c].v);           /* the slices are no longer referenced */
         } else {
+            free(col->num);
+            col->num = NULL;
             col->type = COL_STR;
-            col->str = cells[c].v;
-            continue;                       /* strings keep the cell storage */
+            col->str = cells[c].v;      /* slices into the image; see backing */
+            any_str = 1;
         }
-        for (int r = 0; r < nrow; r++) free(cells[c].v[r]);
-        free(cells[c].v);
     }
     free(cells);        /* per-column .v arrays are transferred to df or freed above */
-    free(header.v);     /* header strings are transferred to col->name (or into cells) */
+    free(header.v);
+    free(fname);        /* the surviving name pointers are owned by the columns */
+    free(keep);
+    /* Nothing points into the image once every column is numeric, so hand the
+     * memory back rather than holding the whole file for the render. */
+    if (any_str) df->backing = buf;
+    else { free(buf); df->backing = NULL; }
     return df;
 }
 

@@ -140,10 +140,16 @@ typedef struct {
     double *num;    /* COL_NUM: values, NaN for NA/empty */
     char **str;     /* COL_STR */
 } Column;
-typedef struct { int nrow, ncol; Column *cols; } DataFrame;
+/* `backing` owns the raw file image when any COL_STR column points into it;
+ * it is NULL once every column typed numeric and the image could be released.
+ * String cells are borrowed slices of it, never individually allocated. */
+typedef struct { int nrow, ncol; Column *cols; char *backing; } DataFrame;
 
 DataFrame *df_read_csv(const char *path, char *err);   /* "-" = stdin */
 void cp_set_no_header(int on);   /* headerless input: name columns V1, V2, ... (R style) */
+/* One-shot: restrict the *next* df_read_csv() to these column names. Cleared
+ * by that call, so whole-matrix readers are unaffected. NULL/0 = keep all. */
+void cp_set_needed_cols(char *const *names, int n);
 const Column *df_col(const DataFrame *df, const char *name);
 
 typedef struct { int nlev; char **levels; int *idx; } Factor; /* idx[row] or -1 */
@@ -180,6 +186,7 @@ typedef struct {
     int n;                                     /* points / axis breaks */
     const double *px, *py; const Col *pcol; double radius;
     const double *pradius;                     /* G_POINTS: per-point radius (size aes); NULL = use `radius` */
+    int raster;                                /* G_POINTS: rasterize into an embedded image */
     char **labels;                             /* axis tick labels */
     const double *mtpos, *mtlen; int mtn;      /* minor axis ticks (log): npc pos + length (pt) */
     Col tick_col, text_col;                    /* G_AXIS_*: themed colours (opt-in) */
@@ -238,6 +245,9 @@ typedef struct {
     double point_size;          /* geom_point size (ggplot units; 0 = default 1.5) */
     int repel;                  /* geom_text_repel/geom_label_repel: force placement */
     double nudge_x, nudge_y;    /* geom_text/label: constant offset (data units) */
+    int raster;                 /* geom_point(raster=TRUE): draw the layer into an
+                                 * embedded image instead of per-point vector marks
+                                 * (ggrastr's idea); axes and text stay vector */
 } Layer;
 #define MAX_LAYERS 8
 

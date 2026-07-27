@@ -586,6 +586,17 @@ static int parse_term(P *p, PlotSpec *spec) {
                 } else if (gt == GEOM_POINT && !strcmp(key, "size")) {
                     l->point_size = strtod(p->s, (char **)&p->s);
                     if (l->point_size <= 0) return fail(p, "geom_point(size=...) must be > 0", "");
+                } else if (gt == GEOM_POINT && (!strcmp(key, "raster")
+                                             || !strcmp(key, "rasterise")
+                                             || !strcmp(key, "rasterize"))) {
+                    /* ggrastr spelling, plus both -ise/-ize, since the point of
+                     * the grammar is that ggplot2 habits transfer. */
+                    char *v = ident(p);
+                    if (!v) return fail(p, "geom_point(raster=) expects TRUE or FALSE", "");
+                    if (!strcmp(v, "TRUE") || !strcmp(v, "T")) l->raster = 1;
+                    else if (!strcmp(v, "FALSE") || !strcmp(v, "F")) l->raster = 0;
+                    else { free(v); return fail(p, "geom_point(raster=) expects TRUE or FALSE", ""); }
+                    free(v);
                 } else if ((gt == GEOM_TEXT || gt == GEOM_LABEL) && !strcmp(key, "nudge_x")) {
                     l->nudge_x = strtod(p->s, (char **)&p->s);
                 } else if ((gt == GEOM_TEXT || gt == GEOM_LABEL) && !strcmp(key, "nudge_y")) {

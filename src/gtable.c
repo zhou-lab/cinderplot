@@ -214,14 +214,100 @@ void gt_render(GTable *t, cairo_t *cr) {
             cairo_line_to(cr, DX(g->x1), DY(g->y1));
             cairo_stroke(cr);
             break;
-        case G_POINTS:
-            for (int i = 0; i < g->n; i++) {
-                set_col(cr, g->pcol[i]);
-                double rad = g->pradius ? g->pradius[i] : g->radius;   /* size aes = per-point */
-                cairo_arc(cr, DX(g->px[i]), DY(g->py[i]), rad, 0, 2 * M_PI);
+        case G_POINTS: {
+            /* Coalesce consecutive points that share a colour and radius into
+             * one path and one fill. Cairo exposes no marker reuse, so a fill
+             * per point emits a fresh bezier circle plus a graphics-state
+             * change into the PDF/SVG stream; at 10^6 points that dominates
+             * both the run time and the output size.
+             *
+             * Only *consecutive* runs are merged, never a sort by colour:
+             * points are drawn in data order, and reordering them would put
+             * every mark of one colour above every mark of another wherever
+             * they overlap, which ggplot2 does not do. Within a run the result
+             * is pixel-identical -- the colour is opaque (no alpha, so overlap
+             * is invisible either way) and the arcs wind in one direction, so
+             * nonzero-winding fills their union.
+             *
+             * Runs are flushed every BATCH points so a single-colour million-
+             * point layer does not build one path with 10^6 sub-paths.
+             *
+             * Merging is *not* free of visible effect: two overlapping marks
+             * drawn as separate fills leave a faint antialiased seam where one
+             * covers the other, and unioning them removes it (35 of 221k pixels
+             * on a 32-point mtcars scatter). grid draws each point separately,
+             * so that seam is what ggplot2 shows too. It is therefore gated on
+             * layer size: below BATCH_MIN nothing changes and the published
+             * gallery stays byte-identical, while above it -- where the memory
+             * saving is 9x and individual marks are indistinguishable anyway --
+             * the batched path is used. */
+            enum { BATCH = 8192, BATCH_MIN = 50000 };
+            if (g->raster) {
+                /* geom_point(raster=TRUE): draw the marks into an offscreen
+                 * image at RASTER_DPI and embed that one image, the way ggrastr
+                 * does. A dense scatter is the pathological case for a vector
+                 * backend -- cairo emits a full 4-bezier circle per point, so a
+                 * 10^6-point layer costs ~136 bytes each and buffers a million
+                 * drawing ops -- while as an image it costs a fixed few MB no
+                 * matter how many points. Axes, ticks, labels and legend are
+                 * separate grobs and stay vector, so the figure is still
+                 * resolution-independent everywhere it matters. */
+                const double RASTER_DPI = 300.0;
+                double sc = RASTER_DPI / 72.0;          /* device units are pt */
+                int iw = (int)ceil(rw * sc), ih = (int)ceil(rh * sc);
+                if (iw > 0 && ih > 0) {
+                    cairo_surface_t *im =
+                        cairo_image_surface_create(CAIRO_FORMAT_ARGB32, iw, ih);
+                    cairo_t *ic = cairo_create(im);
+                    cairo_scale(ic, sc, sc);            /* draw in points */
+                    for (int k = 0; k < g->n; k++) {
+                        double rr = g->pradius ? g->pradius[k] : g->radius;
+                        set_col(ic, g->pcol[k]);
+                        cairo_arc(ic, g->px[k] * rw, rh - g->py[k] * rh,
+                                  rr, 0, 2 * M_PI);
+                        cairo_fill(ic);
+                    }
+                    cairo_destroy(ic);
+                    cairo_surface_flush(im);
+                    cairo_save(cr);
+                    cairo_translate(cr, rx, ry);
+                    cairo_scale(cr, 1.0 / sc, 1.0 / sc);
+                    cairo_set_source_surface(cr, im, 0, 0);
+                    cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_GOOD);
+                    cairo_paint(cr);
+                    cairo_restore(cr);
+                    cairo_surface_destroy(im);
+                }
+                break;
+            }
+            if (g->n < BATCH_MIN) {              /* publication-scale: unchanged */
+                for (int k = 0; k < g->n; k++) {
+                    set_col(cr, g->pcol[k]);
+                    double r0 = g->pradius ? g->pradius[k] : g->radius;
+                    cairo_arc(cr, DX(g->px[k]), DY(g->py[k]), r0, 0, 2 * M_PI);
+                    cairo_fill(cr);
+                }
+                break;
+            }
+            int i = 0;
+            while (i < g->n) {
+                Col c = g->pcol[i];
+                double rad = g->pradius ? g->pradius[i] : g->radius;  /* size aes = per-point */
+                int j = i, nb = 0;
+                set_col(cr, c);
+                while (j < g->n && nb < BATCH
+                       && g->pcol[j].r == c.r && g->pcol[j].g == c.g
+                       && g->pcol[j].b == c.b
+                       && (g->pradius ? g->pradius[j] : g->radius) == rad) {
+                    cairo_new_sub_path(cr);      /* else arcs join with a line */
+                    cairo_arc(cr, DX(g->px[j]), DY(g->py[j]), rad, 0, 2 * M_PI);
+                    j++; nb++;
+                }
                 cairo_fill(cr);
+                i = j;
             }
             break;
+        }
         case G_TEXT: {
             cairo_text_extents_t e; cairo_font_extents_t fe;
             cairo_set_font_size(cr, g->size);

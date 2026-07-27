@@ -233,6 +233,22 @@ int main(int argc, char **argv) {
         fprintf(stderr, "wrote %s\n", out);
         return 0;
     }
+    /* Only grammar mode reaches here -- track and heatmap modes returned above --
+     * and grammar mode touches nothing but the columns named in aes(), the facet
+     * variable, and any per-layer y override. Tell the loader, so a wide table
+     * costs only the columns actually plotted. A per-layer data= file is read
+     * separately and is unaffected, the filter being one-shot. */
+    char *needed[MAX_LAYERS + 16];
+    int nneeded = 0;
+    const AesEntry *aes[] = { &spec.x, &spec.y, &spec.colour, &spec.xend,
+                              &spec.yend, &spec.label, &spec.size, &spec.chrom };
+    for (size_t i = 0; i < sizeof aes / sizeof *aes; i++)
+        if (aes[i]->col) needed[nneeded++] = aes[i]->col;
+    if (spec.facet_var) needed[nneeded++] = spec.facet_var;
+    for (int i = 0; i < spec.nlayers; i++)
+        if (spec.layers[i].ycol) needed[nneeded++] = spec.layers[i].ycol;
+    if (nneeded) cp_set_needed_cols(needed, nneeded);
+
     DataFrame *df = df_read_csv(spec.data_path, err);
     if (!df) { fprintf(stderr, "cinderplot: %s\n", err); return 1; }
     if (render_plot(&spec, df, out, w_pt > 0 ? w_pt : 6 * 72, h_pt > 0 ? h_pt : 4 * 72, err)) {
