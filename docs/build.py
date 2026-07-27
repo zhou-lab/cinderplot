@@ -784,7 +784,7 @@ LANDING_BODY = """<main>
   <div class="wrap">
     <section class="panel hero">
       <div class="hero__top">
-        <div class="hbrand" title="the name: C + Cairo re[nder] &rarr; cinder"><span class="ember" aria-hidden="true"></span><span class="wm"><span class="cinder">cinder</span>plot</span><a class="verbadge" href="https://anaconda.org/zhou-lab/cinderplot" title="Latest release on the zhou-lab conda channel">v__VERSION__</a></div>
+        <div class="hbrand" title="the name: C + Cairo re[nder] &rarr; cinder"><span class="ember" aria-hidden="true"></span><span class="wm"><span class="cinder">cinder</span>plot</span><a class="verbadge" id="ver" href="https://anaconda.org/zhou-lab/cinderplot" title="Latest release on the zhou-lab conda channel">v__VERSION__</a></div>
         <p class="eyebrow">The grammar of graphics, in C</p>
       </div>
       <h1>Publication-ready graphics from one small, fast binary.</h1>
@@ -874,6 +874,40 @@ cinderplot 'data.csv
       navigator.clipboard.writeText(cmd).then(flash, function () { fallbackCopy(cmd); flash(); });
     else { fallbackCopy(cmd); flash(); }
   });
+})();
+
+/* The badge ships with this checkout's CINDERPLOT_VERSION baked in, then
+ * upgrades itself to the newest published tag at load: hardcoding it is how a
+ * docs page ends up advertising a release two tags out of date, with nothing
+ * about editing the page to remind anyone.
+ *
+ * Sorted numerically rather than trusting the order the endpoint returns --
+ * alphabetically v1.8 sorts above v1.31 -- and filtered to v<digit>, since
+ * some of these repositories also tag things like "MSA.ordering.v1". Offline
+ * or rate-limited it keeps the built-in version and its channel link. */
+(function () {
+  var el = document.getElementById("ver");
+  if (!el || !window.fetch) return;
+  fetch("https://api.github.com/repos/zhou-lab/cinderplot/tags?per_page=100")
+    .then(function (r) { return r.ok ? r.json() : []; })
+    .then(function (tags) {
+      var parts = function (v) { return v.replace(/^v/, "").split(".").map(Number); };
+      var newest = tags.map(function (t) { return t.name; })
+        .filter(function (n) { return /^v\\d/.test(n); })
+        .sort(function (a, b) {
+          var A = parts(a), B = parts(b);
+          for (var i = 0; i < Math.max(A.length, B.length); ++i) {
+            var d = (B[i] || 0) - (A[i] || 0);
+            if (d) return d;
+          }
+          return 0;
+        })[0];
+      if (!newest) return;
+      el.textContent = newest;
+      el.href = "https://github.com/zhou-lab/cinderplot/releases/tag/" + newest;
+      el.title = "Latest release tag";
+    })
+    .catch(function () {});
 })();
 </script>"""
 
