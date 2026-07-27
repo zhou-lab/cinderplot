@@ -101,6 +101,26 @@ SECTIONS = [
          "ggplot(betas, aes(beta)) + geom_density() +\n"
          "  scale_x_continuous(labels = scales::percent)"),
     ]),
+    ("Small multiples", [
+        # facet_wrap over a 2x2 design, with levels= imposing a reading order
+        # the default (sorted) level order would get wrong: "continuous" would
+        # otherwise sort below "binary". Two line+point series per panel.
+        ("facets", "Faceted panels in a set order",
+         'data/upscale_mae.csv + aes(coverage, mae, colour=model) + geom_line() + geom_point()'
+         ' + facet_wrap(~panel, levels=c("Loyfer, continuous", "external, continuous",'
+         ' "Loyfer, binary", "external, binary"))'
+         ' + scale_x_log10() + scale_colour_manual(values=c("#2a78d6","#eb6834"))'
+         ' + labs(x="observed CpGs per cell", y="MAE")',
+         '# panel order is set by the factor levels, not alphabetical\n'
+         'ggplot(transform(upscale, panel = factor(panel,\n'
+         '         levels = c("Loyfer, continuous", "external, continuous",\n'
+         '                    "Loyfer, binary", "external, binary"))),\n'
+         '       aes(coverage, mae, colour = model)) +\n'
+         '  geom_line() + geom_point() + facet_wrap(~panel) +\n'
+         '  scale_x_log10() +\n'
+         '  scale_colour_manual(values = c("#2a78d6", "#eb6834")) +\n'
+         '  labs(x = "observed CpGs per cell", y = "MAE")'),
+    ]),
     ("Heatmaps", [
         # matrix + row/column clustering, both dendrograms, a row annotation,
         # legend and a diverging colormap. R reference uses ComplexHeatmap.
@@ -168,6 +188,7 @@ DATASETS = [
     ("quakes",   "data/quakes.csv",          "quakes"),
     ("diamonds", "data/diamonds_sample.csv", "{set.seed(42); diamonds[sample(nrow(diamonds), 2000), ]}"),
     ("betas",    "data/gm12878_betas.tsv",   None),   # GM12878 methylation betas (TSV)
+    ("upscale",  "data/upscale_mae.csv",     None),   # upscale MAE vs input coverage
 ]
 
 # figures rendered at a non-default size (WxH inches); genome plots are wide.
