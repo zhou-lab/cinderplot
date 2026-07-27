@@ -399,6 +399,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     /* discrete x when the column is a string or wrapped in factor() */
     int disc_x = (xc->type == COL_STR) || spec->x.is_factor;
     Factor *xf = disc_x ? factor_make(df, xc) : NULL;
+    if (xf && spec->x.nlevels
+        && factor_relevel(xf, df->nrow, spec->x.levels, spec->x.nlevels,
+                          "x", err)) return -1;
     /* discrete x draws one break per category into the fixed xbr[40]/xlabs[40]
      * axis buffers below; reject more categories than those buffers hold. */
     if (disc_x && xf->nlev > 40) {
@@ -504,6 +507,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             }
         } else {
             cf = factor_make(df, cc);
+            if (spec->colour.nlevels
+                && factor_relevel(cf, df->nrow, spec->colour.levels,
+                                  spec->colour.nlevels, "colour/fill", err)) return -1;
             /* the legend gt reserves 2*nlev+1 rows in a GT_MAXDIM grid, so a
              * discrete colour/fill scale is bounded to what that grid holds. */
             if (2 * cf->nlev + 1 > GT_MAXDIM) {
@@ -535,6 +541,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         if (!fc) { snprintf(err, CP_ERRLEN, "column `%s` not found", spec->facet_var); return -1; }
         ff = factor_make(df, fc);
         if (ff->nlev < 1) { snprintf(err, CP_ERRLEN, "facet column `%s` has no values", spec->facet_var); return -1; }
+        if (spec->n_facet_levels
+            && factor_relevel(ff, df->nrow, spec->facet_levels,
+                              spec->n_facet_levels, "facet_wrap()", err)) return -1;
     }
 
     /* ---- usable rows (NA and log-domain filtering) ---- */

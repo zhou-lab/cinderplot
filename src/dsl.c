@@ -65,7 +65,36 @@ static char *string_lit(P *p) {
     return out;
 }
 
-/* value in aes: IDENT or factor(IDENT); fills entry incl. source text */
+/* raw value token: filename or bare word (until , ) or whitespace) */
+static char *raw_token(P *p);
+
+/* levels=c("a", "b", ...) — an explicit discrete order. Elements may be quoted
+ * or bare (so numeric levels read as c(8, 4, 6)); they are matched against the
+ * factor's level labels at render time. Leaves *out owning the strings. */
+static int parse_levels(P *p, char ***out, int *n) {
+    skip_ws(p);
+    if (p->s[0] == 'c' && p->s[1] == '(') p->s += 2;
+    else return fail(p, "levels= expects c(\"a\", \"b\", ...)", "");
+    int cap = 0;
+    *out = NULL; *n = 0;
+    for (;;) {
+        skip_ws(p);
+        if (*p->s == ')') { p->s++; break; }
+        char *v = raw_token(p);
+        if (!v || !*v) { free(v); return fail(p, "bad value in levels=c(...)", ""); }
+        if (*n == cap) { cap = cap ? cap * 2 : 8; *out = cp_xrealloc(*out, cap * sizeof(char *)); }
+        (*out)[(*n)++] = v;
+        skip_ws(p);
+        if (*p->s == ',') { p->s++; continue; }
+        if (*p->s == ')') { p->s++; break; }
+        return fail(p, "expected , or ) in levels=c(...)", "");
+    }
+    if (*n == 0) return fail(p, "levels=c() is empty", "");
+    return 0;
+}
+
+/* value in aes: IDENT or factor(IDENT[, levels=c(...)]); fills entry incl.
+ * source text */
 static int aes_value(P *p, AesEntry *e) {
     const char *start;
     skip_ws(p);
@@ -76,6 +105,15 @@ static int aes_value(P *p, AesEntry *e) {
         if (expect(p, '(')) return -1;
         e->col = ident(p);
         if (!e->col) return fail(p, "expected a column name in factor() near \"%.20s\"", p->s);
+        skip_ws(p);
+        if (*p->s == ',') {                       /* factor(col, levels=c(...)) */
+            p->s++;
+            char *key = ident(p);
+            if (!key || strcmp(key, "levels") || expect(p, '='))
+                return fail(p, "factor() supports only levels=c(...)", "");
+            free(key);
+            if (parse_levels(p, &e->levels, &e->nlevels)) return -1;
+        }
         if (expect(p, ')')) return -1;
         e->is_factor = 1;
         free(id);
@@ -83,7 +121,14 @@ static int aes_value(P *p, AesEntry *e) {
         e->col = id;
         e->is_factor = 0;
     }
-    e->expr = strndup(start, p->s - start);
+    /* The source text becomes the default axis/legend title. A levels=c(...)
+     * list is long enough to squeeze the panel to nothing, so elide it — the
+     * title reads factor(col), and labs() still overrides it. */
+    if (e->nlevels) {
+        size_t n = strlen(e->col) + 10;
+        e->expr = cp_xmalloc(n);
+        snprintf(e->expr, n, "factor(%s)", e->col);
+    } else e->expr = strndup(start, p->s - start);
     return 0;
 }
 
@@ -683,6 +728,15 @@ static int parse_term(P *p, PlotSpec *spec) {
         p->s++;
         spec->facet_var = ident(p);
         if (!spec->facet_var) return fail(p, "expected a column name after ~", "");
+        skip_ws(p);
+        if (*p->s == ',') {          /* facet_wrap(~v, levels=c(...)) — panel order */
+            p->s++;
+            char *key = ident(p);
+            if (!key || strcmp(key, "levels") || expect(p, '='))
+                return fail(p, "facet_wrap() supports only levels=c(...)", "");
+            free(key);
+            if (parse_levels(p, &spec->facet_levels, &spec->n_facet_levels)) return -1;
+        }
         return expect(p, ')');
     }
     if (!strncmp(name, "theme_", 6)) {           /* no-arg theme selector */
@@ -706,7 +760,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                    "geom_density(), geom_hline(), geom_vline(), geom_abline(), "
                    "geom_text()/geom_text_repel(), geom_label()/geom_label_repel(), "
                    "labs()/xlab()/ylab()/ggtitle(), "
-                   "facet_wrap(~var), coord_flip(), scale_x_log10(), scale_y_log10(), scale_*_continuous(), xlim(), ylim(), "
+                   "facet_wrap(~var[, levels=c(...)]), coord_flip(), scale_x_log10(), scale_y_log10(), scale_*_continuous(), xlim(), ylim(), "
                    "scale_*_manual(), theme_bw()/theme_minimal()/theme_classic()/..., "
                    "heatmap(), annotation(), legend(), scale_fill_*(), "
                    "region(), coverage(), interval(), genes(), arcs(), matrix(), cytoband()", name);

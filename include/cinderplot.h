@@ -148,6 +148,12 @@ const Column *df_col(const DataFrame *df, const char *name);
 
 typedef struct { int nlev; char **levels; int *idx; } Factor; /* idx[row] or -1 */
 Factor *factor_make(const DataFrame *df, const Column *c);
+/* Reorder a factor's levels to `want`, the R `factor(x, levels=)` order.
+ * `want` must be a complete permutation of the levels present in the data, so
+ * levels= can only reorder — never silently drop rows; `what` names the
+ * aesthetic in the error message. Returns 0, or -1 with `err` filled. */
+int factor_relevel(Factor *f, int nrow, char *const *want, int nwant,
+                   const char *what, char *err);
 
 /* ---------- gtable.c: the layout engine ---------- */
 typedef enum { U_PT, U_NULL } UKind;
@@ -209,7 +215,12 @@ void cp_set_dpi(double dpi);                        /* PNG raster resolution (de
 cairo_status_t cp_surface_emit(cairo_surface_t *surf, const char *out);
 
 /* ---------- dsl.c: verbatim ggplot subset ---------- */
-typedef struct { char *col; int is_factor; char *expr; } AesEntry; /* col NULL = unset */
+/* col NULL = unset; levels (from factor(col, levels=c(...))) imposes the
+ * discrete order instead of factor_make()'s sort */
+typedef struct {
+    char *col; int is_factor; char *expr;
+    char **levels; int nlevels;
+} AesEntry;
 
 typedef enum { GEOM_POINT, GEOM_LINE, GEOM_COL, GEOM_HISTOGRAM, GEOM_BOXPLOT, GEOM_BAR,
                GEOM_SEGMENT, GEOM_RECT, GEOM_DENSITY,
@@ -286,6 +297,7 @@ typedef struct {
     int x_pct, y_pct;                             /* scale_*_continuous(labels=percent) */
     ThemeType theme;                              /* theme_*(); THEME_GRAY = 0 = default */
     char *facet_var;
+    char **facet_levels; int n_facet_levels;      /* facet_wrap(~v, levels=c(...)) */
     char *lab_title, *lab_x, *lab_y, *lab_colour, *lab_fill;
     char *lab_subtitle, *lab_caption;             /* labs(subtitle=, caption=) */
     /* scale_colour/fill_manual(values=): discrete palette override */

@@ -255,3 +255,42 @@ Factor *factor_make(const DataFrame *df, const Column *c) {
     }
     return f;
 }
+
+/* R's factor(x, levels=c(...)): impose an explicit level order. `want` must
+ * name every level that occurs in the data and nothing else — R would turn an
+ * unlisted value into NA, which here would silently delete rows from a plot,
+ * so an incomplete or misspelled list is an error naming the offender. */
+int factor_relevel(Factor *f, int nrow, char *const *want, int nwant,
+                   const char *what, char *err) {
+    int *pos = cp_xmalloc(f->nlev * sizeof(int));   /* old level -> new slot */
+    for (int i = 0; i < f->nlev; i++) {
+        pos[i] = -1;
+        for (int j = 0; j < nwant; j++)
+            if (!strcmp(f->levels[i], want[j])) { pos[i] = j; break; }
+        if (pos[i] < 0) {
+            snprintf(err, CP_ERRLEN, "levels= for %s does not list `%s`, which "
+                     "occurs in the data; levels= must name every value", what,
+                     f->levels[i]);
+            free(pos);
+            return -1;
+        }
+    }
+    for (int j = 0; j < nwant; j++) {               /* every slot filled? */
+        int seen = 0;
+        for (int i = 0; i < f->nlev; i++) if (pos[i] == j) { seen = 1; break; }
+        if (!seen) {
+            snprintf(err, CP_ERRLEN, "levels= for %s names `%s`, which does not "
+                     "occur in the data", what, want[j]);
+            free(pos);
+            return -1;
+        }
+    }
+    char **nl = cp_xmalloc(f->nlev * sizeof(char *));
+    for (int i = 0; i < f->nlev; i++) nl[pos[i]] = f->levels[i];
+    free(f->levels);
+    f->levels = nl;
+    for (int r = 0; r < nrow; r++)
+        if (f->idx[r] >= 0) f->idx[r] = pos[f->idx[r]];
+    free(pos);
+    return 0;
+}
