@@ -491,11 +491,14 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     const Column *colc = NULL;          /* continuous colour column */
     int cont_col = 0;
     FillScale cscale = spec->colour_scale;
+    /* Bars carry a colour/fill only when it is constant within each panel --
+     * the common faceted case, where every bar in a facet takes the same hue
+     * and no position adjustment is involved. Mixed fills within one panel
+     * would need stacking or dodging, which is still unimplemented; that is
+     * checked once the facet factor exists (search bars_const_fill). */
+    int bars_const_fill = 0;
     if (spec->colour.col) {
-        if (hascol || nhist) {
-            snprintf(err, CP_ERRLEN, "colour/fill on bars (stacking/dodging) is not implemented yet");
-            return -1;
-        }
+        if (hascol || nhist) bars_const_fill = 1;
         const Column *cc = df_col(df, spec->colour.col);
         if (!cc) { snprintf(err, CP_ERRLEN, "column `%s` not found", spec->colour.col); return -1; }
         if (!spec->colour.is_factor && cc->type == COL_NUM) {
@@ -563,6 +566,35 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         nuse += ok;
     }
     if (nuse == 0) { snprintf(err, CP_ERRLEN, "no complete rows to plot"); return -1; }
+
+    /* bars_const_fill: colour/fill was mapped on a bar geom. Allowed only if
+     * every panel holds a single colour level, so each panel's bars take one
+     * hue; anything else is a stack/dodge and stays unimplemented. */
+    int *panelfill = NULL;
+    if (bars_const_fill) {
+        if (cont_col) {
+            snprintf(err, CP_ERRLEN, "a continuous colour/fill on bars is not "
+                     "implemented; map a discrete column instead");
+            return -1;
+        }
+        int np_ = ff ? ff->nlev : 1;
+        panelfill = cp_xmalloc(np_ * sizeof(int));
+        for (int i = 0; i < np_; i++) panelfill[i] = -1;
+        for (int r = 0; r < df->nrow; r++) {
+            if (!use[r]) continue;
+            int p = ff ? ff->idx[r] : 0;
+            if (panelfill[p] < 0) panelfill[p] = cf->idx[r];
+            else if (panelfill[p] != cf->idx[r]) {
+                snprintf(err, CP_ERRLEN,
+                         "colour/fill on bars varies within %s, which would need "
+                         "stacking or dodging (not implemented); it is supported "
+                         "only when constant per panel, e.g. facet_wrap(~%s)",
+                         ff ? "a facet" : "the plot", spec->colour.col);
+                free(panelfill);
+                return -1;
+            }
+        }
+    }
     if (d_na) fprintf(stderr, "cinderplot: removed %d rows with missing values\n", d_na);
     if (d_log) fprintf(stderr, "cinderplot: removed %d rows with non-positive values on a log axis\n", d_log);
 
@@ -1189,7 +1221,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     int cnt = hs->counts[p * hs->nbins + b];
                     if (!cnt) continue;
                     g = gt_add(T, G_RECT, R, C, R, C);
-                    g->col = C_BAR; g->sub = 1; g->clip = 1;
+                    g->col = panelfill && panelfill[p] >= 0 ? pal[panelfill[p]]
+                           : spec->layers[li].has_color ? spec->layers[li].color
+                           : C_BAR;
+                    g->sub = 1; g->clip = 1;
                     g->x0 = NPCX(hs->start + b * hs->width);
                     g->x1 = NPCX(hs->start + (b + 1) * hs->width);
                     g->y0 = base;
@@ -1217,7 +1252,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     if (!use[r] || (ff && ff->idx[r] != p)) continue;
                     double tx = TXR(r), ty = TY(yc->num[r]);
                     g = gt_add(T, G_RECT, R, C, R, C);
-                    g->col = spec->layers[li].has_color ? spec->layers[li].color : C_BAR;
+                    g->col = spec->layers[li].has_color ? spec->layers[li].color
+                           : panelfill && panelfill[p] >= 0 ? pal[panelfill[p]]
+                           : C_BAR;
                     g->sub = 1; g->clip = 1;
                     g->x0 = NPCX(tx - colw / 2); g->x1 = NPCX(tx + colw / 2);
                     g->y0 = fmin(base, NPCY(ty)); g->y1 = fmax(base, NPCY(ty));
