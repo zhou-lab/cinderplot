@@ -919,6 +919,29 @@ skipping landed: labels whose anchors sit close together (RXRA/CLOCK/TEAD in the
 hepatocyte panel; LHX2/FOXK3 in the test render) still overlap slightly. The
 repel loop converges but does not fully separate tight clusters.
 
+** TODO discrete fill for heatmap mode (scale_fill_manual + labelled legend)
+
+From =20260728_heatmap_discrete_fill_legend.md=. A donor x brain-region grid
+whose cells are a *categorical status* (not banked / queued / 5mC only /
+5mC+5hmC) stored as integers 0-3. heatmap mode maps cells through a continuous
+=FillScale=, so the only legend available is a colourbar reading =0 1 2 3=, and
+the caption has to explain that 3 means "both modalities profiled".
+
+The ggplot2 call to mirror:
+
+: ggplot(d, aes(donor, region, fill=factor(status))) + geom_tile() +
+:   scale_fill_manual(values=c(...), labels=c(...), name="assay status")
+
+i.e. =scale_fill_manual(values=, labels=, name=)= honoured in heatmap mode with
+the fill drawn as discrete keys. The discrete legend machinery already exists
+and works — =legend(right_of("<annotation column>"))= against a categorical
+=annotation()= produces exactly the right key. What is missing is routing the
+*heatmap's own* fill through it rather than through the colourbar.
+
+As of 20260728 =scale_*_manual()= in heatmap mode *errors* instead of being
+silently ignored, so the trap is closed; this entry is the feature that would
+close the gap properly.
+
 ** Resolved in this batch, for the record
 
 - =levels== on =facet_wrap()= and =factor()= — explicit discrete order.
@@ -928,3 +951,7 @@ repel loop converges but does not fully separate tight clusters.
 - =alpha== and =linetype== on a layer.
 - blank/=NA= labels skipped by =geom_text()= / =geom_text_repel()=.
 - loader rewrite: in-place parse, single-pass typing, column pruning.
+- =scale_fill_*()= honoured in grammar mode (it wrote the heatmap scale, so
+  every =geom_rect()= fill scale was a silent no-op).
+- =labs(fill=)= titles the grammar-mode colour legend; =labs(x=NULL)= accepted.
+- =annotation(column=)= names the column to colour by (was implicitly the last).

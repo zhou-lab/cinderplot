@@ -176,8 +176,17 @@ static int parse_labs(P *p, PlotSpec *spec) {
     for (;;) {
         char *key = ident(p);
         if (!key || expect(p, '=')) return fail(p, "labs() takes key=\"value\" pairs", "");
-        char *val = string_lit(p);
-        if (!val) return fail(p, "labs(%s=...) expects a quoted string", key);
+        /* ggplot2 uses labs(x=NULL) to drop a title entirely, as distinct from
+         * x="" which keeps the reserved space. Accept the spelling; we render
+         * it as empty, which differs from ggplot2 only in that the blank line
+         * is still reserved. */
+        skip_ws(p);
+        char *val;
+        if (!strncmp(p->s, "NULL", 4) && !isalnum((unsigned char)p->s[4]) && p->s[4] != '_') {
+            p->s += 4;
+            val = cp_xstrdup("");
+        } else if (!(val = string_lit(p)))
+            return fail(p, "labs(%s=...) expects a quoted string or NULL", key);
         if (!strcmp(key, "title")) spec->lab_title = val;
         else if (!strcmp(key, "subtitle")) spec->lab_subtitle = val;
         else if (!strcmp(key, "caption")) spec->lab_caption = val;
@@ -343,6 +352,10 @@ static int parse_hm_args(P *p, HMObj *o, int want_data) {
                 char *v = string_lit(p);
                 if (!v) return fail(p, "data= expects a quoted path", "");
                 o->data = v;
+            } else if (!strcmp(key, "column")) {
+                char *v = string_lit(p);
+                if (!v) return fail(p, "column= expects a quoted column name", "");
+                o->column = v;
             } else if (!strcmp(key, "title")) {
                 char *v = string_lit(p);
                 if (!v) return fail(p, "title= expects a quoted string", "");
@@ -898,12 +911,42 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
         if (parse_term(&p, spec)) return -1;
     }
 
+    /* aes(fill=) is stored in spec->colour (fill and colour are one aesthetic
+     * here), but scale_fill_*() writes spec->fill, which only heatmap mode
+     * reads. In grammar mode that made every scale_fill_gradient/viridis/jet a
+     * silent no-op: the spec parsed, the run succeeded, and the default ramp
+     * came out. Alias it onto the colour scale instead. scale_colour_*() still
+     * wins if both are given. */
+    if (spec->nhobjs == 0 && spec->ntracks == 0
+        && spec->has_fill && !spec->has_colour_scale) {
+        spec->colour_scale = spec->fill;
+        spec->has_colour_scale = 1;
+    }
+    /* labs(fill=) titles that same aesthetic, so honour it when labs(colour=)
+     * was not given. */
+    if (spec->nhobjs == 0 && spec->ntracks == 0
+        && spec->lab_fill && !spec->lab_colour)
+        spec->lab_colour = spec->lab_fill;
+
     if (spec->ntracks > 0) {           /* track (locus-browser) mode */
         if (spec->nlayers || spec->nhobjs || spec->x.col)
             return fail(&p, "track functions cannot be mixed with grammar/heatmap", "");
         return 0;
     }
 
+    if (spec->nhobjs > 0 && spec->has_manual) {
+        /* heatmap.c maps cell values through a continuous FillScale and never
+         * consults manual_cols, so this used to parse, run, exit 0 and render
+         * the default ramp -- the caller only found out by noticing the output
+         * never changed. Every other unsupported thing here errors with a menu,
+         * which is what makes a wrong guess cheap; silent acceptance breaks that
+         * contract, so refuse until a discrete heatmap fill exists. */
+        return fail(&p, "scale_*_manual() is not supported in heatmap mode: the "
+                        "heatmap fill is a continuous scale. Use "
+                        "scale_fill_gradient()/gradient2()/viridis()/jet(), or "
+                        "encode the categories as an annotation(), which does "
+                        "take a discrete palette and legend", "");
+    }
     if (spec->nhobjs > 0) {                      /* matrix mode */
         if (spec->nlayers || spec->x.col || spec->facet_var)
             /* legend() is a heatmap-mode primitive, but the supported-verbs list

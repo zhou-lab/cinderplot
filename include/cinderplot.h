@@ -270,6 +270,8 @@ typedef struct {
     char *name;                    /* auto-assigned if absent */
     char *data;                    /* heatmap/annotation: csv path */
     char *title;                   /* legend title (NULL = default/none) */
+    char *column;                  /* annotation: which column to colour by
+                                    * (NULL = the last, the historical default) */
     ClusterMode cluster;           /* heatmap only */
     Side rownames, colnames;       /* heatmap label sides (SIDE_NONE = off) */
     int label_data;                /* annotation: label value runs in situ + bezier leaders */

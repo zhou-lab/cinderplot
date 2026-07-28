@@ -403,7 +403,19 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                 snprintf(err, CP_ERRLEN, "annotation `%s` has no columns", o->data);
                 return -1;
             }
+            /* Which column colours the annotation was implicit -- the last
+             * one -- which is silently wrong for a file that also carries a key
+             * column, and gives no way to choose. column= names it explicitly;
+             * the default is unchanged so existing specs still render. */
             const Column *col = &df->cols[df->ncol - 1];
+            if (o->column) {
+                col = df_col(df, o->column);
+                if (!col) {
+                    snprintf(err, CP_ERRLEN, "annotation `%s` has no column `%s`",
+                             o->data, o->column);
+                    return -1;
+                }
+            }
             ro[i].ann_n = df->nrow;
             ro[i].ann_horiz = pl->kind == PL_TOP_OF || pl->kind == PL_BENEATH;
             int need = ro[i].ann_horiz ? a->nc : a->nr;
