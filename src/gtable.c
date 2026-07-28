@@ -38,6 +38,22 @@ cairo_status_t cp_surface_emit(cairo_surface_t *surf, const char *out) {
 
 static void set_col(cairo_t *cr, Col c) { cairo_set_source_rgb(cr, c.r, c.g, c.b); }
 
+/* Layer colour honouring an alpha= mapping; alpha 0 means "unset", i.e. opaque,
+ * so grobs that never set it behave exactly as before. */
+static void set_col_a(cairo_t *cr, Col c, double a) {
+    if (a > 0 && a < 1) cairo_set_source_rgba(cr, c.r, c.g, c.b, a);
+    else cairo_set_source_rgb(cr, c.r, c.g, c.b);
+}
+
+/* linetype=: ggplot2's "dashed" and "dotted", scaled to the stroke width so
+ * they stay legible at any line width. */
+static void set_dash(cairo_t *cr, int dash, double lw) {
+    double d2[2];
+    if (dash == 1) { d2[0] = 4 * lw; d2[1] = 4 * lw; cairo_set_dash(cr, d2, 2, 0); }
+    else if (dash == 2) { d2[0] = lw; d2[1] = 2 * lw; cairo_set_dash(cr, d2, 2, 0); }
+    else cairo_set_dash(cr, NULL, 0, 0);
+}
+
 /* An axis label of the form "10^k" renders "10" full size then a smaller,
  * raised exponent. cp_label_w measures the rendered advance (used for both
  * centring and y-axis width reservation); draw_label draws it left-anchored
@@ -144,7 +160,7 @@ void gt_render(GTable *t, cairo_t *cr) {
         if (g->clip) { cairo_rectangle(cr, rx, ry, rw, rh); cairo_clip(cr); }
         switch (g->type) {
         case G_RECT:
-            set_col(cr, g->col);
+            set_col_a(cr, g->col, g->alpha);
             if (g->sub)
                 cairo_rectangle(cr, DX(g->x0), DY(g->y1),
                                 (g->x1 - g->x0) * rw, (g->y1 - g->y0) * rh);
@@ -198,8 +214,9 @@ void gt_render(GTable *t, cairo_t *cr) {
             break;
         }
         case G_POLYLINE:
-            set_col(cr, g->col);
+            set_col_a(cr, g->col, g->alpha);
             cairo_set_line_width(cr, g->lw);
+            set_dash(cr, g->dash, g->lw);
             cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
             for (int i = 0; i < g->n; i++) {
                 if (i == 0) cairo_move_to(cr, DX(g->px[i]), DY(g->py[i]));
@@ -208,11 +225,13 @@ void gt_render(GTable *t, cairo_t *cr) {
             cairo_stroke(cr);
             break;
         case G_LINE:
-            set_col(cr, g->col);
+            set_col_a(cr, g->col, g->alpha);
             cairo_set_line_width(cr, g->lw);
+            set_dash(cr, g->dash, g->lw);
             cairo_move_to(cr, DX(g->x0), DY(g->y0));
             cairo_line_to(cr, DX(g->x1), DY(g->y1));
             cairo_stroke(cr);
+            cairo_set_dash(cr, NULL, 0, 0);
             break;
         case G_POINTS: {
             /* Coalesce consecutive points that share a colour and radius into
@@ -262,7 +281,7 @@ void gt_render(GTable *t, cairo_t *cr) {
                     cairo_scale(ic, sc, sc);            /* draw in points */
                     for (int k = 0; k < g->n; k++) {
                         double rr = g->pradius ? g->pradius[k] : g->radius;
-                        set_col(ic, g->pcol[k]);
+                        set_col_a(ic, g->pcol[k], g->alpha);
                         cairo_arc(ic, g->px[k] * rw, rh - g->py[k] * rh,
                                   rr, 0, 2 * M_PI);
                         cairo_fill(ic);
@@ -282,7 +301,7 @@ void gt_render(GTable *t, cairo_t *cr) {
             }
             if (g->n < BATCH_MIN) {              /* publication-scale: unchanged */
                 for (int k = 0; k < g->n; k++) {
-                    set_col(cr, g->pcol[k]);
+                    set_col_a(cr, g->pcol[k], g->alpha);
                     double r0 = g->pradius ? g->pradius[k] : g->radius;
                     cairo_arc(cr, DX(g->px[k]), DY(g->py[k]), r0, 0, 2 * M_PI);
                     cairo_fill(cr);
@@ -294,7 +313,7 @@ void gt_render(GTable *t, cairo_t *cr) {
                 Col c = g->pcol[i];
                 double rad = g->pradius ? g->pradius[i] : g->radius;  /* size aes = per-point */
                 int j = i, nb = 0;
-                set_col(cr, c);
+                set_col_a(cr, c, g->alpha);
                 while (j < g->n && nb < BATCH
                        && g->pcol[j].r == c.r && g->pcol[j].g == c.g
                        && g->pcol[j].b == c.b

@@ -601,6 +601,24 @@ static int parse_term(P *p, PlotSpec *spec) {
                     l->nudge_x = strtod(p->s, (char **)&p->s);
                 } else if ((gt == GEOM_TEXT || gt == GEOM_LABEL) && !strcmp(key, "nudge_y")) {
                     l->nudge_y = strtod(p->s, (char **)&p->s);
+                } else if (!strcmp(key, "alpha")) {
+                    /* ggplot2's alpha: the first thing anyone reaches for on a
+                     * large scatter, where an opaque overplot hides where the
+                     * mass actually is. Applies to the layer's marks/lines/bars. */
+                    l->alpha = strtod(p->s, (char **)&p->s);
+                    if (!(l->alpha > 0 && l->alpha <= 1))
+                        return fail(p, "alpha= must be in (0, 1]", "");
+                } else if (!strcmp(key, "linetype")) {
+                    /* "dashed"/"dotted" carry a convention -- a dashed rule reads
+                     * as an annotation rather than as fitted data, which matters
+                     * for a y=x reference on a Q-Q plot. */
+                    char *v = *p->s == '"' ? string_lit(p) : ident(p);
+                    if (!v) return fail(p, "linetype= expects \"solid\", \"dashed\" or \"dotted\"", "");
+                    if (!strcmp(v, "solid")) l->dash = 0;
+                    else if (!strcmp(v, "dashed")) l->dash = 1;
+                    else if (!strcmp(v, "dotted")) l->dash = 2;
+                    else { free(v); return fail(p, "linetype= supports \"solid\", \"dashed\", \"dotted\"", ""); }
+                    free(v);
                 } else return fail(p, "layer option `%s` not implemented", key);
                 skip_ws(p);
                 if (*p->s == ',') { p->s++; skip_ws(p); }
@@ -766,13 +784,39 @@ static int parse_term(P *p, PlotSpec *spec) {
                             "theme_light, theme_dark, theme_few", name);
         return expect(p, ')');
     }
+    if (!strcmp(name, "guides")) {
+        /* guides(colour="none", fill="none") -- ggplot2's spelling for dropping
+         * a legend. Only "none" is meaningful here: cinderplot has no guide
+         * customization to select, so any other value is an error rather than a
+         * silently ignored argument. */
+        skip_ws(p);
+        if (*p->s == ')') return fail(p, "guides() needs an argument, e.g. "
+                                         "guides(colour=\"none\")", "");
+        while (*p->s != ')') {
+            char *key = ident(p);
+            if (!key || expect(p, '=')) return fail(p, "bad guides() argument", "");
+            int ok = !strcmp(key, "colour") || !strcmp(key, "color")
+                  || !strcmp(key, "fill") || !strcmp(key, "size");
+            if (!ok) { fail(p, "guides() supports colour=, color=, fill=, size=", ""); free(key); return -1; }
+            free(key);
+            skip_ws(p);
+            char *v = *p->s == '"' ? string_lit(p) : ident(p);  /* "none" or bare none */
+            if (!v) return fail(p, "guides() values must be \"none\"", "");
+            if (strcmp(v, "none")) { free(v); return fail(p, "guides() supports only \"none\"", ""); }
+            free(v);
+            spec->no_legend = 1;
+            skip_ws(p);
+            if (*p->s == ',') { p->s++; skip_ws(p); }
+        }
+        return expect(p, ')');
+    }
     return fail(p, "`%s()` is not implemented; supported: aes(), geom_point(), "
                    "geom_line(), geom_col(), geom_histogram(), geom_boxplot(), geom_bar(), "
                    "geom_density(), geom_hline(), geom_vline(), geom_abline(), "
                    "geom_text()/geom_text_repel(), geom_label()/geom_label_repel(), "
                    "labs()/xlab()/ylab()/ggtitle(), "
                    "facet_wrap(~var[, levels=c(...)]), coord_flip(), scale_x_log10(), scale_y_log10(), scale_*_continuous(), xlim(), ylim(), "
-                   "scale_*_manual(), theme_bw()/theme_minimal()/theme_classic()/..., "
+                   "scale_*_manual(), theme_bw()/theme_minimal()/theme_classic()/..., guides(colour=\"none\"), "
                    "heatmap(), annotation(), legend(), scale_fill_*(), "
                    "region(), coverage(), interval(), genes(), arcs(), matrix(), cytoband()", name);
 }
@@ -814,7 +858,14 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
 
     if (spec->nhobjs > 0) {                      /* matrix mode */
         if (spec->nlayers || spec->x.col || spec->facet_var)
-            return fail(&p, "heatmap() cannot be mixed with aes()/geom_*/facet_wrap()", "");
+            /* legend() is a heatmap-mode primitive, but the supported-verbs list
+             * advertises it, so someone reaching for it to control a grammar
+             * legend lands here. Say so, and point at what they actually want. */
+            return fail(&p, spec->nhobjs == 1 && spec->hobjs[0].type == HM_LEGEND
+                        ? "legend() places a legend beside a heatmap() and cannot be "
+                          "used with aes()/geom_*; in grammar mode the legend is "
+                          "automatic — suppress it with guides(colour=\"none\")"
+                        : "heatmap() cannot be mixed with aes()/geom_*/facet_wrap()", "");
         if (spec->hobjs[0].type != HM_HEATMAP)
             return fail(&p, "the first placed object must be a heatmap()", "");
         return 0;

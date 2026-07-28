@@ -187,6 +187,8 @@ typedef struct {
     const double *px, *py; const Col *pcol; double radius;
     const double *pradius;                     /* G_POINTS: per-point radius (size aes); NULL = use `radius` */
     int raster;                                /* G_POINTS: rasterize into an embedded image */
+    int dash;                                  /* G_LINE/G_POLYLINE: 0 solid, 1 dashed, 2 dotted */
+    double alpha;                              /* 0 = opaque (unset); else 0..1 fill/stroke alpha */
     char **labels;                             /* axis tick labels */
     const double *mtpos, *mtlen; int mtn;      /* minor axis ticks (log): npc pos + length (pt) */
     Col tick_col, text_col;                    /* G_AXIS_*: themed colours (opt-in) */
@@ -245,6 +247,8 @@ typedef struct {
     double point_size;          /* geom_point size (ggplot units; 0 = default 1.5) */
     int repel;                  /* geom_text_repel/geom_label_repel: force placement */
     double nudge_x, nudge_y;    /* geom_text/label: constant offset (data units) */
+    int dash;                   /* linetype=: 0 solid, 1 dashed, 2 dotted */
+    double alpha;               /* alpha=: 0 = unset (opaque), else 0..1 */
     int raster;                 /* geom_point(raster=TRUE): draw the layer into an
                                  * embedded image instead of per-point vector marks
                                  * (ggrastr's idea); axes and text stay vector */
@@ -306,6 +310,7 @@ typedef struct {
     int has_xlim, has_ylim;                       /* xlim()/ylim() or scale_*_log10(limits=) */
     int x_pct, y_pct;                             /* scale_*_continuous(labels=percent) */
     ThemeType theme;                              /* theme_*(); THEME_GRAY = 0 = default */
+    int no_legend;                  /* guides(colour="none"|fill="none") or --no-legend */
     char *facet_var;
     char **facet_levels; int n_facet_levels;      /* facet_wrap(~v, levels=c(...)) */
     char *lab_title, *lab_x, *lab_y, *lab_colour, *lab_fill;

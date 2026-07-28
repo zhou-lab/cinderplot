@@ -1054,12 +1054,15 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 pal[i] = c;
             }
         } else hue_palette(cf->nlev, pal);
-        guides[nguide++] = build_legend(cr, th, col_title, cf, pal, haspoint,
-                           hasline || hasseg || hasdens, hasbox || hasbar || hasrect, hastext);
-    } else if (cont_col) {
+        /* The palette is still built when the legend is suppressed -- the marks
+         * and bars are coloured from it; only the guide is dropped. */
+        if (!spec->no_legend)
+            guides[nguide++] = build_legend(cr, th, col_title, cf, pal, haspoint,
+                               hasline || hasseg || hasdens, hasbox || hasbar || hasrect, hastext);
+    } else if (cont_col && !spec->no_legend) {
         guides[nguide++] = build_colorbar_legend(cr, th, col_title, &cscale, cdmin, cdmax);
     }
-    if (szc) {                                   /* size legend: representative breaks */
+    if (szc && !spec->no_legend) {               /* size legend: representative breaks */
         double sbr[16]; int nsb = extended_breaks(szmin, szmax, 5, sbr, 16), nf = 0;
         for (int i = 0; i < nsb; i++) if (sbr[i] >= szmin && sbr[i] <= szmax) sbr[nf++] = sbr[i];
         if (nf == 0) { sbr[0] = szmin; sbr[1] = szmax; nf = szmax > szmin ? 2 : 1; }
@@ -1214,6 +1217,11 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         /* layers, in spec order */
         for (int li = 0; li < spec->nlayers; li++) {
             GeomType gt = spec->layers[li].type;
+            /* alpha= and linetype= belong to the whole layer, and every geom
+             * builds its grobs differently, so rather than threading them
+             * through each branch, note where this layer's grobs start and
+             * stamp them all once the branch has run (see end of the loop). */
+            int grob0 = T->ngrobs;
             if (gt == GEOM_HISTOGRAM) {
                 Hist *hs = &hist[li];
                 double base = spec->log_y ? 0.0 : NPCY(0.0);
@@ -1525,7 +1533,14 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         if (isnan(TXR(r)) || isnan(yc->num[r])) continue;
                         const char *s;
                         if (labc->type == COL_STR) s = labc->str[r];
+                        else if (isnan(labc->num[r])) continue;   /* NA: no label */
                         else { char *tmp = cp_xmalloc(32); fmt_num(labc->num[r], tmp, 32); s = tmp; }
+                        /* Blank and NA labels draw nothing at all -- no glyph and,
+                         * for the repel geoms, no leader line. ggplot2/ggrepel drop
+                         * them, and it is the only way to label a subset of points:
+                         * otherwise a volcano labelling its top 8 of 230 hits gets
+                         * ~220 leader lines radiating to empty strings. */
+                        if (!s || !*s || !strcmp(s, "NA")) continue;
                         double axp = NPCX(TXR(r)) * panelw_pt, ayp = NPCY(TY(yc->num[r])) * panelh_pt;
                         px[m] = axp; py[m] = ayp;
                         rl[m].hw = text_w(cr, fs, s) / 2 + bpad;
@@ -1567,6 +1582,17 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         }
                     }
                     free(rl); free(strs); free(cols); free(px); free(py);
+                }
+            }
+
+            /* Stamp this layer's alpha= / linetype= onto every grob it just
+             * produced. Done once here rather than in each geom branch, so a
+             * new geom picks both up for free. Theme and axis grobs are built
+             * outside this loop and are untouched. */
+            if (spec->layers[li].alpha > 0 || spec->layers[li].dash) {
+                for (int gi = grob0; gi < T->ngrobs; gi++) {
+                    T->grobs[gi].alpha = spec->layers[li].alpha;
+                    T->grobs[gi].dash = spec->layers[li].dash;
                 }
             }
         }
