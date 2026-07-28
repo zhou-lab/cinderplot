@@ -874,84 +874,9 @@ track_io.c; gtable engine unchanged.
 - Where the grammar boundary sits for a CLI: flag style
   (=-m point -x hp -y mpg --color cyl=) vs a mini-DSL.
 
-* Backlog from the tmp/ drop zone (triaged 20260728)              :backlog:
+* Backlog and open requests -> the lab journal
 
-The local drop zone =tmp/= is gitignored, so anything still open there has to
-live here or it is lost when the folder is cleared. These are the requests from
-the 2026-07-27/28 batch that were *not* implemented, with the reasoning that
-made them worth keeping.
-
-** TODO geom_bin2d() / geom_raster() — a 2D-density geom
-
-The substantive one, and the one asked for twice (=20260727_missing_layer_opts.md=,
-=20260727_sesame_intensity_beta.md=). Any "hundreds of thousands of points"
-figure — for methylation, most of them — wants a density surface, not a scatter.
-R gets it from one call (=smoothScatter=, =geom_bin2d=, =stat_density_2d=).
-
-Today the caller must bin to a grid first: the sesame intensity-vs-beta showcase
-bins 937,662 probes onto a 180x140 grid with =tabl= (=mutate= indices → =count=
-→ =mutate= back to centres) before plotting =geom_point(size=0.7)=. That works,
-but every consumer re-decides the bin count, the transform and the edge
-handling, so each script re-derives — and re-bugs — the same four verbs.
-
-Note =geom_raster()= alone would be the smaller half: it takes a pre-binned grid
-and draws it, leaving the binning to the caller. =geom_bin2d()= owning the
-binning is what actually removes the duplicated logic. The image-grob machinery
-now exists in both =heatmap.c= (=RASTER_MIN_CELLS=) and =gtable.c= (=G_POINTS=
-=raster=TRUE=), so the drawing half is largely solved.
-
-** TODO stacked / dodged bars for geom_col()
-
-=geom_bar()= already stacks by colour group (=position_stack= order). =geom_col()=
-does not: as of 20260727 it accepts =fill== only when the value is *constant
-within each panel*, which covers the faceted case but not a composition figure.
-
-The motivating case (=20260727_missing_layer_opts.md=): a runtime comparison
-where R's 46.9 s per sample is 30.7 s of =openSesame= plus 16.2 s of interpreter
-startup and =library()=. One stacked bar says that at a glance; three plain bars
-make the reader subtract, and the 16.2 s — the part a per-sample pipeline pays
-repeatedly — becomes invisible. Any before/after or composition figure wants it.
-
-** TODO repel quality when labels cluster
-
-Not formally reported, but visible in the kycg volcano after blank-label
-skipping landed: labels whose anchors sit close together (RXRA/CLOCK/TEAD in the
-hepatocyte panel; LHX2/FOXK3 in the test render) still overlap slightly. The
-repel loop converges but does not fully separate tight clusters.
-
-** TODO discrete fill for heatmap mode (scale_fill_manual + labelled legend)
-
-From =20260728_heatmap_discrete_fill_legend.md=. A donor x brain-region grid
-whose cells are a *categorical status* (not banked / queued / 5mC only /
-5mC+5hmC) stored as integers 0-3. heatmap mode maps cells through a continuous
-=FillScale=, so the only legend available is a colourbar reading =0 1 2 3=, and
-the caption has to explain that 3 means "both modalities profiled".
-
-The ggplot2 call to mirror:
-
-: ggplot(d, aes(donor, region, fill=factor(status))) + geom_tile() +
-:   scale_fill_manual(values=c(...), labels=c(...), name="assay status")
-
-i.e. =scale_fill_manual(values=, labels=, name=)= honoured in heatmap mode with
-the fill drawn as discrete keys. The discrete legend machinery already exists
-and works — =legend(right_of("<annotation column>"))= against a categorical
-=annotation()= produces exactly the right key. What is missing is routing the
-*heatmap's own* fill through it rather than through the colourbar.
-
-As of 20260728 =scale_*_manual()= in heatmap mode *errors* instead of being
-silently ignored, so the trap is closed; this entry is the feature that would
-close the gap properly.
-
-** Resolved in this batch, for the record
-
-- =levels== on =facet_wrap()= and =factor()= — explicit discrete order.
-- =geom_point(raster=TRUE)= — embedded 300-dpi layer for dense scatters.
-- =colour=/=fill== on bars when constant per panel.
-- =guides(colour="none")= + =--no-legend=.
-- =alpha== and =linetype== on a layer.
-- blank/=NA= labels skipped by =geom_text()= / =geom_text_repel()=.
-- loader rewrite: in-place parse, single-pass typing, column pruning.
-- =scale_fill_*()= honoured in grammar mode (it wrote the heatmap scale, so
-  every =geom_rect()= fill scale was a silent no-op).
-- =labs(fill=)= titles the grammar-mode colour legend; =labs(x=NULL)= accepted.
-- =annotation(column=)= names the column to colour by (was implicitly the last).
+Triaged feature requests and open bugs live in the lab-journal dev record,
+[[file:~/repo/labjournal/zhouw3/2026/20260723_cinderplot.org][20260723_cinderplot.org]], not here. This file is the design record — why the
+tool is shaped the way it is, and what each milestone established. Keeping the
+moving backlog in one place avoids the two drifting apart.
