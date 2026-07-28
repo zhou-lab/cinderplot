@@ -784,6 +784,54 @@ static int parse_term(P *p, PlotSpec *spec) {
                             "theme_light, theme_dark, theme_few", name);
         return expect(p, ')');
     }
+    if (!strcmp(name, "ggplot")) {
+        /* ggplot(data, aes(...)) -- R's own spelling, accepted as sugar for
+         * cinderplot's `data + aes(...)`. The grammar is already ggplot2's; the
+         * one thing that does NOT transfer from a model's prior is the
+         * invocation shape, so accepting the R form means a caller writing from
+         * memory produces something that runs, with no documentation in
+         * context. data= and mapping= keywords are honoured too. */
+        skip_ws(p);
+        while (*p->s != ')') {
+            skip_ws(p);
+            const char *save = p->s;
+            char *key = ident(p);
+            skip_ws(p);
+            if (key && *p->s == '=') p->s++;
+            else { p->s = save; free(key); key = NULL; }
+            skip_ws(p);
+            if (!strncmp(p->s, "aes", 3) || (key && !strcmp(key, "mapping"))) {
+                if (!strncmp(p->s, "aes", 3)) p->s += 3;
+                if (expect(p, '(')) { free(key); return -1; }
+                if (parse_aes(p, spec)) { free(key); return -1; }
+            } else {
+                char *v = raw_token(p);
+                if (!v || !*v) { free(v); free(key);
+                    return fail(p, "ggplot() expects a data path", ""); }
+                free(spec->data_path);
+                spec->data_path = v;
+            }
+            free(key);
+            skip_ws(p);
+            if (*p->s == ',') { p->s++; continue; }
+            break;
+        }
+        return expect(p, ')');
+    }
+    if (!strcmp(name, "ggsave")) {
+        /* Accepted and ignored: the output path and size are CLI arguments
+         * here, but a spec written from ggplot2 memory tends to end with a
+         * ggsave(), and erroring on it would reject an otherwise correct
+         * figure over a detail cinderplot has already been told. */
+        int depth = 1;
+        while (*p->s && depth) {
+            if (*p->s == '(') depth++;
+            else if (*p->s == ')') depth--;
+            else if (*p->s == '"') { char *q = string_lit(p); free(q); continue; }
+            if (depth) p->s++;
+        }
+        return expect(p, ')');
+    }
     if (!strcmp(name, "guides")) {
         /* guides(colour="none", fill="none") -- ggplot2's spelling for dropping
          * a legend. Only "none" is meaningful here: cinderplot has no guide
