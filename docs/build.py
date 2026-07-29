@@ -716,6 +716,7 @@ LANDING_STYLE = """<style>
     background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.16);border-radius:9px;
     padding:9px 9px 9px 14px;cursor:pointer;transition:border-color .15s,background .15s;}
   .install:hover{border-color:rgba(255,255,255,.34);background:rgba(0,0,0,.36);}
+  .install.agent{border-style:dashed;}          /* secondary to the install command */
   .install:focus-visible{outline:2px solid var(--accent-bright);outline-offset:2px;}
   .install code{font-family:inherit;font-size:inherit;color:inherit;white-space:nowrap;
     overflow-x:auto;scrollbar-width:none;}
@@ -811,6 +812,13 @@ LANDING_BODY = """<main>
           <span class="ic ic-copy" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></span>
           <span class="ic ic-ok" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span>
         </button>
+        <button class="install agent" type="button"
+                data-cmd="__AGENTPROMPT__"
+                aria-label="Copy a prompt to send to your coding agent">
+          <code>Copy &amp; send to your coding agent</code>
+          <span class="ic ic-copy" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></span>
+          <span class="ic ic-ok" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span>
+        </button>
       </div>
       <div class="hstats">
         <div class="hstat"><b>__NGEOM__</b><span>geoms</span></div>
@@ -865,8 +873,6 @@ cinderplot 'data.csv
 </main>
 <script>
 (function () {
-  var box = document.getElementById('installBox');
-  if (!box) return;
   function fallbackCopy(text) {
     var ta = document.createElement('textarea');
     ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
@@ -874,17 +880,22 @@ cinderplot 'data.csv
     try { document.execCommand('copy'); } catch (e) {}
     document.body.removeChild(ta);
   }
-  var timer;
-  function flash() {
-    box.classList.add('copied');
-    clearTimeout(timer);
-    timer = setTimeout(function () { box.classList.remove('copied'); }, 1600);
-  }
-  box.addEventListener('click', function () {          /* <button>: Enter/Space too */
-    var cmd = box.getAttribute('data-cmd') || '';
-    if (navigator.clipboard && navigator.clipboard.writeText)
-      navigator.clipboard.writeText(cmd).then(flash, function () { fallbackCopy(cmd); flash(); });
-    else { fallbackCopy(cmd); flash(); }
+  /* Every .install box copies its data-cmd, which need not be the text shown:
+   * the agent box displays a short label but copies a whole prompt. */
+  var boxes = document.querySelectorAll('.install');
+  Array.prototype.forEach.call(boxes, function (b) {
+    var timer;
+    function flash() {
+      b.classList.add('copied');
+      clearTimeout(timer);
+      timer = setTimeout(function () { b.classList.remove('copied'); }, 1600);
+    }
+    b.addEventListener('click', function () {        /* <button>: Enter/Space too */
+      var cmd = b.getAttribute('data-cmd') || '';
+      if (navigator.clipboard && navigator.clipboard.writeText)
+        navigator.clipboard.writeText(cmd).then(flash, function () { fallbackCopy(cmd); flash(); });
+      else { fallbackCopy(cmd); flash(); }
+    });
   });
 })();
 
@@ -928,10 +939,12 @@ def cinder_version():
                   (REPO / "include" / "cinderplot.h").read_text())
     return m.group(1) if m else ""
 
+AGENT_PROMPT = ("Use cinderplot to render figures from CSV/TSV instead of writing a ggplot2 or matplotlib script. Read https://zhou-lab.github.io/cinderplot/llms.txt first — it covers installation, the grammar, the three modes and the traps.")
+
 def landing_html():
     def chips(items):
         return "".join(f'<span class="chip">{esc(x)}</span>' for x in items)
-    body = (LANDING_BODY
+    body = (LANDING_BODY.replace("__AGENTPROMPT__", esc(AGENT_PROMPT))
             .replace("__VERSION__", cinder_version())
             .replace("__NGEOM__", str(len(GEOMS)))
             .replace("__NSCALE__", str(len(SCALES)))
