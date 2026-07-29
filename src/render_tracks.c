@@ -89,7 +89,16 @@ typedef struct {
     int multichrom;    /* input spans >1 chromosome (inference is ambiguous) */
 } MatData;
 
-static MatData *read_matrix(const TrackObj *t, char *err) {
+/* `win_chrom`/`win_beg`/`win_end` restrict the matrix to the plotted window.
+ * NULL win_chrom keeps every row, which is what region() inference needs --
+ * there is no window yet at that point, the rows define it.
+ *
+ * Without this a matrix() track drew every probe in the file regardless of
+ * region(): invisible for a single-locus file (every row is in the window,
+ * which is all the gallery example ever exercised) and plainly wrong for a
+ * multi-region one, where a 7-CpG window rendered all 236 columns. */
+static MatData *read_matrix(const TrackObj *t, const char *win_chrom,
+                            long win_beg, long win_end, char *err) {
     const char *path = strcmp(t->data, "stdin") == 0 ? "-" : t->data;   /* '-'/stdin = pipe */
     DataFrame *mf = df_read_csv(path, err);
     if (!mf) return NULL;
@@ -116,7 +125,11 @@ static MatData *read_matrix(const TrackObj *t, char *err) {
         char **pn = cp_xmalloc(mf->nrow * sizeof(char *));
         double *pp = cp_xmalloc(mf->nrow * sizeof(double));
         char **sn = cp_xmalloc(mf->nrow * sizeof(char *));
+#define IN_WIN(r) (!win_chrom \
+                   || (chr_c && !strcmp(chr_c->str[r], win_chrom) \
+                       && ec->num[r] > (double)win_beg && sc->num[r] < (double)win_end))
         for (int r = 0; r < mf->nrow; r++) {
+            if (!IN_WIN(r)) continue;
             const char *id = pid->str[r]; int f = -1;
             for (int i = 0; i < nc; i++) if (!strcmp(pn[i], id)) { f = i; break; }
             if (f < 0) { pn[nc] = (char *)id; pp[nc] = (sc->num[r] + ec->num[r]) * 0.5; nc++; }
@@ -135,12 +148,14 @@ static MatData *read_matrix(const TrackObj *t, char *err) {
         m->mv = cp_xmalloc((size_t)nr * nc * sizeof(double));
         for (size_t i = 0; i < (size_t)nr * nc; i++) m->mv[i] = NAN;
         for (int r = 0; r < mf->nrow; r++) {
+            if (!IN_WIN(r)) continue;
             const char *id = pid->str[r], *s = samp->str[r];
             int col = -1; for (int c = 0; c < nc; c++) if (!strcmp(m->colid[c], id)) { col = c; break; }
             int row = -1; for (int i = 0; i < nr; i++) if (!strcmp(m->rowname[i], s)) { row = i; break; }
             if (col >= 0 && row >= 0) m->mv[(size_t)row * nc + col] = val->num[r];
         }
         free(pn); free(pp); free(ord);
+#undef IN_WIN
     } else {                                          /* --- wide --- */
         int scol[2048], ns = 0;
         for (int c = 0; c < mf->ncol && ns < 2048; c++)
@@ -233,9 +248,16 @@ int render_tracks(const PlotSpec *spec, const char *out,
      * an empty region() infers its window from the first one. ---- */
     MatData *md[MAX_TRACKS] = {0};
     int has_matrix = 0;
+    /* An explicit region() is known before the data is read, so the matrix can
+     * be filtered as it loads. An inferred one is not -- the rows define the
+     * window -- so load unfiltered and re-load below once the window is known. */
+    char pre_chrom[64] = ""; long pre_beg = 0, pre_end = 0;
+    int have_pre = spec->region
+                   && region_parse(spec->region, pre_chrom, &pre_beg, &pre_end) == 0;
     for (int i = 0; i < ntr; i++)
         if (spec->tobjs[i].type == TRK_MATRIX) {
-            md[i] = read_matrix(&spec->tobjs[i], err);
+            md[i] = read_matrix(&spec->tobjs[i], have_pre ? pre_chrom : NULL,
+                                pre_beg, pre_end, err);
             if (!md[i]) return -1;
             has_matrix = 1;
         }
