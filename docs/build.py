@@ -154,6 +154,17 @@ SECTIONS = [
         # locus browser fused with a genome-anchored heatmap: cytoband + gene
         # models + probe->column map lines + a per-sample beta heatmap (parula).
         # Long/tidy betas (chrom beg end Probe_ID beta sample_name). R ref = sesame.
+        ("regions", "Several windows, one broken axis",
+         'regions("data/ada_windows.bed")'
+         f' + genes("{GENOMES}/genes.bed.gz", height=1.4)'
+         ' + matrix("data/region_betas_long.tsv", name="betas", cluster=samples,'
+         ' rownames=off, colnames=off, height=9)',
+         "# Gviz draws one region per plotTracks() call, so several loci means\n"
+         "# several figures stitched together outside R -- losing the shared\n"
+         "# sample order, the common colour scale and the single axis.\n"
+         "library(Gviz)\n"
+         'for (w in windows) plotTracks(tracks, chromosome = w$chr,\n'
+         '                              from = w$start, to = w$end)'),
         ("region", "Region view (anchored heatmap)",
          'region()'
          f' + cytoband("{GENOMES}/cytoband.tsv.gz", height=0.5)'
@@ -199,7 +210,7 @@ SIZES = {"k562cnv": "12x3.6"}
 WIDE = set()   # no full-width cards — every figure sits in a normal grid cell
 # figures rendered as PNG instead of SVG — dense scatters / heatmaps (thousands
 # of cells) are far lighter as a raster than as per-element vector shapes.
-RASTER = {"k562cnv", "region"}
+RASTER = {"k562cnv", "region", "regions"}
 
 def cp_ext(slug):
     return "png" if slug in RASTER else "svg"
@@ -208,7 +219,7 @@ def no_gg(slug):
     """Slugs whose R reference needs a non-base package, so render() skips the
     gg PNG: theme showcases (same ggplot), the heatmap (ComplexHeatmap), the
     repelled labels (ggrepel), and the CNV plot (sesame)."""
-    return slug.startswith("theme-") or slug in ("heatmap", "textlabels", "k562cnv", "region")
+    return slug.startswith("theme-") or slug in ("heatmap", "textlabels", "k562cnv", "region", "regions")
 
 def _up_to_date(slug):
     """A figure is up to date when its cinderplot output exists (and, for
