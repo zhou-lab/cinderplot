@@ -241,6 +241,18 @@ static GeneModel *load_genes(const char *data, const char *chrom, long rs, long 
 }
 
 
+/* A start/end cell, whether the column typed numeric or (because of a header
+ * row) text. Returns 0 when the cell is not a number. */
+static int cell_num(const Column *c, int r, double *out) {
+    if (c->type == COL_NUM) {
+        if (isnan(c->num[r])) return 0;
+        *out = c->num[r]; return 1;
+    }
+    char *end; double v = strtod(c->str[r], &end);
+    if (end == c->str[r] || *end) return 0;
+    *out = v; return 1;
+}
+
 /* One plotted window. regions() yields several; region() yields one. */
 typedef struct { char chrom[64]; long beg, end; char *label; } Window;
 
@@ -257,33 +269,45 @@ static Window *load_windows(const char *path, int *n_out, char *err) {
     cp_set_no_header(0);
     if (!df) return NULL;
     if (df->ncol < 3) {
-        snprintf(err, CP_ERRLEN, "regions `%s` needs chrom, start, end columns", path);
+        snprintf(err, CP_ERRLEN, "regions `%s`: expected a headerless BED with at least chrom, start, end columns (an optional 4th column names the panel)", path);
         return NULL;
     }
     const Column *c0 = &df->cols[0], *c1 = &df->cols[1], *c2 = &df->cols[2];
-    if (c0->type != COL_STR || c1->type != COL_NUM || c2->type != COL_NUM) {
-        snprintf(err, CP_ERRLEN, "regions `%s`: expected text chrom then numeric "
-                 "start and end", path);
+    if (c0->type != COL_STR) {
+        snprintf(err, CP_ERRLEN, "regions `%s`: first column must be the chromosome "
+                 "name", path);
         return NULL;
     }
-    const Column *cn = df->ncol > 3 && df->cols[3].type == COL_STR ? &df->cols[3] : NULL;
+    /* start/end are read per cell rather than per column, because a header row
+     * makes the whole column type as text and a column-level check would reject
+     * the file outright -- which is exactly what a user gets for writing the
+     * header the old error message implied. A row whose start or end does not
+     * parse is skipped, so a header is simply ignored. */
+    const Column *cn = df->ncol > 3 ? &df->cols[3] : NULL;
     if (df->nrow < 1) { snprintf(err, CP_ERRLEN, "regions `%s` is empty", path); return NULL; }
     Window *w = cp_xcalloc(df->nrow, sizeof(Window));
-    int n = 0;
+    int n = 0, skipped = 0;
     for (int r = 0; r < df->nrow; r++) {
-        if (isnan(c1->num[r]) || isnan(c2->num[r])) continue;   /* header row */
-        snprintf(w[n].chrom, sizeof w[n].chrom, "%s", c0->str[r]);
-        w[n].beg = (long)c1->num[r];
-        w[n].end = (long)c2->num[r];
-        if (w[n].end <= w[n].beg) {
+        double b, e;
+        if (!cell_num(c1, r, &b) || !cell_num(c2, r, &e)) { skipped++; continue; }
+        if (e <= b) {
             snprintf(err, CP_ERRLEN, "regions `%s` row %d: end must exceed start",
                      path, r + 1);
             return NULL;
         }
-        w[n].label = cn ? cn->str[r] : NULL;
+        snprintf(w[n].chrom, sizeof w[n].chrom, "%s", c0->str[r]);
+        w[n].beg = (long)b; w[n].end = (long)e;
+        w[n].label = cn && cn->type == COL_STR ? cn->str[r] : NULL;
         n++;
     }
-    if (n < 1) { snprintf(err, CP_ERRLEN, "regions `%s` has no usable rows", path); return NULL; }
+    if (n < 1) {
+        snprintf(err, CP_ERRLEN, "regions `%s`: no rows with a numeric start and end; "
+                 "expected a BED (chrom, start, end[, name])", path);
+        return NULL;
+    }
+    if (skipped > 1)
+        fprintf(stderr, "cinderplot: regions `%s`: skipped %d rows without numeric "
+                "coordinates\n", path, skipped);
     *n_out = n;
     return w;
 }
@@ -344,16 +368,38 @@ int render_tracks(const PlotSpec *spec, const char *out,
          * of confirming it does not cache anything across windows. */
         for (int i = 0; i < ntr; i++)
             if (spec->tobjs[i].type != TRK_MATRIX
-                && spec->tobjs[i].type != TRK_GENES) {
-                snprintf(err, CP_ERRLEN, "regions() supports matrix() and genes() "
-                         "tracks so far; the remaining track types are being "
-                         "added one at a time");
+                && spec->tobjs[i].type != TRK_GENES
+                && spec->tobjs[i].type != TRK_INTERVAL) {
+                snprintf(err, CP_ERRLEN, "regions() supports matrix(), genes() and "
+                         "interval() tracks so far; the remaining track types are "
+                         "being added one at a time");
                 return -1;
             }
         if (3 + 2 * nwin >= GT_MAXDIM) {
             snprintf(err, CP_ERRLEN, "regions(): %d windows exceeds the layout's "
                      "%d-column limit", nwin, GT_MAXDIM);
             return -1;
+        }
+    }
+
+    /* Window widths. bp span is the obvious weight, but it is the wrong one when
+     * a matrix track is present: the heatmap places its columns evenly across
+     * the panel regardless of bp, so a window holding few CpGs over a wide span
+     * gets a broad panel of fat cells while a dense narrow one is squeezed.
+     * Weight by probe count instead, so a cell is about the same width in every
+     * window. Falls back to bp span when there is no matrix. */
+    double *wweight = NULL;
+    if (wins) {
+        wweight = cp_xmalloc(nwin * sizeof(double));
+        int mi = -1;
+        for (int i = 0; i < ntr; i++) if (spec->tobjs[i].type == TRK_MATRIX) { mi = i; break; }
+        for (int wi = 0; wi < nwin; wi++) {
+            wweight[wi] = (double)(wins[wi].end - wins[wi].beg);
+            if (mi >= 0) {
+                MatData *probe = read_matrix(&spec->tobjs[mi], wins[wi].chrom,
+                                             wins[wi].beg, wins[wi].end, err);
+                if (probe && probe->nc > 0) wweight[wi] = probe->nc;
+            }
         }
     }
 
@@ -398,12 +444,12 @@ int render_tracks(const PlotSpec *spec, const char *out,
     const char *usuf; usuf = unit == 1e6 ? " Mb" : unit == 1e3 ? " kb" : " bp";
     double ubr[16];
     int nb = extended_breaks(x0 / unit, x1 / unit, 5, ubr, 16), nx = 0;
-    double xpos[16]; char *xlab[16];
+    double xpos[16], xtxt[16]; char *xlab[16];
     int dec = axis_decimals(ubr, nb);
     for (int i = 0; i < nb; i++) {
         double bp = ubr[i] * unit;
         if (bp < x0 || bp > x1) continue;
-        xpos[nx] = NPCX(bp);
+        xpos[nx] = NPCX(bp); xtxt[nx] = xpos[nx];
         char num[32]; fmt_break(ubr[i], dec, num, sizeof num);                 /* number, with commas */
         xlab[nx] = cp_xmalloc(40); commafy(xlab[nx], 40, num);
         nx++;
@@ -497,8 +543,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
     T->colw[1] = upt(labw);
     T->colw[2] = upt(labw > 0 ? lab_pad : 0);
     for (int wi = 0; wi < nwin; wi++) {
-        double span = (double)(wins ? wins[wi].end - wins[wi].beg : rend - rstart);
-        T->colw[3 + 2 * wi] = unull(span);    /* width proportional to bp shown */
+        T->colw[3 + 2 * wi] = unull(wweight ? wweight[wi] : (double)(rend - rstart));
         if (wi < nwin - 1) T->colw[4 + 2 * wi] = upt(GAP_PT);
     }
     T->colw[T->ncol - 1] = upt(rmargin);
@@ -530,7 +575,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
     }
 
     Grob *g;
-    if (title) {
+    if (title && !wins) {
         g = gt_add(T, G_TEXT, 1, CC, 1, CC);
         g->str = title; g->size = sz_title; g->col = C_BLACK;
         g->tx = 0; g->ty = 1; g->hj = 0; g->va = V_TOP;
@@ -551,6 +596,31 @@ int render_tracks(const PlotSpec *spec, const char *out,
                   if (!md[i]) return -1;
               }
       }
+      if (wins) {
+          /* Each window is titled in its own column: the BED's name column when
+           * it has one, else the coordinates. A single shared title cannot name
+           * three different loci, and the name is what a reader needs -- the
+           * coordinates are already on the axis below. */
+          char *wt = cp_xmalloc(128);
+          if (wins[wi].label && *wins[wi].label)
+              snprintf(wt, 128, "%s", wins[wi].label);
+          else
+              snprintf(wt, 128, "%s:%ld-%ld", wins[wi].chrom, wins[wi].beg, wins[wi].end);
+          g = gt_add(T, G_TEXT, 1, CC, 1, CC);
+          g->str = wt; g->size = sz_title; g->col = C_BLACK;
+          g->tx = 0.5; g->ty = 1; g->hj = 0.5; g->va = V_TOP;
+      }
+
+      /* This window's drawn width in points, so ticks and labels can be fitted
+       * to the space they actually get rather than to the figure as a whole. */
+      double win_pt = panel_w;
+      if (wins) {
+          double wsum = 0;
+          for (int k = 0; k < nwin; k++) wsum += wweight[k];
+          win_pt = wsum > 0 ? (panel_w - GAP_PT * (nwin - 1)) * wweight[wi] / wsum
+                            : panel_w;
+      }
+
       /* Axis breaks belong to the window, not the figure: each panel carries
        * its own coordinates, so recompute them here rather than once outside. */
       {
@@ -558,16 +628,39 @@ int render_tracks(const PlotSpec *spec, const char *out,
           double wunit = wspan >= 2e6 ? 1e6 : wspan >= 2e3 ? 1e3 : 1;
           const char *wsuf = wunit == 1e6 ? " Mb" : wunit == 1e3 ? " kb" : " bp";
           double wbr[16];
-          int wnb = extended_breaks(x0 / wunit, x1 / wunit, 5, wbr, 16);
+          /* A narrow panel cannot carry five labelled ticks. Ask for a count
+           * the width can hold, then drop any that would still overlap: with
+           * several windows on one axis the small ones otherwise collide into
+           * an unreadable run. */
+          int want = (int)(win_pt / 72.0) + 1;
+          if (want < 2) want = 2;
+          if (want > 5) want = 5;
+          int wnb = extended_breaks(x0 / wunit, x1 / wunit, want, wbr, 16);
           int wdec = axis_decimals(wbr, wnb);
           nx = 0;
+          double last_r = -1e9;                  /* right edge of the last kept label */
           for (int k = 0; k < wnb; k++) {
               double bp = wbr[k] * wunit;
               if (bp < x0 || bp > x1) continue;
-              xpos[nx] = NPCX(bp);
               char num[32]; fmt_break(wbr[k], wdec, num, sizeof num);
-              xlab[nx] = cp_xmalloc(40); commafy(xlab[nx], 40, num);
-              nx++;
+              char *lab = cp_xmalloc(40); commafy(lab, 40, num);
+              double npc = NPCX(bp), half = text_w(cr, SZ_AXIS_TEXT, lab) / 2;
+              double centre = npc * win_pt;
+              /* A tick near the edge would centre its label half outside the
+               * panel -- in the gap or the next window. Keep the tick where it
+               * belongs and slide the text inward, as a genome browser does,
+               * rather than dropping a narrow panel's only coordinate. The
+               * overlap test then has to run on the *slid* position, or two
+               * nudged labels collide in the middle. */
+              double tc = centre;
+              if (wins) {
+                  if (tc - half < 0) tc = half;
+                  if (tc + half > win_pt) tc = win_pt - half;
+              }
+              if (tc - half < last_r + 3) { free(lab); continue; }   /* would touch */
+              last_r = tc + half;
+              xtxt[nx] = win_pt > 0 ? tc / win_pt : npc;
+              xpos[nx] = npc; xlab[nx] = lab; nx++;
           }
           if (nx > 0) {
               char buf[48]; snprintf(buf, sizeof buf, "%s%s", xlab[nx - 1], wsuf);
@@ -662,11 +755,20 @@ int render_tracks(const PlotSpec *spec, const char *out,
                         g->x0 = NPCX(cs); g->x1 = NPCX(ce); g->y0 = yc - cds / 2; g->y1 = yc + cds / 2;
                     }
                 }
-                if (gm[k].name) {                            /* name to the right of tx_end,
-                    * into the reserved right margin (no clip so it isn't cut) */
-                    g = gt_add(T, G_TEXT, R, CC, R, CC);
-                    g->str = gm[k].name; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
-                    g->tx = xb + HALF_LINE / panel_w; g->hj = 0; g->ty = yc; g->va = V_INKCENTER;
+                if (gm[k].name) {                            /* name to the right of tx_end */
+                    /* With one window the name may run into the reserved right
+                     * margin unclipped. With several it must not: the margin
+                     * belongs to the next window, and an overflowing name lands
+                     * inside its neighbour's panel. Skip it when it cannot fit,
+                     * and clip what does. */
+                    double tx = xb + HALF_LINE / win_pt;
+                    double need = text_w(cr, SZ_AXIS_TEXT, gm[k].name) / win_pt;
+                    if (!wins || tx + need <= 1.0) {
+                        g = gt_add(T, G_TEXT, R, CC, R, CC);
+                        g->str = gm[k].name; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
+                        g->tx = tx; g->hj = 0; g->ty = yc; g->va = V_INKCENTER;
+                        g->clip = wins ? 1 : 0;
+                    }
                 }
             }
         } else if (t->type == TRK_INTERVAL) {
@@ -691,10 +793,15 @@ int render_tracks(const PlotSpec *spec, const char *out,
                 g->x0 = NPCX(iv[k].start); g->x1 = NPCX(iv[k].end);
                 g->y0 = yb + 0.18 * lh; g->y1 = yb + 0.82 * lh;
                 if (iv[k].name) {                        /* name to the right */
-                    g = gt_add(T, G_TEXT, R, CC, R, CC);
-                    g->str = iv[k].name; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
-                    g->tx = NPCX(iv[k].end) + 0.004; g->ty = yb + 0.5 * lh;
-                    g->hj = 0; g->va = V_INKCENTER;
+                    double tx = NPCX(iv[k].end) + 0.004;
+                    double need = text_w(cr, SZ_AXIS_TEXT, iv[k].name) / win_pt;
+                    if (!wins || tx + need <= 1.0) {       /* else it lands in the neighbour */
+                        g = gt_add(T, G_TEXT, R, CC, R, CC);
+                        g->str = iv[k].name; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
+                        g->tx = tx; g->ty = yb + 0.5 * lh;
+                        g->hj = 0; g->va = V_INKCENTER;
+                        g->clip = wins ? 1 : 0;
+                    }
                 }
             }
         } else if (t->type == TRK_ARCS) {
@@ -805,7 +912,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
                 g->x0 = g->x1 = xpos[b]; g->y0 = axline; g->y1 = axline - tick_npc;
                 g = gt_add(T, G_TEXT, R, CC, R, CC);
                 g->str = xlab[b]; g->size = SZ_AXIS_TEXT; g->col = C_AXTXT;
-                g->tx = xpos[b]; g->ty = axline + txtoff; g->hj = 0.5; g->va = V_BOTTOM;
+                g->tx = xtxt[b]; g->ty = axline + txtoff; g->hj = 0.5; g->va = V_BOTTOM;
             }
             Col mapc = {0.45, 0.45, 0.45};
             const int NB = 24;                                /* map lines: cubic-bezier
