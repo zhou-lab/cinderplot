@@ -684,6 +684,10 @@ LANDING_STYLE = """<style>
     --ink:#0b1220; --body:#3a4658; --muted:#6b7688; --line:#e6eaf0; --bg:#ffffff; --bg-soft:#eef1f6;
     --code-bg:#06223f; --code-ink:#e7eef7; --code-dim:#7fa8d8;
     --font:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    /* Used by .install and .verbadge, which had been falling back to sans
+       because this block never defined it -- the install command, whose whole
+       point is to look like a command, did not read as one. */
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
     --head:"Space Grotesk",var(--font); --radius:10px;
     --shadow:0 1px 2px rgba(11,18,32,.05),0 4px 14px rgba(11,18,32,.05);
   }
@@ -716,7 +720,20 @@ LANDING_STYLE = """<style>
     background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.16);border-radius:9px;
     padding:9px 9px 9px 14px;cursor:pointer;transition:border-color .15s,background .15s;}
   .install:hover{border-color:rgba(255,255,255,.34);background:rgba(0,0,0,.36);}
-  .install.agent{border-style:dashed;}          /* secondary to the install command */
+  /* The agent box is an ACTION, not a command. The install box shows exactly the
+     string it copies; this one shows a short label and copies a long hidden
+     prompt, so monospace command styling misrepresents what a click does. A sans
+     label and a dashed accent edge read as "button" while staying clearly
+     secondary to the install command beside it. */
+  .install.agent{border-style:dashed;border-color:rgba(255,140,60,.34);
+    background:rgba(255,140,60,.06);color:#f4c79a;}
+  .install.agent:hover{border-color:rgba(255,140,60,.62);
+    background:rgba(255,140,60,.12);color:#ffd9b4;}
+  .install.agent .label{font-family:var(--font);font-size:.8rem;font-weight:500;
+    letter-spacing:.01em;white-space:nowrap;}
+  .install.agent .ic{color:#e0965c;}
+  .install.agent.copied{border-color:#7ee0a5;background:rgba(126,224,165,.10);
+    color:#bfe9cf;}
   .install:focus-visible{outline:2px solid var(--accent-bright);outline-offset:2px;}
   .install code{font-family:inherit;font-size:inherit;color:inherit;white-space:nowrap;
     overflow-x:auto;scrollbar-width:none;}
@@ -815,7 +832,7 @@ LANDING_BODY = """<main>
         <button class="install agent" type="button"
                 data-cmd="__AGENTPROMPT__"
                 aria-label="Copy a prompt to send to your coding agent">
-          <code>Copy &amp; send to your coding agent</code>
+          <span class="label">Copy a prompt for your coding agent</span>
           <span class="ic ic-copy" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></span>
           <span class="ic ic-ok" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span>
         </button>
