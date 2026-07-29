@@ -290,6 +290,16 @@ static int parse_trk_args(P *p, TrackObj *o) {
                 if (!strcmp(v, "off") || !strcmp(v, "none") || !strcmp(v, "hide")) o->hide_rownames = 1;
                 else if (!strcmp(v, "on") || !strcmp(v, "show")) o->hide_rownames = 0;
                 else return fail(p, "rownames=%s invalid; use on or off", v);
+            } else if (!strcmp(key, "colnames")) {
+                /* Symmetric with rownames=. For a CpG matrix the per-probe
+                 * labels are almost always noise -- 127 of them collapse into
+                 * an unreadable band about a third of the figure high -- so
+                 * turning them off has to be reachable. */
+                char *v = ident(p);
+                if (!v) return fail(p, "colnames= expects on or off", "");
+                if (!strcmp(v, "off") || !strcmp(v, "none") || !strcmp(v, "hide")) o->hide_colnames = 1;
+                else if (!strcmp(v, "on") || !strcmp(v, "show")) o->hide_colnames = 0;
+                else return fail(p, "colnames=%s invalid; use on or off", v);
             } else if (!strcmp(key, "transcripts")) {
                 char *v = ident(p);
                 if (!v) return fail(p, "transcripts= expects all or canonical", "");

@@ -601,8 +601,9 @@ int render_tracks(const PlotSpec *spec, const char *out,
             double axtop_pt = font_h(cr, SZ_AXIS_TEXT) + TICK_LEN + TXT_GAP;   /* kb axis */
             double mapband_pt = 42;                                            /* bezier band */
             double lbl_pt = 0;                                                 /* rotated probe IDs */
-            for (int c = 0; c < nc; c++)
-                if (m->colid[c]) { double w = text_w(cr, sz_samp, m->colid[c]); if (w > lbl_pt) lbl_pt = w; }
+            if (!spec->tobjs[i].hide_colnames)
+                for (int c = 0; c < nc; c++)
+                    if (m->colid[c]) { double w = text_w(cr, sz_samp, m->colid[c]); if (w > lbl_pt) lbl_pt = w; }
             double axline  = cell_pt > 0 ? 1 - axtop_pt / cell_pt : 0.94;
             double hmtop   = cell_pt > 0 ? axline - mapband_pt / cell_pt : 0.80;
             double lblband = cell_pt > 0 ? (lbl_pt + lab_pad) / cell_pt : 0.10;  /* labels + lab_pad gap */
@@ -653,7 +654,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
                 g = gt_add(T, G_POLYLINE, R, CC, R, CC);
                 g->n = NB; g->px = px; g->py = py; g->col = mapc; g->lw = lw_pt(0.4); g->clip = 1;
             }
-            for (int c = 0; c < nc; c++) {                    /* probe IDs (rotated, top-aligned) */
+            for (int c = 0; c < nc && !t->hide_colnames; c++) {   /* probe IDs (rotated) */
                 if (!m->colid[c]) continue;
                 double lwn = cell_pt > 0 ? text_w(cr, sz_samp, m->colid[c]) / cell_pt : 0;
                 g = gt_add(T, G_TEXT, R, CC, R, CC);

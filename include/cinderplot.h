@@ -291,6 +291,7 @@ typedef struct {
     Col color; int has_color;
     int cluster;         /* matrix track: 1 = cluster the sample rows */
     int hide_rownames;   /* matrix track: 1 = don't draw sample row labels */
+    int hide_colnames;   /* matrix track: 1 = don't draw per-probe column labels */
     int all_transcripts; /* genes track: 1 = all isoforms; 0 = canonical (longest/gene) */
 } TrackObj;
 #define MAX_TRACKS 12
