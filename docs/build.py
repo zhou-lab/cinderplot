@@ -718,35 +718,22 @@ LANDING_STYLE = """<style>
   .install{display:inline-flex;align-items:center;gap:10px;max-width:100%;
     font-family:var(--mono);font-size:.85rem;color:#eaf1fb;text-align:left;
     background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.16);border-radius:9px;
-    padding:9px 9px 9px 14px;cursor:pointer;transition:border-color .15s,background .15s;}
+    padding:5px 9px 5px 14px;cursor:pointer;transition:border-color .15s,background .15s;}
   .install:hover{border-color:rgba(255,255,255,.34);background:rgba(0,0,0,.36);}
-  /* The agent box is an ACTION, not a command. The install box shows exactly the
-     string it copies; this one shows a short label and copies a long hidden
-     prompt, so monospace command styling misrepresents what a click does. A sans
-     label and a dashed accent edge read as "button" while staying clearly
-     secondary to the install command beside it. */
-  /* The install box copies exactly the command it displays. This one copies a
-     prompt the user never sees, so it must not look like that box -- a matching
-     pill would imply the label is what lands on the clipboard. A dashed ghost
-     pill reads as a different kind of action, stays secondary to the install
-     call-to-action, fills in on hover and turns green when copied. */
-  .agentbtn{font:inherit;font-size:.78rem;cursor:pointer;display:inline-flex;align-items:center;
-     gap:.42em;border:1px dashed var(--accent);border-radius:8px;color:var(--accent);
-     background:transparent;padding:.52em .8em;line-height:1.15;white-space:nowrap;
-     transition:background .15s,border-color .15s,color .15s,transform .15s;}
-  .agentbtn:hover{background:var(--accent-soft);border-style:solid;transform:translateY(-1px);}
+  /* Match the install button styling: both are copy-to-clipboard actions. */
+  .agentbtn{display:inline-flex;align-items:center;gap:10px;max-width:100%;
+    font-family:var(--mono);font-size:.85rem;color:#eaf1fb;text-align:left;
+    background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.16);
+    border-radius:9px;padding:5px 9px 5px 14px;cursor:pointer;
+    transition:border-color .15s,background .15s;}
+  .agentbtn:hover{border-color:rgba(255,255,255,.34);background:rgba(0,0,0,.36);}
   .agentbtn:focus-visible{outline:2px solid var(--accent-bright);outline-offset:2px;}
-  .agentbtn .ico::before{content:"º6";opacity:.9;}
-  .agentbtn.copied{border-style:solid;border-color:#2e9e5b;color:#2e9e5b;transform:none;}
-  .agentbtn.copied .ico::before{content:"¹3";}
-    background:rgba(255,140,60,.06);color:#f4c79a;}
-  .install.agent:hover{border-color:rgba(255,140,60,.62);
-    background:rgba(255,140,60,.12);color:#ffd9b4;}
-  .install.agent .label{font-family:var(--font);font-size:.8rem;font-weight:500;
-    letter-spacing:.01em;white-space:nowrap;}
-  .install.agent .ic{color:#e0965c;}
-  .install.agent.copied{border-color:#7ee0a5;background:rgba(126,224,165,.10);
-    color:#bfe9cf;}
+  .agentbtn .ico{display:flex;align-items:center;justify-content:center;
+    width:26px;height:26px;flex:0 0 auto;border-radius:6px;color:#9db3d2;}
+  .agentbtn .ico::before{content:"⧉";opacity:.75;}
+  .agentbtn:hover .ico{color:#fff;background:rgba(255,255,255,.1);}
+  .agentbtn.copied{border-color:#7ee0a5;background:rgba(126,224,165,.10);}
+  .agentbtn.copied .ico::before{content:"✓";color:#7ee0a5;opacity:1;}
   .install:focus-visible{outline:2px solid var(--accent-bright);outline-offset:2px;}
   .install code{font-family:inherit;font-size:inherit;color:inherit;white-space:nowrap;
     overflow-x:auto;scrollbar-width:none;}
@@ -835,17 +822,18 @@ LANDING_BODY = """<main>
         <a class="btn pri" href="gallery.html">See the gallery →</a>
         <a class="iconbtn" href="https://github.com/zhou-lab/cinderplot" aria-label="GitHub" title="GitHub"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
         <a class="iconbtn" href="https://anaconda.org/zhou-lab/cinderplot" aria-label="Anaconda channel" title="Anaconda (zhou-lab channel)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16.5 9.4 7.5 4.21"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.27 6.96 12 12.01l8.73-5.05"/><path d="M12 22.08V12"/></svg></a>
-        <button class="install" id="installBox" type="button"
-                data-cmd="conda install -c zhou-lab cinderplot"
-                aria-label="Copy install command to clipboard">
-          <code>conda install -c zhou-lab cinderplot</code>
-          <span class="ic ic-copy" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></span>
-          <span class="ic ic-ok" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span>
-        </button>
         <button class="agentbtn" id="agentBtn" type="button"
                 data-cmd="__AGENTPROMPT__"
                 title="Copy a prompt that points your coding agent at the cinderplot reference"
                 aria-label="Copy a prompt for your coding agent"><span class="ico"></span>agent prompt</button>
+        <button class="install" id="installBox" type="button"
+                data-cmd="conda install -c zhou-lab -c conda-forge cinderplot"
+                title="conda install -c zhou-lab -c conda-forge cinderplot — click to copy"
+                aria-label="Copy install command to clipboard">
+          <span class="ic ic-copy" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></span>
+          <span class="ic ic-ok" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span>
+          <code>conda install</code>
+        </button>
       </div>
       <div class="hstats">
         <div class="hstat"><b>__NGEOM__</b><span>geoms</span></div>
@@ -859,7 +847,7 @@ LANDING_BODY = """<main>
         <div class="panel__head"><h2>Install &amp; plot</h2></div>
         <div class="panel__body">
           <pre class="code"><span class="c"># from the zhou-lab conda channel</span>
-conda install -c zhou-lab cinderplot
+conda install -c zhou-lab -c conda-forge cinderplot
 
 <span class="c"># plot straight from a CSV</span>
 cinderplot 'data.csv
