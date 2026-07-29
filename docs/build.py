@@ -725,7 +725,20 @@ LANDING_STYLE = """<style>
      prompt, so monospace command styling misrepresents what a click does. A sans
      label and a dashed accent edge read as "button" while staying clearly
      secondary to the install command beside it. */
-  .install.agent{border-style:dashed;border-color:rgba(255,140,60,.34);
+  /* The install box copies exactly the command it displays. This one copies a
+     prompt the user never sees, so it must not look like that box -- a matching
+     pill would imply the label is what lands on the clipboard. A dashed ghost
+     pill reads as a different kind of action, stays secondary to the install
+     call-to-action, fills in on hover and turns green when copied. */
+  .agentbtn{font:inherit;font-size:.78rem;cursor:pointer;display:inline-flex;align-items:center;
+     gap:.42em;border:1px dashed var(--accent);border-radius:8px;color:var(--accent);
+     background:transparent;padding:.52em .8em;line-height:1.15;white-space:nowrap;
+     transition:background .15s,border-color .15s,color .15s,transform .15s;}
+  .agentbtn:hover{background:var(--accent-soft);border-style:solid;transform:translateY(-1px);}
+  .agentbtn:focus-visible{outline:2px solid var(--accent-bright);outline-offset:2px;}
+  .agentbtn .ico::before{content:"º6";opacity:.9;}
+  .agentbtn.copied{border-style:solid;border-color:#2e9e5b;color:#2e9e5b;transform:none;}
+  .agentbtn.copied .ico::before{content:"¹3";}
     background:rgba(255,140,60,.06);color:#f4c79a;}
   .install.agent:hover{border-color:rgba(255,140,60,.62);
     background:rgba(255,140,60,.12);color:#ffd9b4;}
@@ -829,13 +842,10 @@ LANDING_BODY = """<main>
           <span class="ic ic-copy" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></span>
           <span class="ic ic-ok" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span>
         </button>
-        <button class="install agent" type="button"
+        <button class="agentbtn" id="agentBtn" type="button"
                 data-cmd="__AGENTPROMPT__"
-                aria-label="Copy a prompt to send to your coding agent">
-          <span class="label">Copy a prompt for your coding agent</span>
-          <span class="ic ic-copy" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></span>
-          <span class="ic ic-ok" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span>
-        </button>
+                title="Copy a prompt that points your coding agent at the cinderplot reference"
+                aria-label="Copy a prompt for your coding agent"><span class="ico"></span>agent prompt</button>
       </div>
       <div class="hstats">
         <div class="hstat"><b>__NGEOM__</b><span>geoms</span></div>
@@ -899,7 +909,7 @@ cinderplot 'data.csv
   }
   /* Every .install box copies its data-cmd, which need not be the text shown:
    * the agent box displays a short label but copies a whole prompt. */
-  var boxes = document.querySelectorAll('.install');
+  var boxes = document.querySelectorAll('[data-cmd]');
   Array.prototype.forEach.call(boxes, function (b) {
     var timer;
     function flash() {
