@@ -857,6 +857,7 @@ cinderplot 'data.csv
       </div>
     </section>
     <p class="foot"><a href="gallery.html">Gallery</a> ·
+      <a href="llms.txt">For coding agents</a> ·
       <a href="https://github.com/zhou-lab/cinderplot">GitHub</a> ·
       <a href="https://github.com/zhou-lab/cinderplot-examples">Examples</a> ·
       MIT · <a href="https://github.com/zhou-lab">zhou-lab</a></p>
@@ -950,7 +951,30 @@ def page(title, active, body):
             f"<title>{esc(title)}</title>\n" + FONTS + "\n" + STYLE + "\n</head>\n<body>\n"
             + header(active) + body + "\n</body>\n</html>\n")
 
+SKILL = HERE.parent / "skills" / "cinderplot" / "SKILL.md"
+
+def build_llms_txt():
+    """Publish the agent-facing reference as docs/llms.txt.
+
+    An agent that reads index.html plus gallery.html spends roughly 18k tokens
+    to learn what this file says in about 2k, and most of that HTML is styling
+    and figure markup it cannot use. Generated from skills/cinderplot/SKILL.md
+    so the two cannot drift; edit the skill, not this output.
+    """
+    if not SKILL.exists():
+        return
+    body = SKILL.read_text()
+    body = body.split("---", 2)[2].lstrip() if body.startswith("---") else body
+    (HERE / "llms.txt").write_text(
+        "# cinderplot\n"
+        "# Agent-facing reference for the cinderplot plotting tool.\n"
+        "# Canonical: https://zhou-lab.github.io/cinderplot/llms.txt\n"
+        "# Source of truth: skills/cinderplot/SKILL.md in the repository.\n"
+        "# Human docs: https://zhou-lab.github.io/cinderplot/\n\n" + body)
+
+
 def build_html():
+    build_llms_txt()
     gbody = GALLERY_BODY.replace("__ZOOMICON__", ZOOM_SVG)
     # landing page (its own lab-style layout); gallery uses STYLE/header()
     (HERE / "index.html").write_text(landing_html())
