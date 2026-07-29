@@ -860,6 +860,16 @@ static int parse_term(P *p, PlotSpec *spec) {
         }
         return expect(p, ')');
     }
+    if (!strcmp(name, "regions")) {
+        /* regions("windows.bed") -- several genomic windows on ONE axis, with a
+         * physical gap between them. Not a montage and not a grid: the tracks
+         * share the axis, so every track maps its own data into the same
+         * segmented space and the boundaries line up down the whole stack. */
+        char *v = raw_token(p);
+        if (!v || !*v) { free(v); return fail(p, "regions() expects a BED path", ""); }
+        spec->regions_path = v;
+        return expect(p, ')');
+    }
     if (!strcmp(name, "guides")) {
         /* guides(colour="none", fill="none") -- ggplot2's spelling for dropping
          * a legend. Only "none" is meaningful here: cinderplot has no guide
@@ -894,7 +904,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                    "facet_wrap(~var[, levels=c(...)]), coord_flip(), scale_x_log10(), scale_y_log10(), scale_*_continuous(), xlim(), ylim(), "
                    "scale_*_manual(), theme_bw()/theme_minimal()/theme_classic()/..., guides(colour=\"none\"), "
                    "heatmap(), annotation(), legend(), scale_fill_*(), "
-                   "region(), coverage(), interval(), genes(), arcs(), matrix(), cytoband()", name);
+                   "region()/regions(), coverage(), interval(), genes(), arcs(), matrix(), cytoband()", name);
 }
 
 int dsl_parse(const char *src, PlotSpec *spec, char *err) {

@@ -333,6 +333,8 @@ typedef struct {
     TrackObj tobjs[MAX_TRACKS];
     int ntracks;
     char *region;                   /* chr:start-end */
+    char *regions_path;             /* regions(): BED of windows laid side by side
+                                     * on one broken axis, gaps between them */
 } PlotSpec;
 
 int dsl_parse(const char *src, PlotSpec *spec, char *err);  /* 0 = ok */

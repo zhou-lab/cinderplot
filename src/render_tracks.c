@@ -240,6 +240,75 @@ static GeneModel *load_genes(const char *data, const char *chrom, long rs, long 
     return gm;
 }
 
+
+/* One plotted window. regions() yields several; region() yields one. */
+typedef struct { char chrom[64]; long beg, end; char *label; } Window;
+
+/* Load regions("windows.bed"): chrom, start, end and an optional name column.
+ * Windows are drawn in file order, each into its own column of the layout, so
+ * the file is also the left-to-right ordering. */
+static Window *load_windows(const char *path, int *n_out, char *err) {
+    /* A BED has no header line, so read it headerless -- otherwise the first
+     * region is silently consumed as column names and the figure quietly loses
+     * a window. A file that does carry a header still works: its start/end
+     * cells are not numbers, and that row is dropped below. */
+    cp_set_no_header(1);
+    DataFrame *df = df_read_csv(path, err);
+    cp_set_no_header(0);
+    if (!df) return NULL;
+    if (df->ncol < 3) {
+        snprintf(err, CP_ERRLEN, "regions `%s` needs chrom, start, end columns", path);
+        return NULL;
+    }
+    const Column *c0 = &df->cols[0], *c1 = &df->cols[1], *c2 = &df->cols[2];
+    if (c0->type != COL_STR || c1->type != COL_NUM || c2->type != COL_NUM) {
+        snprintf(err, CP_ERRLEN, "regions `%s`: expected text chrom then numeric "
+                 "start and end", path);
+        return NULL;
+    }
+    const Column *cn = df->ncol > 3 && df->cols[3].type == COL_STR ? &df->cols[3] : NULL;
+    if (df->nrow < 1) { snprintf(err, CP_ERRLEN, "regions `%s` is empty", path); return NULL; }
+    Window *w = cp_xcalloc(df->nrow, sizeof(Window));
+    int n = 0;
+    for (int r = 0; r < df->nrow; r++) {
+        if (isnan(c1->num[r]) || isnan(c2->num[r])) continue;   /* header row */
+        snprintf(w[n].chrom, sizeof w[n].chrom, "%s", c0->str[r]);
+        w[n].beg = (long)c1->num[r];
+        w[n].end = (long)c2->num[r];
+        if (w[n].end <= w[n].beg) {
+            snprintf(err, CP_ERRLEN, "regions `%s` row %d: end must exceed start",
+                     path, r + 1);
+            return NULL;
+        }
+        w[n].label = cn ? cn->str[r] : NULL;
+        n++;
+    }
+    if (n < 1) { snprintf(err, CP_ERRLEN, "regions `%s` has no usable rows", path); return NULL; }
+    *n_out = n;
+    return w;
+}
+
+#define GAP_PT 10.0   /* whitespace between non-contiguous windows */
+
+
+/* Re-order `m`'s display rows so sample i of `ref` is drawn at row i here.
+ * Windows are read independently, so each would otherwise order rows by
+ * whatever it encountered first; across one figure the samples must line up.
+ * Samples absent from this window keep their own slots at the end. */
+static void match_row_order(MatData *m, const MatData *ref) {
+    int *ord = cp_xmalloc(m->nr * sizeof(int));
+    char *taken = cp_xcalloc(m->nr, 1);
+    int n = 0;
+    for (int i = 0; i < ref->nr && n < m->nr; i++) {
+        const char *want = ref->rowname[ref->roword[i]];
+        for (int j = 0; j < m->nr; j++)
+            if (!taken[j] && !strcmp(m->rowname[j], want)) { ord[n++] = j; taken[j] = 1; break; }
+    }
+    for (int j = 0; j < m->nr && n < m->nr; j++) if (!taken[j]) ord[n++] = j;
+    memcpy(m->roword, ord, m->nr * sizeof(int));
+    free(ord); free(taken);
+}
+
 int render_tracks(const PlotSpec *spec, const char *out,
                   double w_pt, double h_pt, char *err) {
     int ntr = spec->ntracks;
@@ -262,10 +331,41 @@ int render_tracks(const PlotSpec *spec, const char *out,
             has_matrix = 1;
         }
 
+    /* ---- windows: regions() gives several, region() one ---- */
+    Window *wins = NULL; int nwin = 1;
+    if (spec->regions_path) {
+        wins = load_windows(spec->regions_path, &nwin, err);
+        if (!wins) return -1;
+        /* Step 1 covers matrix() only; the other track types still load for a
+         * single window and are added one at a time. Refuse rather than draw
+         * something misleading. */
+        /* Track types cleared for regions() so far. Each loads its own data for
+         * the rebound window inside the loop, so adding one is mostly a matter
+         * of confirming it does not cache anything across windows. */
+        for (int i = 0; i < ntr; i++)
+            if (spec->tobjs[i].type != TRK_MATRIX
+                && spec->tobjs[i].type != TRK_GENES) {
+                snprintf(err, CP_ERRLEN, "regions() supports matrix() and genes() "
+                         "tracks so far; the remaining track types are being "
+                         "added one at a time");
+                return -1;
+            }
+        if (3 + 2 * nwin >= GT_MAXDIM) {
+            snprintf(err, CP_ERRLEN, "regions(): %d windows exceeds the layout's "
+                     "%d-column limit", nwin, GT_MAXDIM);
+            return -1;
+        }
+    }
+
     /* ---- resolve the region window: explicit chr:start-end, or inferred from a
      * matrix track (5% pad each end) when region() is empty / omitted ---- */
     char chrom[64]; long rstart, rend;
-    if (spec->region) {
+    if (wins) {
+        /* regions() supplies the windows; the loop below rebinds these per
+         * window, so this just seeds the shared setup (axis unit, sizing). */
+        snprintf(chrom, sizeof chrom, "%s", wins[0].chrom);
+        rstart = wins[0].beg; rend = wins[0].end;
+    } else if (spec->region) {
         if (region_parse(spec->region, chrom, &rstart, &rend)) {
             snprintf(err, CP_ERRLEN, "bad region `%s`; expected chr:start-end", spec->region); return -1;
         }
@@ -295,7 +395,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
     /* ---- genomic axis: pick unit, nice breaks, format with suffix ---- */
     double span = x1 - x0;
     double unit = span >= 2e6 ? 1e6 : span >= 2e3 ? 1e3 : 1;
-    const char *usuf = unit == 1e6 ? " Mb" : unit == 1e3 ? " kb" : " bp";
+    const char *usuf; usuf = unit == 1e6 ? " Mb" : unit == 1e3 ? " kb" : " bp";
     double ubr[16];
     int nb = extended_breaks(x0 / unit, x1 / unit, 5, ubr, 16), nx = 0;
     double xpos[16]; char *xlab[16];
@@ -388,13 +488,21 @@ int render_tracks(const PlotSpec *spec, const char *out,
     /* ---- outer gtable: [MARGIN|label|gap|PANEL|MARGIN] cols;
      * [MARGIN|title|gap| tracks+gaps |axis|MARGIN] rows ---- */
     GTable *T = cp_xcalloc(1, sizeof(GTable));
-    T->ncol = 5;
+    /* [MARGIN|label|gap| panel (gap panel)* |MARGIN]. Each window owns a
+     * column and the gaps between them are real, empty columns -- that is what
+     * makes the break visible, and it is why every track's boundaries line up:
+     * they all span the same column set. */
+    T->ncol = 3 + 2 * nwin;                   /* ... + trailing right margin */
     T->colw[0] = upt(MARGIN);
     T->colw[1] = upt(labw);
     T->colw[2] = upt(labw > 0 ? lab_pad : 0);
-    T->colw[3] = unull(1);
-    T->colw[4] = upt(rmargin);
-    const int CC = 3;
+    for (int wi = 0; wi < nwin; wi++) {
+        double span = (double)(wins ? wins[wi].end - wins[wi].beg : rend - rstart);
+        T->colw[3 + 2 * wi] = unull(span);    /* width proportional to bp shown */
+        if (wi < nwin - 1) T->colw[4 + 2 * wi] = upt(GAP_PT);
+    }
+    T->colw[T->ncol - 1] = upt(rmargin);
+    int CC = 3;                               /* set per window in the loop below */
 #define TRK(i) (3 + 2 * (i))
     int axisrow = 3 + (ntr > 0 ? 2 * ntr - 1 : 0);
     T->nrow = axisrow + 2;
@@ -427,6 +535,45 @@ int render_tracks(const PlotSpec *spec, const char *out,
         g->str = title; g->size = sz_title; g->col = C_BLACK;
         g->tx = 0; g->ty = 1; g->hj = 0; g->va = V_TOP;
     }
+    for (int wi = 0; wi < nwin; wi++) {
+      /* Rebind the window: CC selects this window's column and x0/x1 -- which
+       * NPCX closes over -- its coordinate span. Every track below therefore
+       * draws into the same segmented axis without knowing about the others,
+       * which is what makes the boundaries align down the stack. */
+      CC = 3 + 2 * wi;
+      if (wins) {
+          snprintf(chrom, sizeof chrom, "%s", wins[wi].chrom);
+          rstart = wins[wi].beg; rend = wins[wi].end;
+          x0 = (double)rstart; x1 = (double)rend;
+          for (int i = 0; i < ntr; i++)
+              if (spec->tobjs[i].type == TRK_MATRIX) {
+                  md[i] = read_matrix(&spec->tobjs[i], chrom, rstart, rend, err);
+                  if (!md[i]) return -1;
+              }
+      }
+      /* Axis breaks belong to the window, not the figure: each panel carries
+       * its own coordinates, so recompute them here rather than once outside. */
+      {
+          double wspan = x1 - x0;
+          double wunit = wspan >= 2e6 ? 1e6 : wspan >= 2e3 ? 1e3 : 1;
+          const char *wsuf = wunit == 1e6 ? " Mb" : wunit == 1e3 ? " kb" : " bp";
+          double wbr[16];
+          int wnb = extended_breaks(x0 / wunit, x1 / wunit, 5, wbr, 16);
+          int wdec = axis_decimals(wbr, wnb);
+          nx = 0;
+          for (int k = 0; k < wnb; k++) {
+              double bp = wbr[k] * wunit;
+              if (bp < x0 || bp > x1) continue;
+              xpos[nx] = NPCX(bp);
+              char num[32]; fmt_break(wbr[k], wdec, num, sizeof num);
+              xlab[nx] = cp_xmalloc(40); commafy(xlab[nx], 40, num);
+              nx++;
+          }
+          if (nx > 0) {
+              char buf[48]; snprintf(buf, sizeof buf, "%s%s", xlab[nx - 1], wsuf);
+              snprintf(xlab[nx - 1], 40, "%s", buf);
+          }
+      }
     for (int i = 0; i < ntr; i++) {
         int R = TRK(i);
         TrackType tt = spec->tobjs[i].type;
@@ -684,13 +831,17 @@ int render_tracks(const PlotSpec *spec, const char *out,
                 g->tx = (c + 0.5) / nc; g->ty = lbltop - lwn / 2; g->rot90 = 1;
             }
             double hh = hmtop - lblband;                      /* sample labels (left) */
-            if (!t->hide_rownames)
+            /* The row-label gutter is shared by every window, so only the
+             * left-most one writes into it -- otherwise each window stamps the
+             * same names over the last. */
+            if (!t->hide_rownames && wi == 0)
                 for (int rr = 0; rr < nr; rr++) {
                     g = gt_add(T, G_TEXT, R, 1, R, 1);
                     g->str = m->rowname[m->roword[rr]]; g->size = sz_samp; g->col = C_BLACK;
                     g->tx = 1; g->ty = hmtop - (rr + 0.5) / nr * hh; g->hj = 1; g->va = V_INKCENTER;
                 }
         }
+    }
     }
     if (!has_matrix) {
         g = gt_add(T, G_AXIS_X, axisrow, CC, axisrow, CC);
