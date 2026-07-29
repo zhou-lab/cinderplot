@@ -232,7 +232,7 @@ typedef struct {
 } AesEntry;
 
 typedef enum { GEOM_POINT, GEOM_LINE, GEOM_COL, GEOM_HISTOGRAM, GEOM_BOXPLOT, GEOM_BAR,
-               GEOM_SEGMENT, GEOM_RECT, GEOM_DENSITY,
+               GEOM_SEGMENT, GEOM_RECT, GEOM_DENSITY, GEOM_TILE,
                GEOM_HLINE, GEOM_VLINE, GEOM_ABLINE, GEOM_TEXT, GEOM_LABEL } GeomType;
 typedef struct {
     GeomType type;

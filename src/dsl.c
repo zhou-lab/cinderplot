@@ -530,6 +530,11 @@ static int parse_term(P *p, PlotSpec *spec) {
     else if (!strcmp(name, "geom_histogram")) gt = GEOM_HISTOGRAM;
     else if (!strcmp(name, "geom_boxplot")) gt = GEOM_BOXPLOT;
     else if (!strcmp(name, "geom_bar")) gt = GEOM_BAR;
+    else if (!strcmp(name, "geom_tile")) gt = GEOM_TILE;
+    /* geom_raster() is ggplot2's equal-sized-cell special case of geom_tile;
+     * the distinction is a rendering optimisation there, so accept it as a
+     * synonym rather than making the caller care. */
+    else if (!strcmp(name, "geom_raster")) gt = GEOM_TILE;
     else if (!strcmp(name, "geom_segment")) gt = GEOM_SEGMENT;
     else if (!strcmp(name, "geom_rect")) gt = GEOM_RECT;
     else if (!strcmp(name, "geom_density")) gt = GEOM_DENSITY;
@@ -873,7 +878,7 @@ static int parse_term(P *p, PlotSpec *spec) {
     }
     return fail(p, "`%s()` is not implemented; supported: aes(), geom_point(), "
                    "geom_line(), geom_col(), geom_histogram(), geom_boxplot(), geom_bar(), "
-                   "geom_density(), geom_hline(), geom_vline(), geom_abline(), "
+                   "geom_density(), geom_tile()/geom_raster(), geom_hline(), geom_vline(), geom_abline(), "
                    "geom_text()/geom_text_repel(), geom_label()/geom_label_repel(), "
                    "labs()/xlab()/ylab()/ggtitle(), "
                    "facet_wrap(~var[, levels=c(...)]), coord_flip(), scale_x_log10(), scale_y_log10(), scale_*_continuous(), xlim(), ylim(), "

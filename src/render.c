@@ -377,14 +377,53 @@ static double genome_off(const GenomeScale *g, const char *chr) {
     return -1;   /* sentinel: chromosome absent from seqinfo */
 }
 
+static int cmp_double_asc(const void *a, const void *b) {
+    double d = *(const double *)a - *(const double *)b;
+    return d < 0 ? -1 : d > 0 ? 1 : 0;
+}
+
+/* Cell size for geom_tile along one axis: 1 for a discrete axis (categories are
+ * at 1..k), else the smallest positive gap between distinct values in the panel.
+ * A regular grid therefore tiles exactly; an irregular one gets the tightest
+ * spacing rather than overlapping cells. Falls back to the range when a panel
+ * holds a single distinct value. */
+static double tile_step(const DataFrame *df, const int *use, const Factor *ff,
+                        int panel, int discrete, int is_x,
+                        const Column *col, const PlotSpec *spec) {
+    if (discrete) return 1.0;
+    double *v = cp_xmalloc((size_t)df->nrow * sizeof(double));
+    int n = 0;
+    for (int r = 0; r < df->nrow; r++) {
+        if (!use[r] || (ff && ff->idx[r] != panel)) continue;
+        double t = col->num[r];
+        if (isnan(t)) continue;
+        if ((is_x ? spec->log_x : spec->log_y)) { if (t <= 0) continue; t = log10(t); }
+        v[n++] = t;
+    }
+    double step = 0, lo = 0, hi = 0;
+    if (n > 1) {
+        qsort(v, n, sizeof(double), cmp_double_asc);
+        lo = v[0]; hi = v[n - 1];
+        for (int i = 1; i < n; i++) {
+            double dgap = v[i] - v[i - 1];
+            if (dgap > 1e-12 && (step == 0 || dgap < step)) step = dgap;
+        }
+    }
+    free(v);
+    if (step > 0) return step;
+    return (hi > lo) ? (hi - lo) : 1.0;      /* one distinct value: unit cell */
+}
+
 int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 double w_pt, double h_pt, char *err) {
     /* ---- layer summary ---- */
     int haspoint = 0, hasline = 0, hascol = 0, nhist = 0, hasbox = 0, hasbar = 0, hasdens = 0, hastext = 0;
+    int hastile = 0;
     for (int i = 0; i < spec->nlayers; i++) {
         if (spec->layers[i].type == GEOM_POINT) haspoint = 1;
         if (spec->layers[i].type == GEOM_LINE) hasline = 1;
         if (spec->layers[i].type == GEOM_COL) hascol = 1;
+        if (spec->layers[i].type == GEOM_TILE) hastile = 1;
         if (spec->layers[i].type == GEOM_HISTOGRAM) nhist++;
         if (spec->layers[i].type == GEOM_BOXPLOT) hasbox = 1;
         if (spec->layers[i].type == GEOM_BAR) hasbar = 1;
@@ -430,12 +469,41 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         return -1;
     }
     const Column *yc = NULL;
+    Factor *yf = NULL;
+    int disc_y = 0;
     if (spec->y.col) {
         yc = df_col(df, spec->y.col);
         if (!yc) { snprintf(err, CP_ERRLEN, "column `%s` not found", spec->y.col); return -1; }
-        if (yc->type != COL_NUM || spec->y.is_factor) {
-            snprintf(err, CP_ERRLEN, "discrete positional scales are not implemented; y must be numeric");
+        /* A categorical y is meaningful for a tile grid (region x sample), and
+         * for nothing else here: every other geom either computes y itself
+         * (histogram, density, bar) or draws a magnitude from an origin, where
+         * a category has no arithmetic. So discrete y is accepted with
+         * geom_tile() and refused elsewhere, naming the alternative. */
+        disc_y = (yc->type == COL_STR) || spec->y.is_factor;
+        if (disc_y && !hastile) {
+            snprintf(err, CP_ERRLEN, "a discrete y is supported only with "
+                     "geom_tile(); for a category-vs-value chart put the "
+                     "category on x and add coord_flip()");
             return -1;
+        }
+        if (!disc_y && yc->type != COL_NUM) {
+            snprintf(err, CP_ERRLEN, "column `%s` must be numeric for y", spec->y.col);
+            return -1;
+        }
+        if (disc_y) {
+            yf = factor_make(df, yc);
+            if (spec->y.nlevels
+                && factor_relevel(yf, df->nrow, spec->y.levels, spec->y.nlevels,
+                                  "y", err)) return -1;
+            if (yf->nlev > 40) {
+                snprintf(err, CP_ERRLEN, "discrete y has %d categories; the axis "
+                         "holds at most 40", yf->nlev);
+                return -1;
+            }
+            if (spec->log_y) {
+                snprintf(err, CP_ERRLEN, "scale_y_log10() cannot apply to a discrete y");
+                return -1;
+            }
         }
     }
     /* geom_segment/rect endpoints (xend required, yend defaults to y) */
@@ -555,7 +623,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         int xok = disc_x ? (xf->idx[r] >= 0)
                 : genome_x ? (roff[r] >= 0 && !isnan(xc->num[r]))
                 : !isnan(xc->num[r]);
-        int ok = xok && (!yc || !isnan(yc->num[r]))
+        int ok = xok && (!yc || (disc_y ? yf->idx[r] >= 0 : !isnan(yc->num[r])))
               && (!cf || cf->idx[r] >= 0) && (!ff || ff->idx[r] >= 0)
               && (!szc || !isnan(szc->num[r]));
         if (!ok) d_na++;
@@ -629,6 +697,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
 #define TY(v) (spec->log_y ? log10(v) : (v))
 /* transformed x for row r: category position (discrete), genome offset+pos
  * (genome), or raw value (continuous) */
+#define YVAL(r) (disc_y ? (double)(yf->idx[r] + 1) : yc->num[r])
 #define XVAL(r) (disc_x ? (double)(xf->idx[r] + 1) \
                : genome_x ? (roff[r] + xc->num[r]) : xc->num[r])
 #define TXR(r)  (spec->log_x ? log10(XVAL(r)) : XVAL(r))
@@ -802,7 +871,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     } else {
         for (int r = 0; r < df->nrow; r++) {
             if (!use[r]) continue;
-            double t = TY(yc->num[r]);
+            double t = disc_y ? YVAL(r) : TY(yc->num[r]);
             if (t < tymin) tymin = t;
             if (t > tymax) tymax = t;
             if (yec && !isnan(yec->num[r])) {   /* segment end extends y range */
@@ -871,7 +940,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     if (disc_x) { x0 = 1 - 0.6; x1 = xf->nlev + 0.6; }
     else if (genome_x) { x0 = 0; x1 = gs->total; }     /* no expansion */
     else { x0 = txmin - 0.05 * (txmax - txmin); x1 = txmax + 0.05 * (txmax - txmin); }
-    double y0 = tymin - 0.05 * (tymax - tymin), y1 = tymax + 0.05 * (tymax - tymin);
+    double y0, y1;
+    if (disc_y) { y0 = 1 - 0.6; y1 = yf->nlev + 0.6; }   /* additive, like disc_x */
+    else { y0 = tymin - 0.05 * (tymax - tymin); y1 = tymax + 0.05 * (tymax - tymin); }
     /* reserve the bottom `ideo_npc` of the panel for the ideogram track */
     double ideo_npc = (spec->ideogram_path && genome_x) ? 0.06 : 0;
     if (flip && ideo_npc > 0) {
@@ -881,7 +952,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
 #define NPCX(t) (((t) - x0) / (x1 - x0))
 #define NPCY(t) (((t) - y0) / (y1 - y0))
 
-    double xbr[40], ybr[16];
+    double xbr[40], ybr[40];
     char **xlabs = cp_xmalloc(40 * sizeof(char *)), **ylabs = cp_xmalloc(16 * sizeof(char *));
     int nxbr, nybr;
     /* genome mode uses separate axis arrays: gridlines at chrom boundaries,
@@ -915,7 +986,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             else fmt_break(xbr[i], dec, xlabs[i], 32);
         }
     }
-    if (spec->log_y) {
+    if (disc_y) {                          /* one break per category, level labels */
+        nybr = yf->nlev;
+        for (int i = 0; i < nybr; i++) { ybr[i] = i + 1; ylabs[i] = cp_xstrdup(yf->levels[i]); }
+    } else if (spec->log_y) {
         nybr = log10_breaks(y0, y1, ybr, ylabs, 16);
     } else {
         int nb = extended_breaks(y0, y1, 5, ybr, 16), n = 0;
@@ -1058,7 +1132,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
          * and bars are coloured from it; only the guide is dropped. */
         if (!spec->no_legend)
             guides[nguide++] = build_legend(cr, th, col_title, cf, pal, haspoint,
-                               hasline || hasseg || hasdens, hasbox || hasbar || hasrect, hastext);
+                               hasline || hasseg || hasdens, hasbox || hasbar || hasrect || hastile, hastext);   /* tiles key as filled boxes */
     } else if (cont_col && !spec->no_legend) {
         guides[nguide++] = build_colorbar_legend(cr, th, col_title, &cscale, cdmin, cdmax);
     }
@@ -1376,6 +1450,25 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                                      : TXR(r));
                     g->y0 = NPCY(TY(yc->num[r]));
                     g->y1 = NPCY(yec ? TY(yec->num[r]) : TY(yc->num[r]));
+                }
+            } else if (gt == GEOM_TILE) {
+                /* One filled cell per row, centred on (x, y). Cell size is 1 on
+                 * a discrete axis, where categories sit at 1..k; on a continuous
+                 * axis it is the smallest gap between distinct values, which is
+                 * what a pre-binned grid (geom_raster) wants and degrades
+                 * sensibly for an irregular one. */
+                double wx = tile_step(df, use, ff, p, disc_x, 1, xc, spec);
+                double wy = tile_step(df, use, ff, p, disc_y, 0, yc, spec);
+                for (int r = 0; r < df->nrow; r++) {
+                    if (!use[r] || (ff && ff->idx[r] != p)) continue;
+                    double cx = TXR(r), cy = disc_y ? YVAL(r) : TY(yc->num[r]);
+                    if (isnan(cx) || isnan(cy)) continue;
+                    g = gt_add(T, G_RECT, R, C, R, C);
+                    g->col = spec->layers[li].has_color ? spec->layers[li].color
+                           : cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BAR;
+                    g->sub = 1; g->clip = 1;
+                    g->x0 = NPCX(cx - wx / 2); g->x1 = NPCX(cx + wx / 2);
+                    g->y0 = NPCY(cy - wy / 2); g->y1 = NPCY(cy + wy / 2);
                 }
             } else if (gt == GEOM_RECT && spec->layers[li].data) {
                 /* region-highlight bands: own file, full panel height,
