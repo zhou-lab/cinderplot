@@ -361,22 +361,38 @@ static Window *load_windows(const char *path, int *n_out, char *err) {
 #define GAP_PT 10.0   /* whitespace between non-contiguous windows */
 
 
-/* Re-order `m`'s display rows so sample i of `ref` is drawn at row i here.
- * Windows are read independently, so each would otherwise order rows by
- * whatever it encountered first; across one figure the samples must line up.
- * Samples absent from this window keep their own slots at the end. */
-static void match_row_order(MatData *m, const MatData *ref) {
-    int *ord = cp_xmalloc(m->nr * sizeof(int));
-    char *taken = cp_xcalloc(m->nr, 1);
-    int n = 0;
-    for (int i = 0; i < ref->nr && n < m->nr; i++) {
-        const char *want = ref->rowname[ref->roword[i]];
+/* Rebuild `m` on `ref`'s rows, so sample i means the same thing in every window.
+ *
+ * Each window reads the matrix independently, so it knows only the samples that
+ * have a probe inside it. Re-ordering what is present is not enough: a long
+ * matrix missing one sample in one window yields fewer rows there, those rows
+ * are spread over the same track height, and the row-label gutter -- written
+ * once, by the left-most window -- then names the wrong band. Equal heights
+ * would mean different samples, which is the one thing a shared axis promises.
+ *
+ * So take the reference row set wholesale and fill an absent sample with NaN;
+ * the heatmap already paints a NaN cell in the missing-value colour, and every
+ * band keeps its position. `ref` is the unfiltered pre-read, so its samples are
+ * a superset of any window's and nothing is dropped. */
+static void align_rows(MatData *m, const MatData *ref) {
+    int nr = ref->nr, nc = m->nc;
+    double *mv = cp_xmalloc((size_t)nr * nc * sizeof(double));
+    char **rowname = cp_xmalloc(nr * sizeof(char *));
+    for (int i = 0; i < nr; i++) {
+        rowname[i] = ref->rowname[i];
+        int src = -1;
         for (int j = 0; j < m->nr; j++)
-            if (!taken[j] && !strcmp(m->rowname[j], want)) { ord[n++] = j; taken[j] = 1; break; }
+            if (!strcmp(m->rowname[j], ref->rowname[i])) { src = j; break; }
+        for (int c = 0; c < nc; c++)
+            mv[(size_t)i * nc + c] = src >= 0 ? m->mv[(size_t)src * nc + c]
+                                              : NAN;
     }
-    for (int j = 0; j < m->nr && n < m->nr; j++) if (!taken[j]) ord[n++] = j;
-    memcpy(m->roword, ord, m->nr * sizeof(int));
-    free(ord); free(taken);
+    int *roword = cp_xmalloc(nr * sizeof(int));
+    memcpy(roword, ref->roword, nr * sizeof(int));
+    free(m->mv); free(m->rowname); free(m->roword);   /* the name strings are
+                                                       * borrowed; only the
+                                                       * arrays are ours */
+    m->mv = mv; m->rowname = rowname; m->roword = roword; m->nr = nr;
 }
 
 int render_tracks(const PlotSpec *spec, const char *out,
@@ -392,7 +408,14 @@ int render_tracks(const PlotSpec *spec, const char *out,
      * be filtered as it loads. An inferred one is not -- the rows define the
      * window -- so load unfiltered and re-load below once the window is known. */
     char pre_chrom[64] = ""; long pre_beg = 0, pre_end = 0;
-    int have_pre = spec->region
+    if (spec->regions_path && spec->region) {
+        snprintf(err, CP_ERRLEN, "region() and regions() both give the window; "
+                 "use one or the other");
+        return -1;
+    }
+    /* Under regions() the pre-read must stay unfiltered whatever region() says:
+     * it is the reference row set every window is aligned to (align_rows). */
+    int have_pre = !spec->regions_path && spec->region
                    && region_parse(spec->region, pre_chrom, &pre_beg, &pre_end) == 0;
     for (int i = 0; i < ntr; i++)
         if (spec->tobjs[i].type == TRK_MATRIX) {
@@ -642,7 +665,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
               if (spec->tobjs[i].type == TRK_MATRIX) {
                   md[i] = read_matrix(&spec->tobjs[i], chrom, rstart, rend, err);
                   if (!md[i]) return -1;
-                  match_row_order(md[i], rowref[i]);
+                  align_rows(md[i], rowref[i]);
               }
       }
       if (wins) {
