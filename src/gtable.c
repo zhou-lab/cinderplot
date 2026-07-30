@@ -384,7 +384,8 @@ void gt_render(GTable *t, cairo_t *cr) {
                 set_col(cr, g->axis_styled ? g->text_col : C_AXTXT);
                 for (int i = 0; i < g->n; i++) {
                     double w = cp_label_w(cr, SZ_AXIS_TEXT, g->labels[i]);
-                    draw_label(cr, DX(g->px[i]) - w / 2,
+                    double pos = g->label_pos ? g->label_pos[i] : g->px[i];
+                    draw_label(cr, DX(pos) - w / 2,
                                ry + TICK_LEN + TXT_GAP + fe.ascent, SZ_AXIS_TEXT, g->labels[i]);
                 }
             }

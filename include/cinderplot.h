@@ -190,6 +190,7 @@ typedef struct {
     int dash;                                  /* G_LINE/G_POLYLINE: 0 solid, 1 dashed, 2 dotted */
     double alpha;                              /* 0 = opaque (unset); else 0..1 fill/stroke alpha */
     char **labels;                             /* axis tick labels */
+    const double *label_pos;                   /* optional label positions, else ticks */
     const double *mtpos, *mtlen; int mtn;      /* minor axis ticks (log): npc pos + length (pt) */
     Col tick_col, text_col;                    /* G_AXIS_*: themed colours (opt-in) */
     int axis_styled, hide_ticks, hide_text;    /* 0 = legacy C_TICK/C_AXTXT (heatmap/tracks) */

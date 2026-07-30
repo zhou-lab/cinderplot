@@ -84,10 +84,32 @@ typedef struct {
     char **colid;      /* nc probe IDs (may be NULL entries) */
     char **rowname;    /* nr sample names */
     int *roword;       /* nr display order (cluster or identity) */
-    char *chrom;       /* chromosome (borrowed) — for region() inference */
+    char *chrom;       /* chromosome (borrowed or owned) — for region() inference */
     long gbeg, gend;   /* min(beg), max(end) over probes — for region() inference */
     int multichrom;    /* input spans >1 chromosome (inference is ambiguous) */
 } MatData;
+
+/* Return a chromosome cell as text, formatting numeric chromosomes such as 1.
+ * The caller supplies scratch space because text columns remain borrowed. */
+static const char *matrix_chrom_value(const Column *c, int r,
+                                      char *buf, size_t cap) {
+    if (!c) return NULL;
+    if (c->type == COL_STR) return c->str[r];
+    if (!isfinite(c->num[r])) return NULL;
+    snprintf(buf, cap, "%.15g", c->num[r]);
+    return buf;
+}
+
+static int matrix_in_window(const Column *chr_c, const Column *sc,
+                            const Column *ec, int r, const char *win_chrom,
+                            long win_beg, long win_end) {
+    if (!win_chrom) return 1;
+    char buf[64];
+    const char *chrom = matrix_chrom_value(chr_c, r, buf, sizeof buf);
+    return chrom && !strcmp(chrom, win_chrom)
+           && ec->num[r] > (double)win_beg
+           && sc->num[r] < (double)win_end;
+}
 
 /* `win_chrom`/`win_beg`/`win_end` restrict the matrix to the plotted window.
  * NULL win_chrom keeps every row, which is what region() inference needs --
@@ -119,15 +141,15 @@ static MatData *read_matrix(const TrackObj *t, const char *win_chrom,
         if (!pid) { snprintf(err, CP_ERRLEN, "long matrix needs a Probe_ID column"); return NULL; }
         const Column *val = NULL;
         for (int c = 0; c < mf->ncol; c++)
-            if (mf->cols[c].type == COL_NUM && &mf->cols[c] != sc && &mf->cols[c] != ec)
+            if (mf->cols[c].type == COL_NUM && &mf->cols[c] != chr_c
+                && &mf->cols[c] != sc && &mf->cols[c] != ec)
                 { val = &mf->cols[c]; break; }
         if (!val) { snprintf(err, CP_ERRLEN, "long matrix needs a numeric value column"); return NULL; }
         char **pn = cp_xmalloc(mf->nrow * sizeof(char *));
         double *pp = cp_xmalloc(mf->nrow * sizeof(double));
         char **sn = cp_xmalloc(mf->nrow * sizeof(char *));
-#define IN_WIN(r) (!win_chrom \
-                   || (chr_c && !strcmp(chr_c->str[r], win_chrom) \
-                       && ec->num[r] > (double)win_beg && sc->num[r] < (double)win_end))
+#define IN_WIN(r) matrix_in_window(chr_c, sc, ec, r, win_chrom, \
+                                    win_beg, win_end)
         for (int r = 0; r < mf->nrow; r++) {
             if (!IN_WIN(r)) continue;
             const char *id = pid->str[r]; int f = -1;
@@ -159,13 +181,24 @@ static MatData *read_matrix(const TrackObj *t, const char *win_chrom,
     } else {                                          /* --- wide --- */
         int scol[2048], ns = 0;
         for (int c = 0; c < mf->ncol && ns < 2048; c++)
-            if (mf->cols[c].type == COL_NUM && &mf->cols[c] != sc && &mf->cols[c] != ec)
+            if (mf->cols[c].type == COL_NUM && &mf->cols[c] != chr_c
+                && &mf->cols[c] != sc && &mf->cols[c] != ec)
                 scol[ns++] = c;
         if (ns < 1) { snprintf(err, CP_ERRLEN, "matrix has no numeric sample columns"); return NULL; }
         if (mf->nrow < 1) { snprintf(err, CP_ERRLEN, "matrix is empty"); return NULL; }
         int *ord = cp_xmalloc(mf->nrow * sizeof(int));
         double *pp = cp_xmalloc(mf->nrow * sizeof(double));
-        for (int r = 0; r < mf->nrow; r++) { pp[r] = (sc->num[r] + ec->num[r]) * 0.5; ord[nc++] = r; }
+        for (int r = 0; r < mf->nrow; r++) {
+            if (!matrix_in_window(chr_c, sc, ec, r, win_chrom,
+                                  win_beg, win_end)) continue;
+            pp[r] = (sc->num[r] + ec->num[r]) * 0.5;
+            ord[nc++] = r;
+        }
+        if (nc < 1) {
+            snprintf(err, CP_ERRLEN, "matrix is empty in the requested window");
+            free(ord); free(pp);
+            return NULL;
+        }
         for (int a = 1; a < nc; a++) { int k = ord[a]; double kp = pp[k]; int b2 = a - 1;
             while (b2 >= 0 && pp[ord[b2]] > kp) { ord[b2+1] = ord[b2]; b2--; } ord[b2+1] = k; }
         nr = ns;
@@ -188,10 +221,20 @@ static MatData *read_matrix(const TrackObj *t, const char *win_chrom,
             if (ec->num[r] > hi) hi = ec->num[r];
         }
         m->gbeg = (long)lo; m->gend = (long)hi;
-        if (chr_c && chr_c->type == COL_STR) {
-            m->chrom = chr_c->str[0];
-            for (int r = 1; r < mf->nrow; r++)
-                if (strcmp(chr_c->str[r], m->chrom)) { m->multichrom = 1; break; }
+        if (chr_c) {
+            char buf[64];
+            const char *first = matrix_chrom_value(chr_c, 0, buf, sizeof buf);
+            if (first) m->chrom = chr_c->type == COL_STR
+                                ? (char *)first : cp_xstrdup(first);
+            for (int r = 1; m->chrom && r < mf->nrow; r++) {
+                char rbuf[64];
+                const char *value = matrix_chrom_value(chr_c, r, rbuf,
+                                                       sizeof rbuf);
+                if (!value || strcmp(value, m->chrom)) {
+                    m->multichrom = 1;
+                    break;
+                }
+            }
         }
     }
     m->roword = cp_xmalloc(nr * sizeof(int));
@@ -205,6 +248,7 @@ static MatData *read_matrix(const TrackObj *t, const char *win_chrom,
 
 /* gene symbol = transcript name up to the last '-' (e.g. "PKIG-206" -> "PKIG") */
 static void gene_symbol(const char *name, char *out, size_t cap) {
+    if (!name) { out[0] = 0; return; }
     const char *dash = strrchr(name, '-');
     size_t n = dash ? (size_t)(dash - name) : strlen(name);
     if (n >= cap) n = cap - 1;
@@ -222,11 +266,13 @@ static GeneModel *load_genes(const char *data, const char *chrom, long rs, long 
     if (!all && ng > 0) {
         int m2 = 0;
         for (int k = 0; k < ng; k++) {
+            /* BED name `.` means there is no symbol to group or draw. */
+            if (!gm[k].name) { gm[m2++] = gm[k]; continue; }
             char sk[128]; gene_symbol(gm[k].name, sk, sizeof sk);
             long lk = gm[k].tx_end - gm[k].tx_start;
             int canon = 1;
             for (int j = 0; j < ng && canon; j++) {
-                if (j == k) continue;
+                if (j == k || !gm[j].name) continue;
                 char sj[128]; gene_symbol(gm[j].name, sj, sizeof sj);
                 if (strcmp(sj, sk)) continue;
                 long lj = gm[j].tx_end - gm[j].tx_start;
@@ -340,6 +386,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
     /* ---- pre-read matrix tracks: they size the sample-label column below, and
      * an empty region() infers its window from the first one. ---- */
     MatData *md[MAX_TRACKS] = {0};
+    MatData *rowref[MAX_TRACKS] = {0};   /* shared sample order for regions() */
     int has_matrix = 0;
     /* An explicit region() is known before the data is read, so the matrix can
      * be filtered as it loads. An inferred one is not -- the rows define the
@@ -352,6 +399,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
             md[i] = read_matrix(&spec->tobjs[i], have_pre ? pre_chrom : NULL,
                                 pre_beg, pre_end, err);
             if (!md[i]) return -1;
+            rowref[i] = md[i];
             has_matrix = 1;
         }
 
@@ -451,12 +499,12 @@ int render_tracks(const PlotSpec *spec, const char *out,
         if (bp < x0 || bp > x1) continue;
         xpos[nx] = NPCX(bp); xtxt[nx] = xpos[nx];
         char num[32]; fmt_break(ubr[i], dec, num, sizeof num);                 /* number, with commas */
-        xlab[nx] = cp_xmalloc(40); commafy(xlab[nx], 40, num);
+        xlab[nx] = cp_xmalloc(64); commafy(xlab[nx], 64, num);
         nx++;
     }
     if (nx > 0) {                              /* unit suffix once, on the last tick */
-        char buf[48]; snprintf(buf, sizeof buf, "%s%s", xlab[nx - 1], usuf);
-        snprintf(xlab[nx - 1], 40, "%s", buf);
+        char buf[64]; snprintf(buf, sizeof buf, "%s%s", xlab[nx - 1], usuf);
+        snprintf(xlab[nx - 1], 64, "%s", buf);
     }
 
     /* font levels within ~1.5x: title 9.5, medium SZ_AXIS_TEXT (8.8), small 6.5. */
@@ -594,6 +642,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
               if (spec->tobjs[i].type == TRK_MATRIX) {
                   md[i] = read_matrix(&spec->tobjs[i], chrom, rstart, rend, err);
                   if (!md[i]) return -1;
+                  match_row_order(md[i], rowref[i]);
               }
       }
       if (wins) {
@@ -643,7 +692,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
               double bp = wbr[k] * wunit;
               if (bp < x0 || bp > x1) continue;
               char num[32]; fmt_break(wbr[k], wdec, num, sizeof num);
-              char *lab = cp_xmalloc(40); commafy(lab, 40, num);
+              char *lab = cp_xmalloc(64); commafy(lab, 64, num);
               double npc = NPCX(bp), half = text_w(cr, SZ_AXIS_TEXT, lab) / 2;
               double centre = npc * win_pt;
               /* A tick near the edge would centre its label half outside the
@@ -663,8 +712,8 @@ int render_tracks(const PlotSpec *spec, const char *out,
               xpos[nx] = npc; xlab[nx] = lab; nx++;
           }
           if (nx > 0) {
-              char buf[48]; snprintf(buf, sizeof buf, "%s%s", xlab[nx - 1], wsuf);
-              snprintf(xlab[nx - 1], 40, "%s", buf);
+              char buf[64]; snprintf(buf, sizeof buf, "%s%s", xlab[nx - 1], wsuf);
+              snprintf(xlab[nx - 1], 64, "%s", buf);
           }
       }
     for (int i = 0; i < ntr; i++) {
@@ -949,10 +998,20 @@ int render_tracks(const PlotSpec *spec, const char *out,
                 }
         }
     }
-    }
-    if (!has_matrix) {
-        g = gt_add(T, G_AXIS_X, axisrow, CC, axisrow, CC);
-        g->n = nx; g->px = xpos; g->labels = xlab;
+      if (!has_matrix) {
+          /* Each window needs its own axis arrays: xpos/xtxt/xlab are scratch
+           * arrays reused when the next window is laid out. Labels near an edge
+           * use xtxt so their final glyph remains inside the output surface. */
+          double *axis_pos = cp_xmalloc(nx * sizeof(double));
+          double *axis_txt = cp_xmalloc(nx * sizeof(double));
+          char **axis_lab = cp_xmalloc(nx * sizeof(char *));
+          memcpy(axis_pos, xpos, nx * sizeof(double));
+          memcpy(axis_txt, xtxt, nx * sizeof(double));
+          memcpy(axis_lab, xlab, nx * sizeof(char *));
+          g = gt_add(T, G_AXIS_X, axisrow, CC, axisrow, CC);
+          g->n = nx; g->px = axis_pos; g->label_pos = axis_txt;
+          g->labels = axis_lab;
+      }
     }
 
     gt_resolve(T, 0, 0, w_pt, h_pt);

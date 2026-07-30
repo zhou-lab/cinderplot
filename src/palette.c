@@ -46,6 +46,7 @@ void hue_palette(int n, Col *out) {
 static Col C(int r, int g, int b) { Col c = {r / 255.0, g / 255.0, b / 255.0}; return c; }
 
 static void ramp(const Col *stops, int n, double t, Col *out) {
+    if (!isfinite(t)) t = 0.5;       /* defensive: never cast NaN to an index */
     if (t <= 0) { *out = stops[0]; return; }
     if (t >= 1) { *out = stops[n - 1]; return; }
     double p = t * (n - 1);
@@ -119,8 +120,11 @@ int parse_color(const char *s, Col *out) {
         {"darkgreen",0,100,0}, {"steelblue",70,130,180},
     };
     if (s[0] == '#' && strlen(s) == 7) {
-        int r, g, b;
-        if (sscanf(s + 1, "%2x%2x%2x", &r, &g, &b) == 3) { *out = C(r, g, b); return 0; }
+        unsigned int r, g, b;
+        if (sscanf(s + 1, "%2x%2x%2x", &r, &g, &b) == 3) {
+            *out = C((int)r, (int)g, (int)b);
+            return 0;
+        }
         return -1;
     }
     /* greyNN / grayNN: NN in 0..100 (ggplot grey ramp) */

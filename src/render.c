@@ -506,6 +506,18 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             }
         }
     }
+    const Column *labc = NULL;
+    if (hastext) {
+        if (!spec->label.col) {
+            snprintf(err, CP_ERRLEN, "geom_text()/geom_label() needs aes(label=...)");
+            return -1;
+        }
+        labc = df_col(df, spec->label.col);
+        if (!labc) {
+            snprintf(err, CP_ERRLEN, "column `%s` not found", spec->label.col);
+            return -1;
+        }
+    }
     /* geom_segment/rect endpoints (xend required, yend defaults to y) */
     int hasseg = 0, hasrect = 0, rect_top = 0;
     for (int i = 0; i < spec->nlayers; i++) {
@@ -523,6 +535,14 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     if (spec->yend.col) {
         yec = df_col(df, spec->yend.col);
         if (!yec) { snprintf(err, CP_ERRLEN, "column `%s` not found", spec->yend.col); return -1; }
+    }
+    if (xec && xec->type != COL_NUM) {
+        snprintf(err, CP_ERRLEN, "xend column `%s` must be numeric", spec->xend.col);
+        return -1;
+    }
+    if (yec && yec->type != COL_NUM) {
+        snprintf(err, CP_ERRLEN, "yend column `%s` must be numeric", spec->yend.col);
+        return -1;
     }
     if (hasseg && !xec && !disc_x) {
         snprintf(err, CP_ERRLEN, "geom_segment() needs aes(xend=...)"); return -1;
@@ -592,6 +612,11 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             }
         }
     }
+    if (hasbar && cont_col) {
+        snprintf(err, CP_ERRLEN, "a continuous colour/fill on geom_bar() is not "
+                 "implemented; map a discrete column instead");
+        return -1;
+    }
     /* aes(size=): numeric column mapped to point area (geom_point) */
     const Column *szc = NULL;
     if (spec->size.col) {
@@ -624,7 +649,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 : genome_x ? (roff[r] >= 0 && !isnan(xc->num[r]))
                 : !isnan(xc->num[r]);
         int ok = xok && (!yc || (disc_y ? yf->idx[r] >= 0 : !isnan(yc->num[r])))
-              && (!cf || cf->idx[r] >= 0) && (!ff || ff->idx[r] >= 0)
+              && (!cf || cf->idx[r] >= 0)
+              && (!cont_col || isfinite(colc->num[r]))
+              && (!ff || ff->idx[r] >= 0)
               && (!szc || !isnan(szc->num[r]));
         if (!ok) d_na++;
         else if ((spec->log_x && xc->num[r] <= 0) || (spec->log_y && yc && yc->num[r] <= 0)) {
@@ -953,7 +980,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
 #define NPCY(t) (((t) - y0) / (y1 - y0))
 
     double xbr[40], ybr[40];
-    char **xlabs = cp_xmalloc(40 * sizeof(char *)), **ylabs = cp_xmalloc(16 * sizeof(char *));
+    char **xlabs = cp_xmalloc(40 * sizeof(char *));
+    char **ylabs = cp_xmalloc(40 * sizeof(char *));
     int nxbr, nybr;
     /* genome mode uses separate axis arrays: gridlines at chrom boundaries,
      * labels (chrom names) at chrom midpoints */
@@ -1009,7 +1037,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     int nxmin = (disc_x || genome_x) ? 0
               : spec->log_x ? log_minors(x0, x1, xmin_br, 32)
               : make_minors(xbr, nxbr, x0, x1, xmin_br);
-    int nymin = spec->log_y ? log_minors(y0, y1, ymin_br, 32)
+    int nymin = disc_y ? 0
+              : spec->log_y ? log_minors(y0, y1, ymin_br, 32)
               : make_minors(ybr, nybr, y0, y1, ymin_br);
 
     /* log tick marks (ggplot annotation_logticks): 1..9 x 10^k drawn INSIDE the
@@ -1607,7 +1636,6 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             } else if (gt == GEOM_TEXT || gt == GEOM_LABEL) {
                 const Layer *L = &spec->layers[li];
                 double fs = (L->txt_size > 0 ? L->txt_size : 3.88) * 2.845276; /* mm -> pt */
-                const Column *labc = df_col(df, spec->label.col);
                 double ndx = x1 > x0 ? L->nudge_x / (x1 - x0) : 0;   /* data -> npc */
                 double ndy = y1 > y0 ? L->nudge_y / (y1 - y0) : 0;
                 int cap = 0;
