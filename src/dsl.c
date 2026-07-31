@@ -814,13 +814,26 @@ static int parse_term(P *p, PlotSpec *spec) {
         spec->facet_var = ident(p);
         if (!spec->facet_var) return fail(p, "expected a column name after ~", "");
         skip_ws(p);
-        if (*p->s == ',') {          /* facet_wrap(~v, levels=c(...)) — panel order */
+        while (*p->s == ',') {   /* levels=c(...) panel order, scales= free axes */
             p->s++;
             char *key = ident(p);
-            if (!key || strcmp(key, "levels") || expect(p, '='))
-                return fail(p, "facet_wrap() supports only levels=c(...)", "");
+            if (!key || expect(p, '='))
+                return fail(p, "facet_wrap() supports levels=c(...) and scales=", "");
+            if (!strcmp(key, "levels")) {
+                if (parse_levels(p, &spec->facet_levels, &spec->n_facet_levels)) return -1;
+            } else if (!strcmp(key, "scales")) {
+                char *v = string_lit(p);
+                if (!v) v = ident(p);          /* scales=free reads as well as "free" */
+                if (!v) return fail(p, "scales= expects fixed, free_x, free_y, or free", "");
+                if (!strcmp(v, "fixed")) { spec->free_x = 0; spec->free_y = 0; }
+                else if (!strcmp(v, "free_x")) { spec->free_x = 1; spec->free_y = 0; }
+                else if (!strcmp(v, "free_y")) { spec->free_x = 0; spec->free_y = 1; }
+                else if (!strcmp(v, "free"))   { spec->free_x = 1; spec->free_y = 1; }
+                else return fail(p, "scales=%s invalid; use fixed, free_x, free_y, or free", v);
+            } else return fail(p, "facet_wrap() option `%s` not implemented; "
+                               "supported: levels=c(...), scales=", key);
             free(key);
-            if (parse_levels(p, &spec->facet_levels, &spec->n_facet_levels)) return -1;
+            skip_ws(p);
         }
         return expect(p, ')');
     }

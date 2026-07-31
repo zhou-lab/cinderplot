@@ -322,6 +322,7 @@ typedef struct {
     int no_legend;                  /* guides(colour="none"|fill="none") or --no-legend */
     char *facet_var;
     char **facet_levels; int n_facet_levels;      /* facet_wrap(~v, levels=c(...)) */
+    int free_x, free_y;                           /* facet_wrap(scales=): per-panel ranges */
     char *lab_title, *lab_x, *lab_y, *lab_colour, *lab_fill;
     char *lab_subtitle, *lab_caption;             /* labs(subtitle=, caption=) */
     /* scale_colour/fill_manual(values=): discrete palette override */

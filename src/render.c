@@ -641,6 +641,15 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             && factor_relevel(ff, df->nrow, spec->facet_levels,
                               spec->n_facet_levels, "facet_wrap()", err)) return -1;
     }
+    /* The parser accepts scales=, but the renderer still trains one range for
+     * the whole figure. Say so rather than drawing fixed panels and letting the
+     * caller believe the request landed -- a silently ignored option is the one
+     * failure this tool must not have. */
+    if ((spec->free_x || spec->free_y) && ff) {
+        snprintf(err, CP_ERRLEN, "facet_wrap(scales=) is not implemented yet; "
+                 "every panel currently shares one range");
+        return -1;
+    }
 
     /* ---- usable rows (NA and log-domain filtering) ---- */
     int *use = cp_xmalloc(df->nrow * sizeof(int)), nuse = 0, d_na = 0, d_log = 0;
