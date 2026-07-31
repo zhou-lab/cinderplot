@@ -43,7 +43,7 @@ cinderplot data.csv -x hp -y mpg -c cyl -f gear out.pdf      # shortcut flags
   source. So a grid of panels is `f1.tsv + heatmap(name="a") +
   heatmap(data="f2.tsv", right_of("a"), name="b")`.
 
-## Three modes, chosen by which verbs appear
+## Four modes, chosen by which verbs appear
 
 Mixing them is an error. The distinction is the data model, not the appearance.
 
@@ -115,6 +115,8 @@ Clustering is hclust ward.D2, matching R. `annotation()` takes `column=` to pick
 which column colours the bar (default: the last). An annotation may be anchored
 by its data column name, e.g. `legend(right_of("diagnosis"))`.
 
+`labs(x=)`/`labs(y=)` name the axes; `labs(title=)` titles the figure.
+
 `box=on` frames the cells and only the cells — the row/column names stay outside
 it. `box="grey40"` sets the colour and implies on. Off by default; works on
 `heatmap()` and `annotation()`. (`matrix()` tracks are always framed.)
@@ -130,7 +132,20 @@ claims are appended in input order.
 The heatmap's own fill is **continuous only** — for a categorical grid use
 `geom_tile()` in grammar mode, which takes a discrete fill and a keyed legend.
 
-### 3. Genome locus browser — stacked tracks over one or more windows
+### 3. Newick tree — a hierarchy you already have
+
+```sh
+cinderplot 'taxonomy.tre + geom_tree() + geom_tiplab() + geom_nodelab()' tree.pdf
+```
+
+Input is **Newick**, not a table: `((a,b)AB,(c,d)CD)root;`. Branch lengths are
+used when present, otherwise x is depth (a cladogram). `geom_tiplab()` draws the
+leaf names, `geom_nodelab()` the internal ones. Layout is rectangular; omitting
+`--size` fits one readable row per tip. Not implemented yet, and each says so:
+`layout=circular|slanted`, and joining an external table on tip name
+(`geom_tiplab(data=..., colour=...)`).
+
+### 4. Genome locus browser — stacked tracks over one or more windows
 
 ```sh
 cinderplot 'region("chr20:44616522-44655233")

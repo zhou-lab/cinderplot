@@ -1,0 +1,293 @@
+/* tree.c — Newick trees, drawn ggtree-style.
+ *
+ * The other three modes all build their structure from a table. A tree arrives
+ * already built, in a format that carries the topology itself, so this mode
+ * reads Newick rather than CSV and lays it out directly. That is the point of
+ * having it: a curated ontology -- a cell-type taxonomy, a term hierarchy -- is
+ * a structure the user already has, and drawing it should not require a Python
+ * tree library plus a plotting library.
+ *
+ * Layout is rectangular, the shape that reads as a taxonomy: leaves stack down
+ * the y axis in the order they appear, an internal node sits at the mean of its
+ * children, and x is depth (or cumulative branch length when the Newick carries
+ * one). Connectors are elbows -- a vertical spine at the parent's x spanning
+ * its children, then a horizontal arm out to each child.
+ */
+#include "cinderplot.h"
+#include <ctype.h>
+#include <math.h>
+#include <string.h>
+
+/* Local copies: the equivalents in render_tracks.c are file-static, and one
+ * small helper each is cheaper than exporting them for a second caller. */
+static double text_w(cairo_t *cr, double size, const char *s) {
+    cairo_text_extents_t te;
+    cairo_set_font_size(cr, size);
+    cairo_text_extents(cr, s ? s : "", &te);
+    return te.x_advance;
+}
+static double font_h(cairo_t *cr, double size) {
+    cairo_font_extents_t fe;
+    cairo_set_font_size(cr, size);
+    cairo_font_extents(cr, &fe);
+    return fe.ascent + fe.descent;
+}
+
+/* Slurp the whole input; a Newick tree is one line and always small. */
+static char *read_all(const char *path, char *err) {
+    FILE *f = !strcmp(path, "-") ? stdin : fopen(path, "rb");
+    if (!f) { snprintf(err, CP_ERRLEN, "cannot open %s", path); return NULL; }
+    size_t cap = 1 << 14, n = 0;
+    char *buf = cp_xmalloc(cap);
+    for (;;) {
+        if (n + 4096 > cap) { cap *= 2; buf = cp_xrealloc(buf, cap); }
+        size_t got = fread(buf + n, 1, 4096, f);
+        n += got;
+        if (got < 4096) break;
+    }
+    if (f != stdin) fclose(f);
+    buf[n] = 0;
+    return buf;
+}
+
+typedef struct TNode {
+    char *name;                 /* may be NULL: Newick allows unnamed nodes */
+    double blen;                /* branch length to parent; NAN when absent */
+    struct TNode **kid; int nkid, kidcap;
+    double x, y;                /* laid-out position, data space */
+} TNode;
+
+static TNode *tn_new(void) {
+    TNode *t = cp_xcalloc(1, sizeof *t);
+    t->blen = NAN;
+    return t;
+}
+
+static void tn_push(TNode *p, TNode *c) {
+    if (p->nkid == p->kidcap) {
+        p->kidcap = p->kidcap ? p->kidcap * 2 : 4;
+        p->kid = cp_xrealloc(p->kid, p->kidcap * sizeof *p->kid);
+    }
+    p->kid[p->nkid++] = c;
+}
+
+/* A Newick name runs to the next structural character. Quoted names may hold
+ * those characters, and underscores are spaces by the format's convention --
+ * but a curated ontology uses underscores deliberately, so they are left as
+ * typed and only quoting is honoured. */
+static char *nw_name(const char **s) {
+    const char *p = *s;
+    while (isspace((unsigned char)*p)) p++;
+    if (*p == '\'' || *p == '"') {
+        char q = *p++;
+        const char *b = p;
+        while (*p && *p != q) p++;
+        char *out = strndup(b, p - b);
+        if (*p == q) p++;
+        *s = p;
+        return out;
+    }
+    const char *b = p;
+    while (*p && !strchr("(),:;[]", *p)) p++;
+    while (p > b && isspace((unsigned char)p[-1])) p--;   /* trailing space */
+    if (p == b) { *s = p; return NULL; }
+    char *out = strndup(b, p - b);
+    *s = p;
+    return out;
+}
+
+static TNode *nw_node(const char **s, char *err);
+
+static int nw_children(const char **s, TNode *parent, char *err) {
+    (*s)++;                                     /* '(' */
+    for (;;) {
+        TNode *c = nw_node(s, err);
+        if (!c) return -1;
+        tn_push(parent, c);
+        while (isspace((unsigned char)**s)) (*s)++;
+        if (**s == ',') { (*s)++; continue; }
+        if (**s == ')') { (*s)++; return 0; }
+        snprintf(err, CP_ERRLEN, "malformed Newick: expected , or ) near \"%.20s\"", *s);
+        return -1;
+    }
+}
+
+static TNode *nw_node(const char **s, char *err) {
+    while (isspace((unsigned char)**s)) (*s)++;
+    TNode *t = tn_new();
+    if (**s == '(') {
+        if (nw_children(s, t, err)) return NULL;
+    }
+    t->name = nw_name(s);
+    while (isspace((unsigned char)**s)) (*s)++;
+    if (**s == ':') {                            /* branch length */
+        (*s)++;
+        char *end;
+        t->blen = strtod(*s, &end);
+        if (end == *s) {
+            snprintf(err, CP_ERRLEN, "malformed Newick: bad branch length near \"%.20s\"", *s);
+            return NULL;
+        }
+        *s = end;
+    }
+    return t;
+}
+
+static TNode *newick_parse(const char *text, char *err) {
+    const char *s = text;
+    while (isspace((unsigned char)*s)) s++;
+    if (!*s) { snprintf(err, CP_ERRLEN, "Newick input is empty"); return NULL; }
+    TNode *root = nw_node(&s, err);
+    if (!root) return NULL;
+    while (isspace((unsigned char)*s)) s++;
+    if (*s == ';') s++;
+    while (isspace((unsigned char)*s)) s++;
+    if (*s) {
+        snprintf(err, CP_ERRLEN, "trailing text after the Newick tree: \"%.20s\"", s);
+        return NULL;
+    }
+    return root;
+}
+
+static int tn_leaf(const TNode *t) { return t->nkid == 0; }
+
+/* Depth-first, assigning each leaf the next y. An internal node then sits at
+ * the mean of its children, which is what makes a rectangular tree read as a
+ * hierarchy rather than a tangle. x is depth, or the cumulative branch length
+ * when the file carries lengths. */
+static void layout(TNode *t, double px, int has_blen, double *next_y,
+                   double *maxx, int *nleaf) {
+    t->x = has_blen ? px + (isnan(t->blen) ? 0 : t->blen) : px + 1;
+    if (t->x > *maxx) *maxx = t->x;
+    if (tn_leaf(t)) {
+        t->y = (*next_y)++;
+        (*nleaf)++;
+        return;
+    }
+    for (int i = 0; i < t->nkid; i++)
+        layout(t->kid[i], t->x, has_blen, next_y, maxx, nleaf);
+    t->y = (t->kid[0]->y + t->kid[t->nkid - 1]->y) / 2;
+}
+
+static int has_lengths(const TNode *t) {
+    if (!isnan(t->blen)) return 1;
+    for (int i = 0; i < t->nkid; i++) if (has_lengths(t->kid[i])) return 1;
+    return 0;
+}
+
+/* widest tip / node label, for the margin they need */
+static double label_w(cairo_t *cr, const TNode *t, int tips, double sz) {
+    double w = 0;
+    if (t->name && (tn_leaf(t) == !!tips)) w = text_w(cr, sz, t->name);
+    for (int i = 0; i < t->nkid; i++) {
+        double k = label_w(cr, t->kid[i], tips, sz);
+        if (k > w) w = k;
+    }
+    return w;
+}
+
+static void emit(GTable *T, int R, int C, const TNode *t, const PlotSpec *spec,
+                 double x0, double x1, double y0, double y1, double lw) {
+#define TX(v) (((v) - x0) / (x1 - x0))
+#define TY(v) (1.0 - ((v) - y0) / (y1 - y0))
+    Grob *g;
+    if (!tn_leaf(t)) {
+        /* the spine, spanning the first child to the last at this node's x */
+        g = gt_add(T, G_LINE, R, C, R, C);
+        g->col = C_BLACK; g->lw = lw; g->clip = 1;
+        g->x0 = g->x1 = TX(t->x);
+        g->y0 = TY(t->kid[0]->y); g->y1 = TY(t->kid[t->nkid - 1]->y);
+        for (int i = 0; i < t->nkid; i++) {      /* an arm out to each child */
+            const TNode *c = t->kid[i];
+            g = gt_add(T, G_LINE, R, C, R, C);
+            g->col = C_BLACK; g->lw = lw; g->clip = 1;
+            g->x0 = TX(t->x); g->x1 = TX(c->x);
+            g->y0 = g->y1 = TY(c->y);
+        }
+    }
+    if (t->name) {
+        int leaf = tn_leaf(t);
+        if (leaf ? spec->tree_tiplab : spec->tree_nodelab) {
+            g = gt_add(T, G_TEXT, R, C, R, C);
+            g->str = t->name; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
+            /* A tip label reads outward from its tip; an internal label would
+             * sit on top of the spine, so it goes just above its own node. */
+            g->tx = TX(t->x) + (leaf ? 0.006 : 0);
+            g->ty = TY(t->y) + (leaf ? 0 : 0.004);
+            g->hj = leaf ? 0 : 0.5;
+            g->va = leaf ? V_INKCENTER : V_BOTTOM;
+        }
+    }
+    for (int i = 0; i < t->nkid; i++)
+        emit(T, R, C, t->kid[i], spec, x0, x1, y0, y1, lw);
+#undef TX
+#undef TY
+}
+
+int render_tree(const PlotSpec *spec, const char *out,
+                double w_pt, double h_pt, char *err) {
+    char *text = read_all(spec->data_path, err);
+    if (!text) return -1;
+    TNode *root = newick_parse(text, err);
+    if (!root) return -1;
+
+    int has_blen = has_lengths(root);
+    double next_y = 0, maxx = 0;
+    int nleaf = 0;
+    layout(root, 0, has_blen, &next_y, &maxx, &nleaf);
+    if (nleaf < 1) { snprintf(err, CP_ERRLEN, "the tree has no tips"); return -1; }
+
+    cairo_surface_t *msurf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 8, 8);
+    cairo_t *cr = cairo_create(msurf);
+    cairo_select_font_face(cr, FONT_FAMILY, CAIRO_FONT_SLANT_NORMAL,
+                           CAIRO_FONT_WEIGHT_NORMAL);
+    double tipw = spec->tree_tiplab ? label_w(cr, root, 1, SZ_AXIS_TEXT) : 0;
+    double labh = font_h(cr, SZ_AXIS_TEXT);
+
+    /* Auto-fit: one readable row per tip, and enough width that the branching
+     * is legible next to however long the tip labels are. */
+    if (h_pt <= 0) h_pt = fmin(60.0 * 72, fmax(2.0 * 72,
+                          2 * MARGIN + nleaf * labh * 1.25));
+    if (w_pt <= 0) w_pt = fmin(30.0 * 72, fmax(3.0 * 72,
+                          2 * MARGIN + tipw + fmax(120.0, maxx * 26.0)));
+    cairo_destroy(cr); cairo_surface_destroy(msurf);
+
+    cairo_surface_t *surf = cp_surface_create(out, w_pt, h_pt);
+    cr = cairo_create(surf);
+    cairo_select_font_face(cr, FONT_FAMILY, CAIRO_FONT_SLANT_NORMAL,
+                           CAIRO_FONT_WEIGHT_NORMAL);
+
+    GTable *T = cp_xcalloc(1, sizeof *T);
+    T->ncol = 3;
+    T->colw[0] = upt(MARGIN);
+    T->colw[1] = unull(1);
+    T->colw[2] = upt(MARGIN + tipw);      /* room for the tip labels */
+    T->nrow = 3;
+    T->rowh[0] = upt(MARGIN + (spec->lab_title ? font_h(cr, SZ_TITLE) : 0));
+    T->rowh[1] = unull(1);
+    T->rowh[2] = upt(MARGIN);
+    const int R = 1, C = 1;
+
+    if (spec->lab_title) {
+        Grob *g = gt_add(T, G_TEXT, 0, C, 0, C);
+        g->str = spec->lab_title; g->size = SZ_TITLE; g->col = C_BLACK;
+        g->tx = 0; g->ty = 1; g->hj = 0; g->va = V_TOP;
+    }
+
+    /* Half a row of padding top and bottom so the first and last tips are not
+     * flush against the panel edge. */
+    double y0 = -0.5, y1 = (nleaf - 1) + 0.5;
+    double x0 = 0, x1 = maxx > 0 ? maxx : 1;
+    emit(T, R, C, root, spec, x0, x1, y0, y1, lw_pt(0.5));
+
+    gt_resolve(T, 0, 0, w_pt, h_pt);
+    gt_render(T, cr);
+    cairo_destroy(cr);
+    cairo_status_t st = cp_surface_emit(surf, out);
+    cairo_surface_destroy(surf);
+    if (st != CAIRO_STATUS_SUCCESS) {
+        snprintf(err, CP_ERRLEN, "could not write %s: %s", out, cairo_status_to_string(st));
+        return -1;
+    }
+    return 0;
+}

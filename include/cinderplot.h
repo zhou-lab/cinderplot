@@ -325,6 +325,7 @@ typedef struct {
     char **facet_levels; int n_facet_levels;      /* facet_wrap(~v, levels=c(...)) */
     int free_x, free_y;                           /* facet_wrap(scales=): per-panel ranges */
     double x_angle, y_angle;                      /* scale_*_discrete(angle=); <0 = auto */
+    int tree_mode, tree_tiplab, tree_nodelab;     /* geom_tree()/geom_tiplab()/geom_nodelab() */
     char *lab_title, *lab_x, *lab_y, *lab_colour, *lab_fill;
     char *lab_subtitle, *lab_caption;             /* labs(subtitle=, caption=) */
     /* scale_colour/fill_manual(values=): discrete palette override */
@@ -393,5 +394,9 @@ typedef struct {
 } Matrix;
 int render_heatmap(const PlotSpec *spec, const char *out,
                    double w_pt, double h_pt, char *err);
+
+/* ---------- tree.c: Newick trees, ggtree-style ---------- */
+int render_tree(const PlotSpec *spec, const char *out,
+                double w_pt, double h_pt, char *err);
 
 #endif

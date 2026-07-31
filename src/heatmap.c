@@ -817,9 +817,16 @@ int render_heatmap(const PlotSpec *spec, const char *out,
     cr = cairo_create(surf);
     cairo_select_font_face(cr, FONT_FAMILY, CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
 
+    /* labs(x=)/labs(y=) name the two axes. They ride inside the existing left
+     * and bottom margins rather than getting rows of their own, because the
+     * legend code addresses the canvas as T->nrow - 2 and shifting the grid
+     * would silently move it. */
+    double xtitle_h = spec->lab_x && *spec->lab_x ? baseH + HALF_LINE / 2 : 0;
+    double ytitle_w = spec->lab_y && *spec->lab_y ? baseH + HALF_LINE / 2 : 0;
+
     GTable *T = cp_xcalloc(1, sizeof(GTable));
     T->ncol = 3;
-    T->colw[0] = upt(marL);
+    T->colw[0] = upt(marL + ytitle_w);
     T->colw[1] = unull(1);
     T->colw[2] = upt(marR);
     T->nrow = 5;
@@ -827,12 +834,12 @@ int render_heatmap(const PlotSpec *spec, const char *out,
     T->rowh[1] = upt(titleh);
     T->rowh[2] = upt(titlegap);
     T->rowh[3] = unull(1);                         /* canvas */
-    T->rowh[4] = upt(marB);
+    T->rowh[4] = upt(marB + xtitle_h);
     const int CR = 3, CC = 1;                      /* canvas cell */
 
     /* final canvas cell size in pt, for pt->npc conversions inside it */
-    double cw_pt = w_pt - marL - marR;
-    double ch_pt = h_pt - marT - titleh - titlegap - marB;
+    double cw_pt = w_pt - marL - ytitle_w - marR;
+    double ch_pt = h_pt - marT - titleh - titlegap - marB - xtitle_h;
 #define PTX(pt) ((pt) / cw_pt)
 #define PTY(pt) ((pt) / ch_pt)
 
@@ -841,6 +848,18 @@ int render_heatmap(const PlotSpec *spec, const char *out,
         g = gt_add(T, G_TEXT, 1, CC, 1, CC);
         g->str = spec->lab_title; g->size = SZ_TITLE; g->col = C_BLACK;
         g->tx = 0; g->ty = 1; g->hj = 0; g->va = V_TOP;
+    }
+    if (xtitle_h > 0) {          /* under the column labels, in the bottom margin */
+        g = gt_add(T, G_TEXT, 4, CC, 4, CC);
+        g->str = spec->lab_x; g->size = SZ_BASE; g->col = C_BLACK;
+        g->tx = 0.5; g->ty = 0; g->hj = 0.5; g->va = V_BOTTOM;
+    }
+    if (ytitle_w > 0) {          /* rotated, left of the row labels */
+        g = gt_add(T, G_TEXT, CR, 0, CR, 0);
+        g->str = spec->lab_y; g->size = SZ_BASE; g->col = C_BLACK; g->rot90 = 1;
+        /* rot90 centres on tx, and this cell is marL wide plus the title, so
+         * centre it within its own share or half the glyphs fall outside. */
+        g->tx = (ytitle_w * 0.5) / (marL + ytitle_w); g->ty = 0.5;
     }
 
     /* ---- interior gutters: label bands drawn BETWEEN two placed objects ----

@@ -807,6 +807,40 @@ static int parse_term(P *p, PlotSpec *spec) {
         spec->coord_flip = 1;
         return expect(p, ')');
     }
+    if (!strcmp(name, "geom_tree") || !strcmp(name, "geom_tiplab")
+        || !strcmp(name, "geom_nodelab")) {
+        if (!strcmp(name, "geom_tree")) spec->tree_mode = 1;
+        else if (!strcmp(name, "geom_tiplab")) spec->tree_tiplab = 1;
+        else spec->tree_nodelab = 1;
+        skip_ws(p);
+        while (*p->s != ')') {
+            char *key = ident(p);
+            if (!key || expect(p, '='))
+                return fail(p, "%s() takes key=value arguments", name);
+            skip_ws(p);
+            if (!strcmp(key, "layout")) {
+                char *v = string_lit(p);
+                if (!v) v = ident(p);
+                if (!v) return fail(p, "layout= expects rectangular", "");
+                if (strcmp(v, "rectangular"))
+                    return fail(p, "geom_tree(layout=%s) is not implemented; "
+                                "only rectangular so far", v);
+            } else if (!strcmp(key, "data") || !strcmp(key, "colour")
+                    || !strcmp(key, "color")) {
+                /* Joining an external table on tip name is the feature that
+                 * makes a tree analytical rather than decorative, and it is not
+                 * built yet. Say so rather than drawing an uncoloured tree that
+                 * looks like it worked. */
+                return fail(p, "geom_tiplab(%s=) is not implemented yet; a tree "
+                            "cannot be joined to an external table", key);
+            } else return fail(p, "tree geom option `%s` not implemented; "
+                               "supported: layout=", key);
+            free(key);
+            skip_ws(p);
+            if (*p->s == ',') { p->s++; skip_ws(p); }
+        }
+        return expect(p, ')');
+    }
     if (!strcmp(name, "scale_x_discrete") || !strcmp(name, "scale_y_discrete")) {
         int isx = name[6] == 'x';
         skip_ws(p);
@@ -1052,6 +1086,14 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
             return fail(&p, "the first placed object must be a heatmap()", "");
         return 0;
     }
+    if (spec->tree_mode) {          /* tree mode: the topology is the data */
+        if (spec->nlayers || spec->x.col || spec->nhobjs || spec->ntracks)
+            return fail(&p, "geom_tree() cannot be mixed with aes()/geom_*, "
+                        "heatmap() or the track verbs", "");
+        return 0;
+    }
+    if (spec->tree_tiplab || spec->tree_nodelab)
+        return fail(&p, "geom_tiplab()/geom_nodelab() need a geom_tree()", "");
     if (spec->nlayers == 0)
         return fail(&p, "no geom given; add e.g. + geom_point()", "");
     int nstat = 0, nref = 0;   /* stats compute y; reference lines are overlays */

@@ -228,6 +228,14 @@ int main(int argc, char **argv) {
         fprintf(stderr, "wrote %s\n", out);
         return 0;
     }
+    if (spec.tree_mode) {                        /* Newick tree mode */
+        if (render_tree(&spec, out, w_pt, h_pt, err)) {
+            fprintf(stderr, "cinderplot: %s\n", err);
+            return 1;
+        }
+        fprintf(stderr, "wrote %s\n", out);
+        return 0;
+    }
     if (spec.nhobjs > 0) {                       /* matrix (wheatmap) mode */
         if (render_heatmap(&spec, out, w_pt, h_pt, err)) {
             fprintf(stderr, "cinderplot: %s\n", err);
