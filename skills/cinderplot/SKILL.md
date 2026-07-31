@@ -28,7 +28,7 @@ cinderplot data.csv -x hp -y mpg -c cyl -f gear out.pdf      # shortcut flags
 - Quote the whole expression in **single** quotes; string literals inside it use
   double quotes. Newlines inside the expression are fine.
 - `--size WxH` in inches. A partial `9x` or `x7` auto-fits the other axis.
-  Grammar mode defaults to 6x4; heatmap and track modes size themselves.
+  Omit it entirely and every mode fits the canvas to its own content.
 - `--dump-spec` prints the desugared expression without rendering.
 - The delimiter is **sniffed from the first line** — a tab anywhere means TSV,
   otherwise CSV. The extension is ignored, except that `.gz` (gzip or bgzip) is
@@ -77,9 +77,25 @@ and ignored (the output path is a command-line argument here).
   limits=)` `xlim()` `ylim()` `scale_*_manual(values=c(...))`
   `scale_(fill|colour)_(viridis|jet|parula|bwr|gradient|gradient2)()`,
   `scale_x_genome("seqinfo.tsv.gz")`, `ideogram("cytoband.tsv.gz")`.
-- **also**: `facet_wrap(~v[, levels=c(...)])`, `coord_flip()`, `guides(colour="none")`
+- **also**: `facet_wrap(~v[, levels=c(...)][, scales=])`, `coord_flip()`, `guides(colour="none")`
   (or `--no-legend`), `labs()`/`xlab()`/`ylab()`/`ggtitle()`, and
   `theme_{gray,bw,minimal,classic,void,linedraw,light,dark,few}()`.
+
+`facet_wrap(scales=)` takes `fixed` (default), `free_x`, `free_y`, `free`. A
+freed axis is trained per panel; the axis you did not free stays shared. On a
+discrete axis a panel drops the categories it has no rows for and renumbers the
+rest, so column 3 means a different thing in each panel — that is ggplot2's
+`drop = TRUE`. Histograms re-bin per panel under `free_x`, so bin widths differ
+between panels. `scale_x_genome()` cannot be freed (use `regions()` in track
+mode for several windows).
+
+Crowded discrete tick labels **rotate automatically** (45°, then 90°) when the
+measured labels do not fit the panel. Override with `scale_x_discrete(angle=N)`
+or `scale_y_discrete(angle=N)`, `0..90`; `angle=0` forces horizontal.
+
+There is **no category limit** on a discrete axis. Omitting `--size` fits the
+canvas to the figure (panels, categories, label lengths) rather than defaulting
+to 6x4; an explicit `--size` is always honoured as given.
 
 ### 2. Heatmap — a matrix with clustering, anchor-placed objects
 
