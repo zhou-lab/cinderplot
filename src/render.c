@@ -414,6 +414,28 @@ static double tile_step(const DataFrame *df, const int *use, const Factor *ff,
     return (hi > lo) ? (hi - lo) : 1.0;      /* one distinct value: unit cell */
 }
 
+/* One panel's axes: the trained range, its breaks, and everything derived from
+ * them. With facet_wrap(scales="fixed") every panel points at one shared
+ * instance, which is what keeps a fixed figure byte-identical to before free
+ * scales existed; with free scales each panel owns one.
+ *
+ * The break arrays are heap, not the fixed [40] buffers they replace. That is
+ * what lifts the 40-category limit on a discrete axis: the cap only ever
+ * existed because the axis buffers could not hold more. */
+typedef struct {
+    double x0, x1, y0, y1;               /* expanded range, transformed space */
+    double *xbr, *ybr;   int nxbr, nybr; /* break positions, data space */
+    char  **xlabs, **ylabs;              /* their labels */
+    double *xnpc, *ynpc;                 /* the same breaks, panel npc */
+    double *xmin_br, *ymin_br; int nxmin, nymin;   /* minor breaks */
+    double *xlt_pos, *xlt_len; int xlt_n;          /* log tick marks */
+    double *ylt_pos, *ylt_len; int ylt_n;
+    /* discrete free scales: global factor level -> slot in this panel, or -1.
+     * NULL when the panel shows every level, which is always so under fixed. */
+    int *xmap, *ymap; int nxlev, nylev;
+    int shared;                          /* 1 = the fixed-scale instance */
+} PanelScale;
+
 int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 double w_pt, double h_pt, char *err) {
     /* ---- layer summary ---- */
@@ -733,8 +755,13 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
 #define TY(v) (spec->log_y ? log10(v) : (v))
 /* transformed x for row r: category position (discrete), genome offset+pos
  * (genome), or raw value (continuous) */
-#define YVAL(r) (disc_y ? (double)(yf->idx[r] + 1) : yc->num[r])
-#define XVAL(r) (disc_x ? (double)(xf->idx[r] + 1) \
+/* Discrete free scales renumber the categories a panel actually shows, so a
+ * level's position depends on which panel is drawn. xmap/ymap carry that
+ * renumbering (global level -> slot in this panel); NULL means the panel shows
+ * every level, which is always the case under fixed scales. */
+    const int *xmap = NULL, *ymap = NULL;
+#define YVAL(r) (disc_y ? (double)((ymap ? ymap[yf->idx[r]] : yf->idx[r]) + 1) : yc->num[r])
+#define XVAL(r) (disc_x ? (double)((xmap ? xmap[xf->idx[r]] : xf->idx[r]) + 1) \
                : genome_x ? (roff[r] + xc->num[r]) : xc->num[r])
 #define TXR(r)  (spec->log_x ? log10(XVAL(r)) : XVAL(r))
 /* genome offset applied to any within-chromosome position (e.g. xend) */
@@ -1076,6 +1103,25 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 }
             }
 
+    /* ---- gather the trained range and its breaks into the shared panel scale.
+     * Under facet_wrap(scales="fixed") -- every figure today -- all panels point
+     * at this one instance, so the panel loop reads it exactly as it read the
+     * loose variables before, and the output is unchanged. Free scales replace
+     * individual entries with panel-specific ones. ---- */
+    PanelScale shared = {0};
+    shared.x0 = x0; shared.x1 = x1; shared.y0 = y0; shared.y1 = y1;
+    shared.xbr = xbr; shared.nxbr = nxbr; shared.xlabs = xlabs; shared.xnpc = xnpc;
+    shared.ybr = ybr; shared.nybr = nybr; shared.ylabs = ylabs; shared.ynpc = ynpc;
+    shared.xmin_br = xmin_br; shared.nxmin = nxmin;
+    shared.ymin_br = ymin_br; shared.nymin = nymin;
+    shared.xlt_pos = xlt_pos; shared.xlt_len = xlt_len; shared.xlt_n = xlt_n;
+    shared.ylt_pos = ylt_pos; shared.ylt_len = ylt_len; shared.ylt_n = ylt_n;
+    shared.nxlev = disc_x ? xf->nlev : 0;
+    shared.nylev = disc_y ? yf->nlev : 0;
+    shared.shared = 1;
+    PanelScale *ps = cp_xmalloc(npan * sizeof(PanelScale));
+    for (int p = 0; p < npan; p++) ps[p] = shared;
+
     /* ---- geom_col bar width: 0.9 x min gap between distinct x ---- */
     double colw = 0.9;
     if (hascol) {
@@ -1264,6 +1310,12 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     for (int p = 0; p < npan; p++) {
         int pr = p / ncolp, pc = p % ncolp;
         int R = PR(pr), C = PC(pc);
+        /* Point the range at this panel. NPCX/NPCY read x0..y1, so every
+         * coordinate mapping below follows the panel without being told. Under
+         * fixed scales these are the values they already had. */
+        const PanelScale *S = &ps[p];
+        x0 = S->x0; x1 = S->x1; y0 = S->y0; y1 = S->y1;
+        xmap = S->xmap; ymap = S->ymap;
 
         if (ff) {
             if (th->strip_bg_on) { g = gt_add(T, G_RECT, SR(pr), C, SR(pr), C); g->col = th->strip_bg; }
@@ -1276,27 +1328,27 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                                   /* under coord_flip these get transposed below */
         if (th->panel_bg_on) { g = gt_add(T, G_RECT, R, C, R, C); g->col = th->panel_bg; }
         if (th->grid_minor_on) {
-            for (int i = 0; i < nxmin; i++) {
+            for (int i = 0; i < S->nxmin; i++) {
                 g = gt_add(T, G_LINE, R, C, R, C);
                 g->col = th->grid_minor; g->lw = lw_pt(th->grid_minor_lw); g->clip = 1;
-                g->x0 = g->x1 = NPCX(xmin_br[i]); g->y0 = 0; g->y1 = 1;
+                g->x0 = g->x1 = NPCX(S->xmin_br[i]); g->y0 = 0; g->y1 = 1;
             }
-            for (int i = 0; i < nymin; i++) {
+            for (int i = 0; i < S->nymin; i++) {
                 g = gt_add(T, G_LINE, R, C, R, C);
                 g->col = th->grid_minor; g->lw = lw_pt(th->grid_minor_lw); g->clip = 1;
-                g->y0 = g->y1 = NPCY(ymin_br[i]); g->x0 = 0; g->x1 = 1;
+                g->y0 = g->y1 = NPCY(S->ymin_br[i]); g->x0 = 0; g->x1 = 1;
             }
         }
         if (th->grid_major_on) {
-            for (int i = 0; i < nxbr; i++) {
+            for (int i = 0; i < S->nxbr; i++) {
                 g = gt_add(T, G_LINE, R, C, R, C);
                 g->col = th->grid_major; g->lw = lw_pt(th->grid_major_lw); g->clip = 1;
-                g->x0 = g->x1 = xnpc[i]; g->y0 = 0; g->y1 = 1;
+                g->x0 = g->x1 = S->xnpc[i]; g->y0 = 0; g->y1 = 1;
             }
-            for (int i = 0; i < nybr; i++) {
+            for (int i = 0; i < S->nybr; i++) {
                 g = gt_add(T, G_LINE, R, C, R, C);
                 g->col = th->grid_major; g->lw = lw_pt(th->grid_major_lw); g->clip = 1;
-                g->y0 = g->y1 = ynpc[i]; g->x0 = 0; g->x1 = 1;
+                g->y0 = g->y1 = S->ynpc[i]; g->x0 = 0; g->x1 = 1;
             }
         }
         if (th->border_on) {                          /* bw / linedraw / light / few */
@@ -1314,16 +1366,16 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         /* annotation_logticks: log ticks inside the panel, growing from the
          * bottom (x) / left (y) edge; lengths converted from points to npc */
         if (spec->log_x && panelh_pt > 0)
-            for (int i = 0; i < xlt_n; i++) {
+            for (int i = 0; i < S->xlt_n; i++) {
                 g = gt_add(T, G_LINE, R, C, R, C);
                 g->col = C_TICK; g->lw = lw_pt(0.5); g->clip = 1;
-                g->x0 = g->x1 = xlt_pos[i]; g->y0 = 0; g->y1 = xlt_len[i] / panelh_pt;
+                g->x0 = g->x1 = S->xlt_pos[i]; g->y0 = 0; g->y1 = S->xlt_len[i] / panelh_pt;
             }
         if (spec->log_y && panelw_pt > 0)
-            for (int i = 0; i < ylt_n; i++) {
+            for (int i = 0; i < S->ylt_n; i++) {
                 g = gt_add(T, G_LINE, R, C, R, C);
                 g->col = C_TICK; g->lw = lw_pt(0.5); g->clip = 1;
-                g->y0 = g->y1 = ylt_pos[i]; g->x0 = 0; g->x1 = ylt_len[i] / panelw_pt;
+                g->y0 = g->y1 = S->ylt_pos[i]; g->x0 = 0; g->x1 = S->ylt_len[i] / panelw_pt;
             }
 
         /* layers, in spec order */
