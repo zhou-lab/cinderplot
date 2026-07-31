@@ -168,7 +168,12 @@ cinderplot 'tax.tre + geom_tree()
 
 `geom_tippoint()` does the same at the tips. Input is **long form**: several
 rows for one name draw several marks stacked back along its branch, so a node
-belonging to three categories shows three dots. Names with no row simply get no mark.
+belonging to three categories shows three dots. Names with no row get no mark.
+
+**The joined name must identify exactly one node.** If a name the table
+references occurs on more than one node, the join errors instead of matching all
+of them — every node called `A` matching every `A` row produces a figure that
+reads as correct and is not. A repeated name the table never mentions is fine.
 
 
 ### 4. Genome locus browser — stacked tracks over one or more windows

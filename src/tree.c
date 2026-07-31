@@ -302,6 +302,39 @@ static int join_load(Join *j, const char *path, const char *colname,
     return 0;
 }
 
+/* Count the nodes carrying `name`, tips or internal. */
+static int count_named(const TNode *t, const char *name, int leaves) {
+    int n = (t->name && !strcmp(t->name, name) && (tn_leaf(t) == !!leaves)) ? 1 : 0;
+    for (int i = 0; i < t->nkid; i++) n += count_named(t->kid[i], name, leaves);
+    return n;
+}
+
+/* A name-keyed join is ambiguous the moment a name is not unique: every node
+ * called A matches every row for A, which is what a name join means and never
+ * what anybody wants. Any tie-break -- first match, by depth, all matches --
+ * would be a guess at intent, so refuse and name the offender. The repeated
+ * name is usually a defect in the tree anyway. */
+static int join_check_unique(const Join *j, const TNode *root, int leaves,
+                             char *err) {
+    if (!j->df) return 0;
+    for (int r = 0; r < j->df->nrow; r++) {
+        const char *nm = j->key->str[r];
+        if (!nm) continue;
+        int seen = 0;                       /* only report each name once */
+        for (int q = 0; q < r; q++)
+            if (j->key->str[q] && !strcmp(j->key->str[q], nm)) { seen = 1; break; }
+        if (seen) continue;
+        int n = count_named(root, nm, leaves);
+        if (n > 1) {
+            snprintf(err, CP_ERRLEN, "`%s` names %d %s in the tree, so the join "
+                     "is ambiguous; make the names unique", nm, n,
+                     leaves ? "tips" : "internal nodes");
+            return -1;
+        }
+    }
+    return 0;
+}
+
 /* Colours for one name, in table order; returns how many rows matched. */
 static int join_lookup(const Join *j, const char *name, Col *out, int cap) {
     if (!j->df || !name) return 0;
@@ -322,7 +355,7 @@ static int join_lookup(const Join *j, const char *name, Col *out, int cap) {
 static void emit(GTable *T, int R, int C, const TNode *t, const PlotSpec *spec,
                  double x0, double x1, double y0, double y1, double lw, int root,
                  const Join *jnode, const Join *jtip, const Join *jlab,
-                 double aspect, double rmax) {
+                 double aspect, double rmax, double cellw) {
 #define TX(v) (((v) - x0) / (x1 - x0))
 #define TY(v) (1.0 - ((v) - y0) / (y1 - y0))
 /* Circular: the same (depth, leaf-index) layout read as (radius, angle). The
@@ -437,7 +470,11 @@ static void emit(GTable *T, int R, int C, const TNode *t, const PlotSpec *spec,
                     px[k] = 0.5 + rr * cos(a) * kx;
                     py[k] = 0.5 + rr * sin(a) * ky;
                 } else {
-                    px[k] = TX(t->x) - k * (PT_RADIUS * 2.6 / (x1 - x0));
+                    /* The nudge separating stacked marks is a fixed distance on
+                     * the page, so it must be converted from points -- dividing
+                     * by the DATA span made it grow with the canvas and threw
+                     * the marks clear of their own node on a wide figure. */
+                    px[k] = TX(t->x) - k * (PT_RADIUS * 2.6 / cellw);
                     py[k] = TY(t->y);
                 }
                 pc[k] = cols[k];
@@ -449,7 +486,7 @@ static void emit(GTable *T, int R, int C, const TNode *t, const PlotSpec *spec,
     }
     for (int i = 0; i < t->nkid; i++)
         emit(T, R, C, t->kid[i], spec, x0, x1, y0, y1, lw, 0, jnode, jtip, jlab,
-             aspect, rmax);
+             aspect, rmax, cellw);
 #undef TX
 #undef TY
 }
@@ -490,6 +527,10 @@ int render_tree(const PlotSpec *spec, const char *out,
         && join_load(&jtip, spec->tree_tp_data, spec->tree_tp_col, spec, err)) return -1;
     if (spec->tree_tl_data
         && join_load(&jlab, spec->tree_tl_data, spec->tree_tl_col, spec, err)) return -1;
+
+    if (join_check_unique(&jnode, root, 0, err)) return -1;
+    if (join_check_unique(&jtip, root, 1, err)) return -1;
+    if (join_check_unique(&jlab, root, 1, err)) return -1;
 
     /* Measure before laying out: on a cladogram the branch lengths depend on
      * how wide the labels are. */
@@ -606,7 +647,8 @@ int render_tree(const PlotSpec *spec, const char *out,
     if (spec->tree_layout == 2 && mincell > 0)
         rmax = fmax(0.12, 0.5 - (tipw + TXT_GAP * 2) / mincell);
     emit(T, R, C, root, spec, x0, x1, y0, y1, lw_pt(0.5), 1,
-         &jnode, &jtip, &jlab, cellh > 0 ? cellw / cellh : 1, rmax);
+         &jnode, &jtip, &jlab, cellh > 0 ? cellw / cellh : 1, rmax,
+         cellw > 0 ? cellw : 1);
 
     if (leg) {                        /* key, centred in its own column */
         double ch = h_pt - 2 * MARGIN;
