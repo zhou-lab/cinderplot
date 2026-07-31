@@ -98,6 +98,10 @@ Clustering is hclust ward.D2, matching R. `annotation()` takes `column=` to pick
 which column colours the bar (default: the last). An annotation may be anchored
 by its data column name, e.g. `legend(right_of("diagnosis"))`.
 
+`box=on` frames the cells and only the cells — the row/column names stay outside
+it. `box="grey40"` sets the colour and implies on. Off by default; works on
+`heatmap()` and `annotation()`. (`matrix()` tracks are always framed.)
+
 `cluster=` takes `rows cols both none diagonal symmetric` (`off` = `none`). The
 last two are for a **confusion matrix**, where the axes share a vocabulary and
 the diagonal is the point: `cluster=both` orders the axes independently and

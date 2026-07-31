@@ -279,6 +279,8 @@ typedef struct {
     ClusterMode cluster;           /* heatmap only */
     Side rownames, colnames;       /* heatmap label sides (SIDE_NONE = off) */
     int label_data;                /* annotation: label value runs in situ + bezier leaders */
+    int box;                       /* heatmap/annotation: frame the cells (0 = none) */
+    Col box_col;                   /* box= colour, when box is set */
     HPlace place;
 } HMObj;
 #define MAX_HMOBJS 16

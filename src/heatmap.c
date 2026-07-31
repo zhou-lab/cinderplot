@@ -1025,6 +1025,23 @@ int render_heatmap(const PlotSpec *spec, const char *out,
         /* HM_LEGEND is drawn separately, as rigid margin chrome, below */
     }
 
+    /* box=: frame the cells, and only the cells -- the rect is the matrix body,
+     * so row/column names stay outside it. Drawn after every object so a frame
+     * sits on top of its own cells rather than under a later neighbour's. */
+    for (int i = 0; i < n; i++) {
+        RObj *r = &ro[i];
+        if (!r->o->box) continue;
+        if (r->o->type != HM_HEATMAP && r->o->type != HM_ANNOTATION) {
+            snprintf(err, CP_ERRLEN, "box= applies to heatmap() and annotation()");
+            return -1;
+        }
+        g = gt_add(T, G_RECT, CR, CC, CR, CC);
+        g->sub = 1; g->stroke = 1; g->lw = lw_pt(0.5); g->clip = 1;
+        g->col = r->o->box_col;
+        g->x0 = r->l; g->x1 = r->l + r->w;
+        g->y0 = r->b; g->y1 = r->b + r->h;
+    }
+
     /* ---- rigid legends: vertical legends STACK in their side margin,
      * centred as a group on the canvas; horizontal legends centre on
      * the target (ComplexHeatmap-style legend packing) ---- */

@@ -405,8 +405,28 @@ static int parse_hm_args(P *p, HMObj *o, int want_data) {
                 if (!strcmp(v, "data") || !strcmp(v, "on") || !strcmp(v, "true")) o->label_data = 1;
                 else if (!strcmp(v, "none") || !strcmp(v, "off") || !strcmp(v, "false")) o->label_data = 0;
                 else return fail(p, "labels=%s invalid; use data/on or none/off", v);
+            } else if (!strcmp(key, "box")) {
+                /* A quoted value is a colour and implies on, so the common case
+                 * -- box="grey40" -- does not need box=on beside it. */
+                skip_ws(p);
+                if (*p->s == '"') {
+                    char *v = string_lit(p);
+                    if (!v || parse_color(v, &o->box_col))
+                        return fail(p, "box= expects on/off or a quoted colour", "");
+                    o->box = 1;
+                } else {
+                    char *v = ident(p);
+                    if (!v) return fail(p, "box= expects on/off or a quoted colour", "");
+                    if (!strcmp(v, "on") || !strcmp(v, "true")) {
+                        o->box = 1;
+                        Col grey = {0.4, 0.4, 0.4};   /* as matrix() tracks frame theirs */
+                        o->box_col = grey;
+                    }
+                    else if (!strcmp(v, "none") || !strcmp(v, "off") || !strcmp(v, "false")) o->box = 0;
+                    else return fail(p, "box=%s invalid; use on/off or a quoted colour", v);
+                }
             } else return fail(p, "option `%s` not implemented; supported: name=, data=, "
-                                  "cluster=, rownames=, colnames=, labels=, placements", key);
+                                  "cluster=, rownames=, colnames=, labels=, box=, placements", key);
         } else {
             p->s = save;
             char *v = raw_token(p);
