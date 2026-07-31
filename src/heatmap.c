@@ -815,6 +815,14 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             if (body_h < min_h) body_h = min_h;
             aw = chrome_w + body_w;
             ah = chrome_h + body_h;
+            /* A title is chrome too. Auto-fit sized the canvas from the cells
+             * and their labels alone, so a title longer than the figure was
+             * simply cut off -- and multi-panel figures need long titles,
+             * because that is where the panel identities go. */
+            if (spec->lab_title) {
+                double tw = text_w(cr, SZ_TITLE, spec->lab_title) + 2 * MARGIN;
+                if (tw > aw) aw = tw;
+            }
         } else {                                     /* no heatmap: sensible default */
             if (aw <= 0) aw = 6 * 72;
             if (ah <= 0) ah = 4 * 72;
