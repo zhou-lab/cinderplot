@@ -138,8 +138,12 @@ The heatmap's own fill is **continuous only** — for a categorical grid use
 cinderplot 'taxonomy.tre + geom_tree() + geom_tiplab() + geom_nodelab()' tree.pdf
 ```
 
-Input is **Newick**, not a table: `((a,b)AB,(c,d)CD)root;`. Branch lengths are
-used when present, otherwise x is depth (a cladogram). `geom_tiplab()` draws the
+Input is **Newick**, not a table: `((a,b)AB,(c,d)CD)root;`. `[...]` comments
+(including `[&&NHX:...]`) are skipped, and a quoted name may hold the reserved
+characters — `'Neuron, inhibitory'`, `'b''s cell'` for a literal quote. Branch
+lengths are **all-or-nothing**: give every branch one and x is cumulative
+length, or give none and x is depth (a cladogram). A mix is an error rather than
+a guess, and a length on the root is ignored. `geom_tiplab()` draws the
 leaf names, `geom_nodelab()` the internal ones. Layout is rectangular; omitting
 `--size` fits one readable row per tip. Not implemented yet, and each says so:
 `layout=circular|slanted`, and joining an external table on tip name

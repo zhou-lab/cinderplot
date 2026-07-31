@@ -79,10 +79,17 @@ static char *nw_name(const char **s) {
     const char *p = *s;
     while (isspace((unsigned char)*p)) p++;
     if (*p == '\'' || *p == '"') {
+        /* Newick escapes a quote by doubling it, so '' inside a quoted name is
+         * one literal quote and does not end the name. */
         char q = *p++;
-        const char *b = p;
-        while (*p && *p != q) p++;
-        char *out = strndup(b, p - b);
+        size_t cap = strlen(p) + 1, n = 0;
+        char *out = cp_xmalloc(cap);
+        while (*p) {
+            if (*p == q && p[1] == q) { out[n++] = q; p += 2; continue; }
+            if (*p == q) break;
+            out[n++] = *p++;
+        }
+        out[n] = 0;
         if (*p == q) p++;
         *s = p;
         return out;
@@ -96,6 +103,18 @@ static char *nw_name(const char **s) {
     return out;
 }
 
+/* Newick allows [...] comments -- NHX annotations use them heavily. Skip them
+ * wherever whitespace would be skipped, so a comment-bearing file loads instead
+ * of failing on a bracket the name scanner stopped at. */
+static void nw_skip(const char **s) {
+    for (;;) {
+        while (isspace((unsigned char)**s)) (*s)++;
+        if (**s != '[') return;
+        while (**s && **s != ']') (*s)++;
+        if (**s == ']') (*s)++;
+    }
+}
+
 static TNode *nw_node(const char **s, char *err);
 
 static int nw_children(const char **s, TNode *parent, char *err) {
@@ -104,7 +123,7 @@ static int nw_children(const char **s, TNode *parent, char *err) {
         TNode *c = nw_node(s, err);
         if (!c) return -1;
         tn_push(parent, c);
-        while (isspace((unsigned char)**s)) (*s)++;
+        nw_skip(s);
         if (**s == ',') { (*s)++; continue; }
         if (**s == ')') { (*s)++; return 0; }
         snprintf(err, CP_ERRLEN, "malformed Newick: expected , or ) near \"%.20s\"", *s);
@@ -113,35 +132,43 @@ static int nw_children(const char **s, TNode *parent, char *err) {
 }
 
 static TNode *nw_node(const char **s, char *err) {
-    while (isspace((unsigned char)**s)) (*s)++;
+    nw_skip(s);
     TNode *t = tn_new();
     if (**s == '(') {
         if (nw_children(s, t, err)) return NULL;
     }
     t->name = nw_name(s);
-    while (isspace((unsigned char)**s)) (*s)++;
+    nw_skip(s);
     if (**s == ':') {                            /* branch length */
         (*s)++;
+        nw_skip(s);
         char *end;
         t->blen = strtod(*s, &end);
         if (end == *s) {
             snprintf(err, CP_ERRLEN, "malformed Newick: bad branch length near \"%.20s\"", *s);
             return NULL;
         }
+        /* A non-finite or negative length has no rendering: it would either
+         * collapse the tree to a line or run it off the surface. */
+        if (!isfinite(t->blen) || t->blen < 0) {
+            snprintf(err, CP_ERRLEN, "branch length must be finite and non-negative, got %g", t->blen);
+            return NULL;
+        }
         *s = end;
     }
+    nw_skip(s);
     return t;
 }
 
 static TNode *newick_parse(const char *text, char *err) {
     const char *s = text;
-    while (isspace((unsigned char)*s)) s++;
+    nw_skip(&s);
     if (!*s) { snprintf(err, CP_ERRLEN, "Newick input is empty"); return NULL; }
     TNode *root = nw_node(&s, err);
     if (!root) return NULL;
-    while (isspace((unsigned char)*s)) s++;
+    nw_skip(&s);
     if (*s == ';') s++;
-    while (isspace((unsigned char)*s)) s++;
+    nw_skip(&s);
     if (*s) {
         snprintf(err, CP_ERRLEN, "trailing text after the Newick tree: \"%.20s\"", s);
         return NULL;
@@ -157,7 +184,7 @@ static int tn_leaf(const TNode *t) { return t->nkid == 0; }
  * when the file carries lengths. */
 static void layout(TNode *t, double px, int has_blen, double *next_y,
                    double *maxx, int *nleaf) {
-    t->x = has_blen ? px + (isnan(t->blen) ? 0 : t->blen) : px + 1;
+    t->x = has_blen ? px + t->blen : px + 1;
     if (t->x > *maxx) *maxx = t->x;
     if (tn_leaf(t)) {
         t->y = (*next_y)++;
@@ -169,10 +196,12 @@ static void layout(TNode *t, double px, int has_blen, double *next_y,
     t->y = (t->kid[0]->y + t->kid[t->nkid - 1]->y) / 2;
 }
 
-static int has_lengths(const TNode *t) {
-    if (!isnan(t->blen)) return 1;
-    for (int i = 0; i < t->nkid; i++) if (has_lengths(t->kid[i])) return 1;
-    return 0;
+/* Count edges with and without a length, ignoring the root: a length on the
+ * root is a distance to a parent that is not drawn, and honouring it would
+ * shift the whole tree rightward for no reason. */
+static void count_lengths(const TNode *t, int root, int *with, int *without) {
+    if (!root) { if (isnan(t->blen)) (*without)++; else (*with)++; }
+    for (int i = 0; i < t->nkid; i++) count_lengths(t->kid[i], 0, with, without);
 }
 
 /* widest tip / node label, for the margin they need */
@@ -231,7 +260,20 @@ int render_tree(const PlotSpec *spec, const char *out,
     TNode *root = newick_parse(text, err);
     if (!root) return -1;
 
-    int has_blen = has_lengths(root);
+    /* All the edges carry a length, or none do. A partly annotated tree used to
+     * take the metric path and read every missing length as zero, which put the
+     * unannotated tips on top of their own parent -- a picture that says they
+     * branched at the root. Neither reading is safe to guess, so say so. */
+    int nwith = 0, nwithout = 0;
+    count_lengths(root, 1, &nwith, &nwithout);
+    if (nwith && nwithout) {
+        snprintf(err, CP_ERRLEN, "%d branches have a length and %d do not; give "
+                 "every branch one, or none (a cladogram drawn from depth)",
+                 nwith, nwithout);
+        return -1;
+    }
+    int has_blen = nwith > 0;
+    root->blen = 0;                        /* the root has no parent to measure to */
     double next_y = 0, maxx = 0;
     int nleaf = 0;
     layout(root, 0, has_blen, &next_y, &maxx, &nleaf);
@@ -246,8 +288,16 @@ int render_tree(const PlotSpec *spec, const char *out,
 
     /* Auto-fit: one readable row per tip, and enough width that the branching
      * is legible next to however long the tip labels are. */
-    if (h_pt <= 0) h_pt = fmin(60.0 * 72, fmax(2.0 * 72,
-                          2 * MARGIN + nleaf * labh * 1.25));
+    if (h_pt <= 0) {
+        double want = 2 * MARGIN + nleaf * labh * 1.25;
+        h_pt = fmin(60.0 * 72, fmax(2.0 * 72, want));
+        /* The cap is a safety limit, not a layout choice, so past it the
+         * one-row-per-tip promise stops holding and the tips crowd. */
+        if (want > 60.0 * 72)
+            fprintf(stderr, "cinderplot: warning: %d tips need %.0f in; capped at "
+                    "60 in, so tip labels will crowd (set --size to override)\n",
+                    nleaf, want / 72);
+    }
     if (w_pt <= 0) w_pt = fmin(30.0 * 72, fmax(3.0 * 72,
                           2 * MARGIN + tipw + fmax(120.0, maxx * 26.0)));
     cairo_destroy(cr); cairo_surface_destroy(msurf);
