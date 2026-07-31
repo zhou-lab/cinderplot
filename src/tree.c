@@ -321,22 +321,70 @@ static int join_lookup(const Join *j, const char *name, Col *out, int cap) {
 
 static void emit(GTable *T, int R, int C, const TNode *t, const PlotSpec *spec,
                  double x0, double x1, double y0, double y1, double lw, int root,
-                 const Join *jnode, const Join *jtip, const Join *jlab) {
+                 const Join *jnode, const Join *jtip, const Join *jlab,
+                 double aspect, double rmax) {
 #define TX(v) (((v) - x0) / (x1 - x0))
 #define TY(v) (1.0 - ((v) - y0) / (y1 - y0))
+/* Circular: the same (depth, leaf-index) layout read as (radius, angle). The
+ * gap keeps the first and last tip from meeting, so the reader can see where
+ * the tree starts. */
+#define CIRC_GAP 0.06
+#define THETA(v) ((((v) - y0) / (y1 - y0)) * (1 - CIRC_GAP) * 2 * M_PI)
+#define RAD(v)   (rmax * ((v) - x0) / (x1 - x0))
+/* npc x and y cover different numbers of points, so an uncorrected circle comes
+ * out an ellipse. kx/ky scale the shorter axis to match the longer. */
+#define CX(v, a) (0.5 + RAD(v) * cos(a) * kx)
+#define CY(v, a) (0.5 + RAD(v) * sin(a) * ky)
+    int circ = spec->tree_layout == 2, slant = spec->tree_layout == 1;
+    double kx = aspect >= 1 ? 1.0 / aspect : 1.0;
+    double ky = aspect >= 1 ? 1.0 : aspect;
     Grob *g;
     if (!tn_leaf(t)) {
-        /* the spine, spanning the first child to the last at this node's x */
-        g = gt_add(T, G_LINE, R, C, R, C);
-        g->col = C_BLACK; g->lw = lw; g->clip = 1;
-        g->x0 = g->x1 = TX(t->x);
-        g->y0 = TY(t->kid[0]->y); g->y1 = TY(t->kid[t->nkid - 1]->y);
-        for (int i = 0; i < t->nkid; i++) {      /* an arm out to each child */
-            const TNode *c = t->kid[i];
+        if (circ) {
+            /* the spine is an arc at this node's radius, swept between its
+             * first and last child */
+            const int NA = 24;
+            double a0 = THETA(t->kid[0]->y), a1 = THETA(t->kid[t->nkid - 1]->y);
+            double *ax = cp_xmalloc(NA * sizeof(double));
+            double *ay = cp_xmalloc(NA * sizeof(double));
+            for (int k = 0; k < NA; k++) {
+                double a = a0 + (a1 - a0) * k / (NA - 1);
+                ax[k] = CX(t->x, a); ay[k] = CY(t->x, a);
+            }
+            g = gt_add(T, G_POLYLINE, R, C, R, C);
+            g->n = NA; g->px = ax; g->py = ay; g->col = C_BLACK;
+            g->lw = lw; g->clip = 1;
+            for (int i = 0; i < t->nkid; i++) {   /* radial arm to each child */
+                const TNode *c = t->kid[i];
+                double a = THETA(c->y);
+                g = gt_add(T, G_LINE, R, C, R, C);
+                g->col = C_BLACK; g->lw = lw; g->clip = 1;
+                g->x0 = CX(t->x, a); g->y0 = CY(t->x, a);
+                g->x1 = CX(c->x, a); g->y1 = CY(c->x, a);
+            }
+        } else if (slant) {
+            /* one straight line per child: no spine, which is what makes a
+             * slanted tree read as a fan of descent rather than a circuit */
+            for (int i = 0; i < t->nkid; i++) {
+                const TNode *c = t->kid[i];
+                g = gt_add(T, G_LINE, R, C, R, C);
+                g->col = C_BLACK; g->lw = lw; g->clip = 1;
+                g->x0 = TX(t->x); g->y0 = TY(t->y);
+                g->x1 = TX(c->x); g->y1 = TY(c->y);
+            }
+        } else {
+            /* the spine, spanning the first child to the last at this node's x */
             g = gt_add(T, G_LINE, R, C, R, C);
             g->col = C_BLACK; g->lw = lw; g->clip = 1;
-            g->x0 = TX(t->x); g->x1 = TX(c->x);
-            g->y0 = g->y1 = TY(c->y);
+            g->x0 = g->x1 = TX(t->x);
+            g->y0 = TY(t->kid[0]->y); g->y1 = TY(t->kid[t->nkid - 1]->y);
+            for (int i = 0; i < t->nkid; i++) {  /* an arm out to each child */
+                const TNode *c = t->kid[i];
+                g = gt_add(T, G_LINE, R, C, R, C);
+                g->col = C_BLACK; g->lw = lw; g->clip = 1;
+                g->x0 = TX(t->x); g->x1 = TX(c->x);
+                g->y0 = g->y1 = TY(c->y);
+            }
         }
     }
     if (t->name) {
@@ -348,17 +396,30 @@ static void emit(GTable *T, int R, int C, const TNode *t, const PlotSpec *spec,
                 Col c[1];
                 if (join_lookup(jlab, t->name, c, 1) > 0) g->col = c[0];
             }
-            /* A tip label reads outward from its tip. An internal label sits
-             * above the branch running INTO its node and ends there: centring
-             * it on the node put a parent's label over its child's wherever
-             * the branch between them was short. */
-            /* The root has no incoming branch to sit on, so its label reads
-             * forward from the node instead of off the left edge. */
-            int fwd = leaf || root;
-            g->tx = TX(t->x) + (fwd ? 0.006 : -0.004);
-            g->ty = TY(t->y) + (leaf ? 0 : 0.004);
-            g->hj = fwd ? 0 : 1;
-            g->va = leaf ? V_INKCENTER : V_BOTTOM;
+            if (circ) {
+                /* Radiating outward, each at its own angle, and flipped on the
+                 * left half so no label reads upside down. */
+                double a = THETA(t->y), deg = a * 180 / M_PI;
+                int flip = cos(a) < 0;
+                double rr = RAD(t->x) + (leaf ? 0.012 : 0.006);
+                g->tx = 0.5 + rr * cos(a) * kx;
+                g->ty = 0.5 + rr * sin(a) * ky;
+                g->rot = flip ? -deg + 180 : -deg;
+                g->hj = flip ? 1 : 0;
+                g->va = V_INKCENTER;
+            } else {
+                /* A tip label reads outward from its tip. An internal label
+                 * sits above the branch running INTO its node and ends there:
+                 * centring it on the node put a parent's label over its
+                 * child's wherever the branch between them was short. The root
+                 * has no incoming branch, so it reads forward instead of off
+                 * the left edge. */
+                int fwd = leaf || root;
+                g->tx = TX(t->x) + (fwd ? 0.006 : -0.004);
+                g->ty = TY(t->y) + (leaf ? 0 : 0.004);
+                g->hj = fwd ? 0 : 1;
+                g->va = leaf ? V_INKCENTER : V_BOTTOM;
+            }
         }
     }
     {   /* geom_nodepoint()/geom_tippoint(): one mark per matching row, walked
@@ -370,10 +431,15 @@ static void emit(GTable *T, int R, int C, const TNode *t, const PlotSpec *spec,
             double *px = cp_xmalloc(n * sizeof(double));
             double *py = cp_xmalloc(n * sizeof(double));
             Col *pc = cp_xmalloc(n * sizeof(Col));
-            double step = PT_RADIUS * 2.6 / (x1 - x0);
             for (int k = 0; k < n; k++) {
-                px[k] = TX(t->x) - k * step;
-                py[k] = TY(t->y);
+                if (circ) {                     /* stack back along the radius */
+                    double a = THETA(t->y), rr = RAD(t->x) - k * 0.014;
+                    px[k] = 0.5 + rr * cos(a) * kx;
+                    py[k] = 0.5 + rr * sin(a) * ky;
+                } else {
+                    px[k] = TX(t->x) - k * (PT_RADIUS * 2.6 / (x1 - x0));
+                    py[k] = TY(t->y);
+                }
                 pc[k] = cols[k];
             }
             Grob *p = gt_add(T, G_POINTS, R, C, R, C);
@@ -382,7 +448,8 @@ static void emit(GTable *T, int R, int C, const TNode *t, const PlotSpec *spec,
         }
     }
     for (int i = 0; i < t->nkid; i++)
-        emit(T, R, C, t->kid[i], spec, x0, x1, y0, y1, lw, 0, jnode, jtip, jlab);
+        emit(T, R, C, t->kid[i], spec, x0, x1, y0, y1, lw, 0, jnode, jtip, jlab,
+             aspect, rmax);
 #undef TX
 #undef TY
 }
@@ -440,6 +507,20 @@ int render_tree(const PlotSpec *spec, const char *out,
 
     /* Auto-fit: one readable row per tip, and enough width that the branching
      * is legible next to however long the tip labels are. */
+    if (spec->tree_layout == 2) {          /* circular: a square, sized by the ring */
+        /* tips sit around the circumference, so the radius follows from how
+         * much arc each one needs */
+        /* Each tip needs roughly a line-height of arc, plus slack: labels
+         * radiate, so neighbours converge as they approach the ring. */
+        double ring = nleaf * labh * 1.7;
+        double rtree = ring / (2 * M_PI);
+        /* Must invert rmax below, which is (mincell/2 - tipw - gap), or the
+         * canvas grows without the drawn radius following it. */
+        double side = 2 * (rtree + tipw + TXT_GAP * 2) + 2 * MARGIN;
+        side = fmin(30.0 * 72, fmax(4.0 * 72, side));
+        if (w_pt <= 0) w_pt = side;
+        if (h_pt <= 0) h_pt = side;
+    }
     if (h_pt <= 0) {
         double want = 2 * MARGIN + nleaf * labh * 1.25;
         h_pt = fmin(60.0 * 72, fmax(2.0 * 72, want));
@@ -493,7 +574,10 @@ int render_tree(const PlotSpec *spec, const char *out,
     T->ncol = 4;
     T->colw[0] = upt(MARGIN);
     T->colw[1] = unull(1);
-    T->colw[2] = upt(MARGIN + tipw);      /* room for the tip labels */
+    /* Rectangular and slanted trees put every tip label on the right, so the
+     * room goes in a column. A circular tree radiates them all round, so the
+     * room comes out of the radius instead (rmax below). */
+    T->colw[2] = upt(spec->tree_layout == 2 ? MARGIN : MARGIN + tipw);
     T->colw[3] = upt(legw ? legw + MARGIN : 0);
     T->nrow = 3;
     T->rowh[0] = upt(MARGIN + (spec->lab_title ? font_h(cr, SZ_TITLE) : 0));
@@ -511,8 +595,18 @@ int render_tree(const PlotSpec *spec, const char *out,
      * flush against the panel edge. */
     double y0 = -0.5, y1 = (nleaf - 1) + 0.5;
     double x0 = 0, x1 = maxx > 0 ? maxx : 1;
+    /* the canvas cell, in points, so the circular mapping can stay round */
+    double cellw = w_pt - 2 * MARGIN - (spec->tree_layout == 2 ? 0 : tipw)
+                 - (legw ? legw + MARGIN : 0);
+    double cellh = h_pt - 2 * MARGIN - (spec->lab_title ? font_h(cr, SZ_TITLE) : 0);
+    /* The circle is measured against the shorter side, so leave the labels
+     * their width there and the ring cannot run off the surface. */
+    double mincell = fmin(cellw, cellh);
+    double rmax = 0.5;
+    if (spec->tree_layout == 2 && mincell > 0)
+        rmax = fmax(0.12, 0.5 - (tipw + TXT_GAP * 2) / mincell);
     emit(T, R, C, root, spec, x0, x1, y0, y1, lw_pt(0.5), 1,
-         &jnode, &jtip, &jlab);
+         &jnode, &jtip, &jlab, cellh > 0 ? cellw / cellh : 1, rmax);
 
     if (leg) {                        /* key, centred in its own column */
         double ch = h_pt - 2 * MARGIN;

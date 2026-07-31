@@ -201,6 +201,7 @@ typedef struct {
     char **labels;                             /* axis tick labels */
     const double *label_pos;                   /* optional label positions, else ticks */
     double label_angle;                        /* G_AXIS_X: degrees CCW, 0 = horizontal */
+    double rot;                                /* G_TEXT: degrees CCW about (tx,ty) */
     const double *mtpos, *mtlen; int mtn;      /* minor axis ticks (log): npc pos + length (pt) */
     Col tick_col, text_col;                    /* G_AXIS_*: themed colours (opt-in) */
     int axis_styled, hide_ticks, hide_text;    /* 0 = legacy C_TICK/C_AXTXT (heatmap/tracks) */
@@ -334,6 +335,7 @@ typedef struct {
     char **facet_levels; int n_facet_levels;      /* facet_wrap(~v, levels=c(...)) */
     int free_x, free_y;                           /* facet_wrap(scales=): per-panel ranges */
     double x_angle, y_angle;                      /* scale_*_discrete(angle=); <0 = auto */
+    int tree_layout;                              /* 0 rectangular, 1 slanted, 2 circular */
     int tree_mode, tree_tiplab, tree_nodelab;     /* geom_tree()/geom_tiplab()/geom_nodelab() */
     int tree_nodepoint, tree_tippoint;            /* geom_nodepoint()/geom_tippoint() */
     /* Tables joined to the tree on node/tip NAME. Several rows for one name

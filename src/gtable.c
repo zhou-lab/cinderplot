@@ -333,7 +333,14 @@ void gt_render(GTable *t, cairo_t *cr) {
             cairo_text_extents(cr, g->str, &e);
             cairo_font_extents(cr, &fe);
             set_col(cr, g->col);
-            if (g->rot90) {
+            if (g->rot != 0) {
+                /* Arbitrary rotation about the anchor: a circular tree's tip
+                 * labels radiate, so each sits at its own angle. */
+                cairo_translate(cr, DX(g->tx), DY(g->ty));
+                cairo_rotate(cr, -g->rot * M_PI / 180.0);
+                cairo_move_to(cr, -g->hj * e.x_advance,
+                              -e.height / 2 - e.y_bearing);
+            } else if (g->rot90) {
                 cairo_translate(cr, DX(g->tx) + (fe.ascent - fe.descent) / 2,
                                     DY(g->ty) + e.x_advance / 2);
                 cairo_rotate(cr, -M_PI / 2);

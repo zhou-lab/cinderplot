@@ -831,10 +831,14 @@ static int parse_term(P *p, PlotSpec *spec) {
             if (!strcmp(key, "layout")) {
                 char *v = string_lit(p);
                 if (!v) v = ident(p);
-                if (!v) return fail(p, "layout= expects rectangular", "");
-                if (strcmp(v, "rectangular"))
-                    return fail(p, "geom_tree(layout=%s) is not implemented; "
-                                "only rectangular so far", v);
+                if (!v) return fail(p, "layout= expects rectangular, slanted "
+                                    "or circular", "");
+                if (!strcmp(v, "rectangular")) spec->tree_layout = 0;
+                else if (!strcmp(v, "slanted")) spec->tree_layout = 1;
+                else if (!strcmp(v, "circular") || !strcmp(v, "fan"))
+                    spec->tree_layout = 2;
+                else return fail(p, "layout=%s invalid; use rectangular, slanted "
+                                 "or circular", v);
             } else if (!strcmp(key, "data")) {
                 if (!jdata) return fail(p, "%s() takes no data=", name);
                 if (!(*jdata = string_lit(p)))

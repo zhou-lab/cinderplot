@@ -147,8 +147,11 @@ a guess, and a length on the root is ignored. `geom_tiplab()` draws the
 leaf names, `geom_nodelab()` the internal ones — each sits on the branch running
 into its node, and on a **cladogram** the branches widen so the labels do not
 overprint (x is arbitrary there, so nothing is misrepresented). A phylogram's
-lengths are the datum and are never stretched, so its labels can crowd. Layout is rectangular; omitting
-`--size` fits one readable row per tip.
+lengths are the datum and are never stretched, so its labels can crowd. `geom_tree(layout=)` takes `rectangular`
+(default), `slanted` (straight parent-to-child lines, no spine) or `circular`
+(a fan; the canvas becomes square and tip labels radiate, flipped on the left
+half so none reads upside down). Omitting `--size` fits one readable row per
+tip, or a ring that holds them all when circular.
 
 **Join a table on node/tip name**, ggtree's `%<+%` idiom — the first text column
 is the key, `colour=` names the mapped column, and a discrete column gets a key
@@ -163,8 +166,8 @@ cinderplot 'tax.tre + geom_tree()
 
 `geom_tippoint()` does the same at the tips. Input is **long form**: several
 rows for one name draw several marks stacked back along its branch, so a node
-belonging to three categories shows three dots. Names with no row simply get no
-mark. `layout=circular|slanted` is still unimplemented and says so.
+belonging to three categories shows three dots. Names with no row simply get no mark.
+
 
 ### 4. Genome locus browser — stacked tracks over one or more windows
 
