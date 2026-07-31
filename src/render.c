@@ -942,15 +942,43 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             if (t < tymin) tymin = t;
             if (t > tymax) tymax = t;
         } else if (L->type == GEOM_VLINE && L->has_intercept && !disc_x && !genome_x) {
-            double t = spec->log_x ? log10(L->intercept) : L->intercept;
-            if (t < txmin) txmin = t;
-            if (t > txmax) txmax = t;
+            /* Same guard hline has: a value <= 0 has no place on a log axis, and
+             * feeding its NaN into the comparisons below only works by accident
+             * of IEEE semantics. */
+            double t = spec->log_x ? (L->intercept > 0 ? log10(L->intercept) : NAN)
+                                   : L->intercept;
+            if (isfinite(t)) {
+                if (t < txmin) txmin = t;
+                if (t > txmax) txmax = t;
+            }
+        } else if (L->type == GEOM_ABLINE && !disc_x && !genome_x) {
+            /* ggplot trains on the line's endpoints, so a slope that leaves the
+             * data range still shows where it crosses. Its siblings above have
+             * always done this; abline was simply missed. */
+            double ex[2] = { txmin, txmax };
+            for (int k = 0; k < 2; k++) {
+                double xd = spec->log_x ? pow(10, ex[k]) : ex[k];
+                double yv = TY(L->intercept + L->slope * xd);
+                if (!isfinite(yv)) continue;
+                if (yv < tymin) tymin = yv;
+                if (yv > tymax) tymax = yv;
+            }
         }
     }
 
     /* user axis limits (xlim/ylim or scale_*_log10(limits=)): override the
      * data-driven range with the requested domain (log10-transformed when the
      * axis is log). Default expansion is applied below as usual. */
+    if (spec->log_x && spec->has_xlim && (spec->xlim_lo <= 0 || spec->xlim_hi <= 0)) {
+        snprintf(err, CP_ERRLEN, "x limits must be positive on a log axis, got "
+                 "[%g, %g]", spec->xlim_lo, spec->xlim_hi);
+        return -1;
+    }
+    if (spec->log_y && spec->has_ylim && (spec->ylim_lo <= 0 || spec->ylim_hi <= 0)) {
+        snprintf(err, CP_ERRLEN, "y limits must be positive on a log axis, got "
+                 "[%g, %g]", spec->ylim_lo, spec->ylim_hi);
+        return -1;
+    }
     if (spec->has_xlim && !disc_x && !genome_x) {
         txmin = spec->log_x ? log10(spec->xlim_lo) : spec->xlim_lo;
         txmax = spec->log_x ? log10(spec->xlim_hi) : spec->xlim_hi;
@@ -1159,6 +1187,13 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     /* A panel can be empty: levels= may name a level the data
                      * never uses. Draw it blank rather than refusing -- naming
                      * it was deliberate. */
+                    /* An explicit xlim() is a domain the caller chose; freeing
+                     * the axis frees the BREAKS, not the limits. Without this
+                     * the limit parsed, ran, and did nothing. */
+                    if (spec->has_xlim) {
+                        lo = spec->log_x ? log10(spec->xlim_lo) : spec->xlim_lo;
+                        hi = spec->log_x ? log10(spec->xlim_hi) : spec->xlim_hi;
+                    }
                     if (lo > hi) { lo = 0; hi = 0; }
                     if (hi == lo) { lo -= 0.5; hi += 0.5; }
                     S->x0 = lo - 0.05 * (hi - lo);
@@ -1228,6 +1263,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                             if (lo > 0) lo = 0;
                             if (hi < 0) hi = 0;
                         }
+                    }
+                    if (spec->has_ylim) {      /* as for x above */
+                        lo = spec->log_y ? log10(spec->ylim_lo) : spec->ylim_lo;
+                        hi = spec->log_y ? log10(spec->ylim_hi) : spec->ylim_hi;
                     }
                     if (lo > hi) { lo = 0; hi = 0; }
                     if (hi == lo) { lo -= 0.5; hi += 0.5; }
@@ -1672,6 +1711,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         panelh_pt = nh > 0 ? fmax(0, h_pt - fh) / nh : 0;
     }
 
+    /* A per-layer data= file is the same file in every panel, so read it once
+     * and keep it. It used to be opened, parsed and typed once per panel. */
+    DataFrame *layer_df[MAX_LAYERS] = {0};
+
     /* ---- panels ---- */
     for (int p = 0; p < npan; p++) {
         int pr = p / ncolp, pc = p % ncolp;
@@ -1871,8 +1914,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 /* per-layer data (e.g. CBS segments): its own file, genome-
                  * offset horizontal lines from start..end at y */
                 const Layer *L = &spec->layers[li];
-                DataFrame *d2 = df_read_csv(L->data, err);
-                if (!d2) return -1;
+                if (!layer_df[li] && !(layer_df[li] = df_read_csv(L->data, err)))
+                    return -1;
+                DataFrame *d2 = layer_df[li];
                 const Column *c_chr = genome_x ? df_col(d2, spec->chrom.col) : NULL;
                 const Column *c_x = df_col(d2, spec->x.col);
                 const Column *c_xe = spec->xend.col ? df_col(d2, spec->xend.col) : NULL;
@@ -1931,8 +1975,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                  * genome-offset x. Drawn in layer order (put before the
                  * points to shade behind them) */
                 const Layer *L = &spec->layers[li];
-                DataFrame *d2 = df_read_csv(L->data, err);
-                if (!d2) return -1;
+                if (!layer_df[li] && !(layer_df[li] = df_read_csv(L->data, err)))
+                    return -1;
+                DataFrame *d2 = layer_df[li];
                 const Column *c_chr = genome_x ? df_col(d2, spec->chrom.col) : NULL;
                 const Column *c_x = df_col(d2, spec->x.col);
                 const Column *c_xe = spec->xend.col ? df_col(d2, spec->xend.col) : NULL;

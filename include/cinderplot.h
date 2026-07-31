@@ -18,7 +18,16 @@
 /* Fail-fast allocation wrappers. cinderplot is a one-shot CLI, so the sane
  * response to an allocation failure is a clear message and exit, not error
  * plumbing through every render path. Use these instead of raw
- * malloc/calloc/realloc/strdup so a NULL return can never be dereferenced. */
+ * malloc/calloc/realloc/strdup so a NULL return can never be dereferenced.
+ *
+ * MEMORY POLICY: cinderplot renders one figure and exits, so it does not free.
+ * DataFrames, Factors, cluster trees, grob arrays and label strings all live
+ * until the process does, and several structures deliberately borrow slices of
+ * others (a string cell points into the file image; a row name points into its
+ * DataFrame) precisely because nothing outlives the process. This is a choice,
+ * not an oversight -- but it does mean a leak checker reports thousands of
+ * blocks, so use one only after freeing the big structures locally, or run it
+ * against a single parse rather than a whole render. */
 static inline void cp_oom(void) {
     fputs("cinderplot: out of memory\n", stderr);
     exit(1);
