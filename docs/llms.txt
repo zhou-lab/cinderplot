@@ -147,7 +147,9 @@ a guess, and a length on the root is ignored. `geom_tiplab()` draws the
 leaf names, `geom_nodelab()` the internal ones — each sits on the branch running
 into its node, and on a **cladogram** the branches widen so the labels do not
 overprint (x is arbitrary there, so nothing is misrepresented). A phylogram's
-lengths are the datum and are never stretched, so its labels can crowd. `geom_tree(layout=)` takes `rectangular`
+lengths are the datum and are never stretched, so its labels can crowd.
+
+`geom_tree(layout=)` takes `rectangular`
 (default), `slanted` (straight parent-to-child lines, no spine) or `circular`
 (a fan; the canvas becomes square and tip labels radiate, flipped on the left
 half so none reads upside down). Omitting `--size` fits one readable row per
