@@ -417,12 +417,13 @@ static int parse_hm_args(P *p, HMObj *o, int want_data) {
                 } else {
                     char *v = ident(p);
                     if (!v) return fail(p, "box= expects on/off or a quoted colour", "");
-                    if (!strcmp(v, "on") || !strcmp(v, "true")) {
+                    if (!strcmp(v, "on") || !strcmp(v, "true") || !strcmp(v, "TRUE")) {
                         o->box = 1;
                         Col grey = {0.4, 0.4, 0.4};   /* as matrix() tracks frame theirs */
                         o->box_col = grey;
                     }
-                    else if (!strcmp(v, "none") || !strcmp(v, "off") || !strcmp(v, "false")) o->box = 0;
+                    else if (!strcmp(v, "none") || !strcmp(v, "off")
+                             || !strcmp(v, "false") || !strcmp(v, "FALSE")) o->box = 0;
                     else return fail(p, "box=%s invalid; use on/off or a quoted colour", v);
                 }
             } else return fail(p, "option `%s` not implemented; supported: name=, data=, "

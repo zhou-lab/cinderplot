@@ -407,6 +407,17 @@ static double label_band(cairo_t *cr, const RObj *r, Side side) {
     return TXT_GAP + wmax;
 }
 
+/* A title sits above its object, so it occupies the same gap that top-facing
+ * labels do and has to be reserved the same way. */
+static double title_band(cairo_t *cr, const RObj *r) {
+    if (!r->o->title || r->o->type == HM_LEGEND) return 0;
+    cairo_font_extents_t fe;
+    cairo_set_font_size(cr, SZ_BASE);
+    cairo_font_extents(cr, &fe);
+    (void)r;
+    return fe.ascent + fe.descent + HALF_LINE / 2;
+}
+
 /* The widest band among the objects whose `side` edge lies on coordinate `at`. */
 static double max_band_at(cairo_t *cr, const RObj *ro, int n, Side side, double at) {
     double best = 0;
@@ -418,6 +429,7 @@ static double max_band_at(cairo_t *cr, const RObj *ro, int n, Side side, double 
                                           : r->l + r->w;
         if (fabs(edge - at) > 1e-6) continue;
         double e = label_band(cr, r, side);
+        if (side == SIDE_TOP) e += title_band(cr, r);
         if (e > best) best = e;
     }
     return best;
@@ -699,7 +711,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
     /* pass A: row/col name label extents (they sit against the heatmap edge) */
     for (int i = 0; i < n; i++) {
         RObj *r = &ro[i];
-        if (r->o->type != HM_HEATMAP) continue;
+        if (r->o->type != HM_HEATMAP && r->o->type != HM_ANNOTATION) continue;
         double e;
         if ((e = label_band(cr, r, SIDE_RIGHT)) > 0 && fabs(r->l + r->w - 1) < EPS)
             shiftR = fmax(shiftR, e);
@@ -707,8 +719,8 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             shiftL = fmax(shiftL, e);
         if ((e = label_band(cr, r, SIDE_BOTTOM)) > 0 && fabs(r->b) < EPS)
             shiftB = fmax(shiftB, e);
-        if ((e = label_band(cr, r, SIDE_TOP))   > 0 && fabs(r->b + r->h - 1) < EPS)
-            shiftT = fmax(shiftT, e);
+        e = label_band(cr, r, SIDE_TOP) + title_band(cr, r);
+        if (e > 0 && fabs(r->b + r->h - 1) < EPS) shiftT = fmax(shiftT, e);
     }
     /* pass A2: in-situ annotation labels (labels=data) reserve outward margin,
      * like row names — a leader span plus the widest value label. */
@@ -1055,6 +1067,19 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             }
         }
         /* HM_LEGEND is drawn separately, as rigid margin chrome, below */
+    }
+
+    /* title= on a placed object names that panel. It used to reach only
+     * legend_title(), so on a heatmap or annotation it parsed and vanished --
+     * the same silent drop labs(x=)/labs(y=) had. Drawn just above the object's
+     * own box, which is where a facet strip or a patchwork ggtitle() sits. */
+    for (int i = 0; i < n; i++) {
+        RObj *r = &ro[i];
+        if (!r->o->title || r->o->type == HM_LEGEND) continue;
+        g = gt_add(T, G_TEXT, CR, CC, CR, CC);
+        g->str = r->o->title; g->size = SZ_BASE; g->col = C_BLACK;
+        g->tx = r->l; g->ty = r->b + r->h + PTY(HALF_LINE / 2);
+        g->hj = 0; g->va = V_BOTTOM;
     }
 
     /* box=: frame the cells, and only the cells -- the rect is the matrix body,
