@@ -1,4 +1,7 @@
-cinderplot
+# the built binary. Anchored: unanchored, this also matched skills/cinderplot/,
+# which silently kept the agent skill -- the source docs/llms.txt is generated
+# from -- out of the repository.
+/cinderplot
 src/*.o
 *.pdf
 *.png
