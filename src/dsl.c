@@ -372,18 +372,26 @@ static int parse_hm_args(P *p, HMObj *o, int want_data) {
                 o->title = v;
             } else if (!strcmp(key, "cluster")) {
                 char *v = ident(p);
-                if (!v) return fail(p, "cluster= expects rows, cols, both, or none", "");
+                if (!v) return fail(p, "cluster= expects rows, cols, both, "
+                                    "diagonal, symmetric, or none", "");
                 if (!strcmp(v, "rows")) o->cluster = CL_ROWS;
                 else if (!strcmp(v, "cols") || !strcmp(v, "columns")) o->cluster = CL_COLS;
                 else if (!strcmp(v, "both")) o->cluster = CL_BOTH;
-                else if (!strcmp(v, "none")) o->cluster = CL_NONE;
-                else return fail(p, "cluster=%s invalid; use rows, cols, both, or none", v);
+                else if (!strcmp(v, "diagonal")) o->cluster = CL_DIAGONAL;
+                else if (!strcmp(v, "symmetric")) o->cluster = CL_SYMMETRIC;
+                /* `off` because rownames=/colnames= spell it that way. */
+                else if (!strcmp(v, "none") || !strcmp(v, "off")) o->cluster = CL_NONE;
+                else return fail(p, "cluster=%s invalid; use rows, cols, both, "
+                                 "diagonal, symmetric, or none", v);
             } else if (!strcmp(key, "rownames") || !strcmp(key, "colnames")) {
                 int row = key[0] == 'r';
                 char *v = ident(p);
                 if (!v) return fail(p, "%s= expects left/right (rownames) or top/bottom (colnames), or none", key);
                 Side s;
-                if (!strcmp(v, "none")) s = SIDE_NONE;
+                /* `off`/`hide` because matrix() tracks spell the same idea that
+                 * way; the two modes should not disagree on how to say it. */
+                if (!strcmp(v, "none") || !strcmp(v, "off") || !strcmp(v, "hide"))
+                    s = SIDE_NONE;
                 else if (row && !strcmp(v, "left")) s = SIDE_LEFT;
                 else if (row && !strcmp(v, "right")) s = SIDE_RIGHT;
                 else if (!row && !strcmp(v, "top")) s = SIDE_TOP;

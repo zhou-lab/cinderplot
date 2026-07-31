@@ -93,6 +93,14 @@ Clustering is hclust ward.D2, matching R. `annotation()` takes `column=` to pick
 which column colours the bar (default: the last). An annotation may be anchored
 by its data column name, e.g. `legend(right_of("diagnosis"))`.
 
+`cluster=` takes `rows cols both none diagonal symmetric` (`off` = `none`). The
+last two are for a **confusion matrix**, where the axes share a vocabulary and
+the diagonal is the point: `cluster=both` orders the axes independently and
+destroys it, so use `diagonal` (columns follow the row names, no clustering) or
+`symmetric` (cluster the rows, then the columns follow them — related classes
+group *and* the diagonal survives). Both need row names, and columns no row
+claims are appended in input order.
+
 The heatmap's own fill is **continuous only** — for a categorical grid use
 `geom_tile()` in grammar mode, which takes a discrete fill and a keyed legend.
 

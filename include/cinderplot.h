@@ -264,7 +264,10 @@ typedef struct {
     double pad, width, height;     /* npc; width/height < 0 = auto */
 } HPlace;
 typedef enum { HM_HEATMAP, HM_ANNOTATION, HM_LEGEND, HM_DENDROGRAM } HMType;
-typedef enum { CL_NONE, CL_ROWS, CL_COLS, CL_BOTH } ClusterMode;
+typedef enum { CL_NONE, CL_ROWS, CL_COLS, CL_BOTH,
+               CL_DIAGONAL,    /* columns follow the row names; no clustering */
+               CL_SYMMETRIC    /* cluster rows, then columns follow them */
+} ClusterMode;
 typedef enum { SIDE_NONE, SIDE_LEFT, SIDE_RIGHT, SIDE_TOP, SIDE_BOTTOM } Side;
 typedef struct {
     HMType type;

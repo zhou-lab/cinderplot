@@ -98,6 +98,40 @@ static int *identity(int n) {
     return v;
 }
 
+/* Order the columns so a same-named column sits opposite its row.
+ *
+ * The confusion matrix is the case this exists for: the two axes share a
+ * vocabulary and the figure exists to show the diagonal, which neither existing
+ * mode preserves -- cluster=both orders the axes independently and scatters it,
+ * and cluster=none keeps it only when the columns happen to arrive in the row
+ * order, which they do not (they are whatever the model predicted).
+ *
+ * Matching is against `roword`, the row order actually being displayed, so the
+ * caller decides whether the diagonal follows the input rows (cluster=diagonal)
+ * or a clustered order (cluster=symmetric). Columns no row claims keep their
+ * input order at the end: a model can predict a class the truth set never
+ * contains, and dropping it would silently discard data.
+ *
+ * Returns a fresh display order, or NULL with `err` set. */
+static int *diagonal_cols(const Matrix *m, const int *roword, char *err) {
+    if (!m->rn) {
+        snprintf(err, CP_ERRLEN, "cluster=diagonal/symmetric needs row names to "
+                 "match the columns against; give the matrix a first text column");
+        return NULL;
+    }
+    int *ord = cp_xmalloc(m->nc * sizeof(int));
+    char *taken = cp_xcalloc(m->nc, 1);
+    int n = 0;
+    for (int i = 0; i < m->nr && n < m->nc; i++) {
+        const char *want = m->rn[roword[i]];
+        for (int c = 0; c < m->nc; c++)
+            if (!taken[c] && !strcmp(m->cn[c], want)) { ord[n++] = c; taken[c] = 1; break; }
+    }
+    for (int c = 0; c < m->nc; c++) if (!taken[c]) ord[n++] = c;
+    free(taken);
+    return ord;
+}
+
 static Matrix *matrix_from_df(const DataFrame *df, char *err) {
     int c0 = df->ncol && df->cols[0].type == COL_STR ? 1 : 0;
     Matrix *m = cp_xmalloc(sizeof *m);
@@ -369,13 +403,23 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             ro[i].nc = ro[i].m->nc;
             ro[i].roword = identity(ro[i].nr);
             ro[i].coword = identity(ro[i].nc);
-            if (o->cluster == CL_ROWS || o->cluster == CL_BOTH) {
+            if (o->cluster == CL_ROWS || o->cluster == CL_BOTH
+                || o->cluster == CL_SYMMETRIC) {
                 free(ro[i].roword);
                 if (!(ro[i].rowclust = cluster_dim(ro[i].m, 0, &ro[i].roword, err))) return -1;
             }
             if (o->cluster == CL_COLS || o->cluster == CL_BOTH) {
                 free(ro[i].coword);
                 if (!(ro[i].colclust = cluster_dim(ro[i].m, 1, &ro[i].coword, err))) return -1;
+            }
+            /* One ordering on both axes: the rows carry it (clustered above for
+             * symmetric, input order for diagonal) and the columns follow by
+             * name, so related classes may group without losing the diagonal. */
+            if (o->cluster == CL_DIAGONAL || o->cluster == CL_SYMMETRIC) {
+                int *cw = diagonal_cols(ro[i].m, ro[i].roword, err);
+                if (!cw) return -1;
+                free(ro[i].coword);
+                ro[i].coword = cw;
             }
         }
 
