@@ -463,13 +463,6 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     if (xf && spec->x.nlevels
         && factor_relevel(xf, df->nrow, spec->x.levels, spec->x.nlevels,
                           "x", err)) return -1;
-    /* discrete x draws one break per category into the fixed xbr[40]/xlabs[40]
-     * axis buffers below; reject more categories than those buffers hold. */
-    if (disc_x && xf->nlev > 40) {
-        snprintf(err, CP_ERRLEN, "discrete x `%s` has %d categories; at most 40 "
-                 "are supported", spec->x.col, xf->nlev);
-        return -1;
-    }
     if (!disc_x && (xc->type != COL_NUM)) {
         snprintf(err, CP_ERRLEN, "x column `%s` is not numeric", spec->x.col); return -1;
     }
@@ -517,11 +510,6 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             if (spec->y.nlevels
                 && factor_relevel(yf, df->nrow, spec->y.levels, spec->y.nlevels,
                                   "y", err)) return -1;
-            if (yf->nlev > 40) {
-                snprintf(err, CP_ERRLEN, "discrete y has %d categories; the axis "
-                         "holds at most 40", yf->nlev);
-                return -1;
-            }
             if (spec->log_y) {
                 snprintf(err, CP_ERRLEN, "scale_y_log10() cannot apply to a discrete y");
                 return -1;
@@ -663,13 +651,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             && factor_relevel(ff, df->nrow, spec->facet_levels,
                               spec->n_facet_levels, "facet_wrap()", err)) return -1;
     }
-    /* The parser accepts scales=, but the renderer still trains one range for
-     * the whole figure. Say so rather than drawing fixed panels and letting the
-     * caller believe the request landed -- a silently ignored option is the one
-     * failure this tool must not have. */
-    if ((spec->free_x || spec->free_y) && ff) {
-        snprintf(err, CP_ERRLEN, "facet_wrap(scales=) is not implemented yet; "
-                 "every panel currently shares one range");
+    if ((spec->free_x || spec->free_y) && !ff) {
+        snprintf(err, CP_ERRLEN, "facet_wrap(scales=) needs facets; there is only "
+                 "one panel to scale");
         return -1;
     }
 
@@ -1015,9 +999,15 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
 #define NPCX(t) (((t) - x0) / (x1 - x0))
 #define NPCY(t) (((t) - y0) / (y1 - y0))
 
-    double xbr[40], ybr[40];
-    char **xlabs = cp_xmalloc(40 * sizeof(char *));
-    char **ylabs = cp_xmalloc(40 * sizeof(char *));
+    /* Sized to the axis: a discrete axis draws one break per category, and
+     * capping these at a fixed 40 was the only reason a discrete axis could not
+     * carry more. Continuous axes never ask for more than 16. */
+    int xbrcap = disc_x ? xf->nlev + 1 : 40;
+    int ybrcap = disc_y ? yf->nlev + 1 : 40;
+    double *xbr = cp_xmalloc(xbrcap * sizeof(double));
+    double *ybr = cp_xmalloc(ybrcap * sizeof(double));
+    char **xlabs = cp_xmalloc(xbrcap * sizeof(char *));
+    char **ylabs = cp_xmalloc(ybrcap * sizeof(char *));
     int nxbr, nybr;
     /* genome mode uses separate axis arrays: gridlines at chrom boundaries,
      * labels (chrom names) at chrom midpoints */
@@ -1122,6 +1112,239 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     PanelScale *ps = cp_xmalloc(npan * sizeof(PanelScale));
     for (int p = 0; p < npan; p++) ps[p] = shared;
 
+    /* ---- facet_wrap(scales=): give each panel its own range and breaks ----
+     *
+     * Only the axes the caller freed are replaced; the rest keep pointing at the
+     * shared instance, so scales="free_x" leaves the y axis provably identical
+     * to a fixed figure. Panels are trained from their own rows, then the same
+     * expansion and break rules run again per panel. */
+    if (ff && (spec->free_x || spec->free_y)) {
+        for (int p = 0; p < npan; p++) {
+            PanelScale *S = &ps[p];
+            S->shared = 0;
+            if (spec->free_x) {
+                if (disc_x) {
+                    /* Keep the global level ORDER, drop the levels this panel
+                     * has no rows for, and renumber what is left to 1..k. That
+                     * is ggplot2's drop = TRUE, and it means an explicit
+                     * factor(x, levels=) still decides the ordering. */
+                    int *map = cp_xmalloc(xf->nlev * sizeof(int));
+                    for (int l = 0; l < xf->nlev; l++) map[l] = -1;
+                    int k = 0;
+                    for (int l = 0; l < xf->nlev; l++)
+                        for (int r = 0; r < df->nrow; r++)
+                            if (use[r] && ff->idx[r] == p && xf->idx[r] == l) {
+                                map[l] = k++; break;
+                            }
+                    S->xmap = map; S->nxlev = k;
+                    S->x0 = 1 - 0.6; S->x1 = (k ? k : 1) + 0.6;
+                } else if (genome_x) {
+                    snprintf(err, CP_ERRLEN, "facet_wrap(scales=) cannot free a "
+                             "scale_x_genome() axis; the genome axis is shared by "
+                             "construction (use regions() for several windows)");
+                    return -1;
+                } else {
+                    double lo = 1e300, hi = -1e300;
+                    for (int r = 0; r < df->nrow; r++) {
+                        if (!use[r] || ff->idx[r] != p) continue;
+                        double t = TXR(r);
+                        if (t < lo) lo = t;
+                        if (t > hi) hi = t;
+                        if (xec && !isnan(xec->num[r])) {
+                            double te = spec->log_x ? log10(xec->num[r]) : xec->num[r];
+                            if (te < lo) lo = te;
+                            if (te > hi) hi = te;
+                        }
+                    }
+                    /* A panel can be empty: levels= may name a level the data
+                     * never uses. Draw it blank rather than refusing -- naming
+                     * it was deliberate. */
+                    if (lo > hi) { lo = 0; hi = 0; }
+                    if (hi == lo) { lo -= 0.5; hi += 0.5; }
+                    S->x0 = lo - 0.05 * (hi - lo);
+                    S->x1 = hi + 0.05 * (hi - lo);
+                }
+            }
+            if (spec->free_y) {
+                if (disc_y) {
+                    int *map = cp_xmalloc(yf->nlev * sizeof(int));
+                    for (int l = 0; l < yf->nlev; l++) map[l] = -1;
+                    int k = 0;
+                    for (int l = 0; l < yf->nlev; l++)
+                        for (int r = 0; r < df->nrow; r++)
+                            if (use[r] && ff->idx[r] == p && yf->idx[r] == l) {
+                                map[l] = k++; break;
+                            }
+                    S->ymap = map; S->nylev = k;
+                    S->y0 = 1 - 0.6; S->y1 = (k ? k : 1) + 0.6;
+                } else {
+                    double lo = 1e300, hi = -1e300;
+                    /* The stat geoms take their height from a computed maximum
+                     * rather than from the rows, so each reads that panel's own
+                     * counts instead of the figure-wide one. */
+                    if (nhist) {
+                        int mx = 0;
+                        for (int li = 0; li < spec->nlayers; li++) {
+                            if (spec->layers[li].type != GEOM_HISTOGRAM) continue;
+                            const Hist *hs = &hist[li];
+                            for (int b = 0; b < hs->nbins; b++) {
+                                int cnt = hs->counts[p * hs->nbins + b];
+                                if (cnt > mx) mx = cnt;
+                            }
+                        }
+                        lo = 0; hi = spec->log_y ? log10((double)(mx ? mx : 1)) : (double)mx;
+                    } else if (hasbar) {
+                        int mx = 0;
+                        for (int cat = 0; cat < xf->nlev; cat++) {
+                            int total = 0;
+                            for (int gq = 0; gq < barng; gq++)
+                                total += barcount[((size_t)(p * xf->nlev + cat)) * barng + gq];
+                            if (total > mx) mx = total;
+                        }
+                        lo = 0; hi = spec->log_y ? log10((double)(mx ? mx : 1)) : (double)mx;
+                    } else if (hasdens) {
+                        double mx = 0;
+                        for (int di = 0; di < ndens; di++)
+                            for (int gg = 0; gg < densg; gg++) {
+                                size_t base = ((size_t)((di * npan + p) * densg + gg)) * DENS_N;
+                                for (int j = 0; j < DENS_N; j++)
+                                    if (dens_y[base + j] > mx) mx = dens_y[base + j];
+                            }
+                        lo = 0; hi = mx;
+                    }
+                    if (!nhist && !hasbar && !hasdens) {
+                        for (int r = 0; r < df->nrow; r++) {
+                            if (!use[r] || ff->idx[r] != p) continue;
+                            double t = TY(yc->num[r]);
+                            if (t < lo) lo = t;
+                            if (t > hi) hi = t;
+                            if (yec && !isnan(yec->num[r])) {
+                                double te = TY(yec->num[r]);
+                                if (te < lo) lo = te;
+                                if (te > hi) hi = te;
+                            }
+                        }
+                        if (hascol && !spec->log_y) {   /* bars anchor at 0 */
+                            if (lo > 0) lo = 0;
+                            if (hi < 0) hi = 0;
+                        }
+                    }
+                    if (lo > hi) { lo = 0; hi = 0; }
+                    if (hi == lo) { lo -= 0.5; hi += 0.5; }
+                    S->y0 = lo - 0.05 * (hi - lo);
+                    S->y1 = hi + 0.05 * (hi - lo);
+                }
+            }
+        }
+        /* Breaks for the freed axes. Same rules as the shared pass above, run
+         * once per panel over that panel's range; the arrays are allocated to
+         * the size actually needed, so a discrete axis is no longer capped at
+         * the 40 the old fixed buffers held. */
+        for (int p = 0; p < npan; p++) {
+            PanelScale *S = &ps[p];
+            if (spec->free_x) {
+                if (disc_x) {
+                    S->nxbr = S->nxlev;
+                    S->xbr = cp_xmalloc((S->nxbr + 1) * sizeof(double));
+                    S->xlabs = cp_xmalloc((S->nxbr + 1) * sizeof(char *));
+                    for (int l = 0; l < xf->nlev; l++)
+                        if (S->xmap[l] >= 0) {
+                            S->xbr[S->xmap[l]] = S->xmap[l] + 1;
+                            S->xlabs[S->xmap[l]] = cp_xstrdup(xf->levels[l]);
+                        }
+                } else if (spec->log_x) {
+                    S->xbr = cp_xmalloc(16 * sizeof(double));
+                    S->xlabs = cp_xmalloc(16 * sizeof(char *));
+                    S->nxbr = log10_breaks(S->x0, S->x1, S->xbr, S->xlabs, 16);
+                } else {
+                    S->xbr = cp_xmalloc(16 * sizeof(double));
+                    S->xlabs = cp_xmalloc(16 * sizeof(char *));
+                    int nb = extended_breaks(S->x0, S->x1, 5, S->xbr, 16), k = 0;
+                    for (int i = 0; i < nb; i++)
+                        if (S->xbr[i] >= S->x0 && S->xbr[i] <= S->x1) S->xbr[k++] = S->xbr[i];
+                    S->nxbr = k;
+                    int dec = axis_decimals(S->xbr, S->nxbr), pdec = dec - 2 < 0 ? 0 : dec - 2;
+                    for (int i = 0; i < S->nxbr; i++) {
+                        S->xlabs[i] = cp_xmalloc(32);
+                        if (spec->x_pct) snprintf(S->xlabs[i], 32, "%.*f%%", pdec, S->xbr[i] * 100);
+                        else fmt_break(S->xbr[i], dec, S->xlabs[i], 32);
+                    }
+                }
+                S->xnpc = cp_xmalloc((S->nxbr + 1) * sizeof(double));
+                for (int i = 0; i < S->nxbr; i++)
+                    S->xnpc[i] = (S->xbr[i] - S->x0) / (S->x1 - S->x0);
+                S->xmin_br = cp_xmalloc(32 * sizeof(double));
+                S->nxmin = disc_x ? 0
+                         : spec->log_x ? log_minors(S->x0, S->x1, S->xmin_br, 32)
+                         : make_minors(S->xbr, S->nxbr, S->x0, S->x1, S->xmin_br);
+                S->xlt_n = 0;
+                if (spec->log_x) {
+                    S->xlt_pos = cp_xmalloc(80 * sizeof(double));
+                    S->xlt_len = cp_xmalloc(80 * sizeof(double));
+                    for (int k = (int)floor(S->x0) - 1; k <= (int)ceil(S->x1) + 1 && S->xlt_n < 80; k++)
+                        for (int d = 1; d <= 9 && S->xlt_n < 80; d++) {
+                            double t = k + log10((double)d);
+                            if (t >= S->x0 - 1e-9 && t <= S->x1 + 1e-9) {
+                                S->xlt_pos[S->xlt_n] = (t - S->x0) / (S->x1 - S->x0);
+                                S->xlt_len[S->xlt_n] = d == 1 ? LT_LONG : d == 5 ? LT_MID : LT_SHORT;
+                                S->xlt_n++;
+                            }
+                        }
+                }
+            }
+            if (spec->free_y) {
+                if (disc_y) {
+                    S->nybr = S->nylev;
+                    S->ybr = cp_xmalloc((S->nybr + 1) * sizeof(double));
+                    S->ylabs = cp_xmalloc((S->nybr + 1) * sizeof(char *));
+                    for (int l = 0; l < yf->nlev; l++)
+                        if (S->ymap[l] >= 0) {
+                            S->ybr[S->ymap[l]] = S->ymap[l] + 1;
+                            S->ylabs[S->ymap[l]] = cp_xstrdup(yf->levels[l]);
+                        }
+                } else if (spec->log_y) {
+                    S->ybr = cp_xmalloc(16 * sizeof(double));
+                    S->ylabs = cp_xmalloc(16 * sizeof(char *));
+                    S->nybr = log10_breaks(S->y0, S->y1, S->ybr, S->ylabs, 16);
+                } else {
+                    S->ybr = cp_xmalloc(16 * sizeof(double));
+                    S->ylabs = cp_xmalloc(16 * sizeof(char *));
+                    int nb = extended_breaks(S->y0, S->y1, 5, S->ybr, 16), k = 0;
+                    for (int i = 0; i < nb; i++)
+                        if (S->ybr[i] >= S->y0 && S->ybr[i] <= S->y1) S->ybr[k++] = S->ybr[i];
+                    S->nybr = k;
+                    int dec = axis_decimals(S->ybr, S->nybr), pdec = dec - 2 < 0 ? 0 : dec - 2;
+                    for (int i = 0; i < S->nybr; i++) {
+                        S->ylabs[i] = cp_xmalloc(32);
+                        if (spec->y_pct) snprintf(S->ylabs[i], 32, "%.*f%%", pdec, S->ybr[i] * 100);
+                        else fmt_break(S->ybr[i], dec, S->ylabs[i], 32);
+                    }
+                }
+                S->ynpc = cp_xmalloc((S->nybr + 1) * sizeof(double));
+                for (int i = 0; i < S->nybr; i++)
+                    S->ynpc[i] = (S->ybr[i] - S->y0) / (S->y1 - S->y0);
+                S->ymin_br = cp_xmalloc(32 * sizeof(double));
+                S->nymin = disc_y ? 0
+                         : spec->log_y ? log_minors(S->y0, S->y1, S->ymin_br, 32)
+                         : make_minors(S->ybr, S->nybr, S->y0, S->y1, S->ymin_br);
+                S->ylt_n = 0;
+                if (spec->log_y) {
+                    S->ylt_pos = cp_xmalloc(80 * sizeof(double));
+                    S->ylt_len = cp_xmalloc(80 * sizeof(double));
+                    for (int k = (int)floor(S->y0) - 1; k <= (int)ceil(S->y1) + 1 && S->ylt_n < 80; k++)
+                        for (int d = 1; d <= 9 && S->ylt_n < 80; d++) {
+                            double t = k + log10((double)d);
+                            if (t >= S->y0 - 1e-9 && t <= S->y1 + 1e-9) {
+                                S->ylt_pos[S->ylt_n] = (t - S->y0) / (S->y1 - S->y0);
+                                S->ylt_len[S->ylt_n] = d == 1 ? LT_LONG : d == 5 ? LT_MID : LT_SHORT;
+                                S->ylt_n++;
+                            }
+                        }
+                }
+            }
+        }
+    }
+
     /* ---- geom_col bar width: 0.9 x min gap between distinct x ---- */
     double colw = 0.9;
     if (hascol) {
@@ -1167,19 +1390,36 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     /* Under coord_flip the x aesthetic is drawn on the LEFT (vertical) axis and
      * y on the BOTTOM; otherwise the usual y-left / x-bottom. lax = left axis
      * (ticks at npc-y positions), bax = bottom axis (ticks at npc-x). */
-    int lax_n, bax_n; double *lax_pos, *bax_pos; char **lax_lab, **bax_lab;
+    int lax_n, bax_n; double *bax_pos; char **lax_lab, **bax_lab;
     if (flip) {
-        lax_n = nxbr; lax_pos = xnpc; lax_lab = xlabs;
+        lax_n = nxbr; lax_lab = xlabs;
         bax_n = nybr; bax_pos = ynpc; bax_lab = ylabs;
     } else {
-        lax_n = nybr; lax_pos = ynpc; lax_lab = ylabs;
+        lax_n = nybr; lax_lab = ylabs;
         bax_n = nxbr; bax_pos = xnpc; bax_lab = xlabs;
     }
 
-    double ylab_w = 0;                          /* width reserved for the left axis labels */
-    for (int i = 0; i < lax_n; i++) {
-        double w = cp_label_w(cr, SZ_AXIS_TEXT, lax_lab[i]);   /* superscript-aware */
-        if (w > ylab_w) ylab_w = w;
+    /* Width reserved for the left axis labels. A freed left axis differs per
+     * panel, and only the left-most column sits against this margin, so it is
+     * the widest label among the panels in column 0 -- the other columns are
+     * carried by the gaps sized above. */
+    double ylab_w = 0;
+    if (flip ? spec->free_x : spec->free_y) {
+        for (int p = 0; p < npan; p++) {
+            if (p % ncolp != 0) continue;
+            const PanelScale *S = &ps[p];
+            int n = flip ? S->nxbr : S->nybr;
+            char **lb = flip ? S->xlabs : S->ylabs;
+            for (int i = 0; i < n; i++) {
+                double w = cp_label_w(cr, SZ_AXIS_TEXT, lb[i]);
+                if (w > ylab_w) ylab_w = w;
+            }
+        }
+    } else {
+        for (int i = 0; i < lax_n; i++) {
+            double w = cp_label_w(cr, SZ_AXIS_TEXT, lax_lab[i]);   /* superscript-aware */
+            if (w > ylab_w) ylab_w = w;
+        }
     }
     double labh = font_h(cr, SZ_AXIS_TEXT), baseh = font_h(cr, SZ_BASE);
     double striph = ff ? labh + 2 * STRIP_PAD : 0;
@@ -1239,9 +1479,30 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     T->colw[1] = upt(baseh);
     T->colw[2] = upt(HALF_LINE / 2);
     T->colw[3] = upt(ylab_w + TXT_GAP + TICK_LEN);
+    /* Under free scales the gap between panels has to hold an axis, not just
+     * whitespace: every panel carries its own ticks and labels. Each gap is
+     * sized by the widest label of the panels immediately to its right. */
+    int lfree_l = flip ? spec->free_x : spec->free_y;
     for (int c = 0; c < ncolp; c++) {
         T->colw[PC(c)] = unull(1);
-        if (c < ncolp - 1) T->colw[PC(c) + 1] = upt(PANEL_SPACE);
+        if (c < ncolp - 1) {
+            double gap = PANEL_SPACE;
+            if (lfree_l) {
+                double wmax = 0;
+                for (int p = 0; p < npan; p++) {
+                    if (p % ncolp != c + 1) continue;
+                    const PanelScale *S = &ps[p];
+                    int n = flip ? S->nxbr : S->nybr;
+                    char **lb = flip ? S->xlabs : S->ylabs;
+                    for (int i = 0; i < n; i++) {
+                        double w = cp_label_w(cr, SZ_AXIS_TEXT, lb[i]);
+                        if (w > wmax) wmax = w;
+                    }
+                }
+                gap = TICK_LEN + TXT_GAP + wmax + PANEL_SPACE;
+            }
+            T->colw[PC(c) + 1] = upt(gap);
+        }
     }
     T->colw[T->ncol - 3] = upt(leg ? 2 * HALF_LINE : 0);
     T->colw[T->ncol - 2] = upt(leg ? gt_fixed_w(leg) : 0);
@@ -1252,10 +1513,13 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     T->rowh[1] = upt(spec->lab_title ? font_h(cr, SZ_TITLE) : 0);
     T->rowh[2] = upt(spec->lab_subtitle ? font_h(cr, SZ_BASE)
                    : spec->lab_title ? HALF_LINE : 0);
+    int bfree_l = flip ? spec->free_y : spec->free_x;
     for (int r = 0; r < nrowp; r++) {
         T->rowh[SR(r)] = upt(striph);
         T->rowh[PR(r)] = unull(1);
-        if (r < nrowp - 1) T->rowh[PR(r) + 1] = upt(PANEL_SPACE);
+        if (r < nrowp - 1)
+            T->rowh[PR(r) + 1] = upt(bfree_l ? TICK_LEN + TXT_GAP + labh + PANEL_SPACE
+                                             : PANEL_SPACE);
     }
     int r_axis = 3 * nrowp + 2;
     T->rowh[r_axis]     = upt(TICK_LEN + TXT_GAP + labh);
@@ -1804,9 +2068,28 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         if (flip)
             for (int gi = gstart; gi < T->ngrobs; gi++) flip_grob(&T->grobs[gi]);
 
-        if (pc == 0) {
-            g = gt_add(T, G_AXIS_Y, R, 3, R, 3);   /* left axis: y (or x under flip) */
-            g->n = lax_n; g->py = lax_pos; g->labels = lax_lab;
+        /* Left axis. Shared scales label the left column only, because every
+         * panel in a row carries the same one; a freed axis differs per panel,
+         * so each gets its own, drawn in the spacer to its left. */
+        int lfree = flip ? spec->free_x : spec->free_y;
+        if (pc == 0 || lfree) {
+            g = gt_add(T, G_AXIS_Y, R, pc == 0 ? 3 : PC(pc) - 1, R, pc == 0 ? 3 : PC(pc) - 1);
+            g->n = flip ? S->nxbr : S->nybr;
+            g->py = flip ? S->xnpc : S->ynpc;
+            g->labels = flip ? S->xlabs : S->ylabs;
+            g->axis_styled = 1; g->tick_col = th->tick; g->hide_ticks = !th->tick_on;
+            g->text_col = th->axis_text; g->hide_text = !th->axis_text_on;
+        }
+        /* Bottom axis. Shared scales draw one per column, under the lowest panel
+         * of that column (below); a freed axis is per panel. */
+        int bfree = flip ? spec->free_y : spec->free_x;
+        if (bfree) {
+            int rb = (npan - 1 - pc) / ncolp;
+            int arow = (pr == rb && rb == nrowp - 1) ? r_axis : PR(pr) + 1;
+            g = gt_add(T, G_AXIS_X, arow, C, arow, C);
+            g->n = flip ? S->nybr : S->nxbr;
+            g->px = flip ? S->ynpc : S->xnpc;
+            g->labels = flip ? S->ylabs : S->xlabs;
             g->axis_styled = 1; g->tick_col = th->tick; g->hide_ticks = !th->tick_on;
             g->text_col = th->axis_text; g->hide_text = !th->axis_text_on;
         }
@@ -1814,7 +2097,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
 
     /* x axes: under the bottom-most panel of each column (bottom axis: x, or y
      * under flip). Genome mode (never flipped) keeps its chrom-name axis. */
-    for (int c = 0; c < ncolp && c < npan; c++) {
+    for (int c = 0; c < ncolp && c < npan && !(flip ? spec->free_y : spec->free_x); c++) {
         int rb = (npan - 1 - c) / ncolp;
         if (rb == nrowp - 1)
             g = gt_add(T, G_AXIS_X, r_axis, PC(c), r_axis, PC(c));
