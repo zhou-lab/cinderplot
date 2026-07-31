@@ -148,9 +148,23 @@ leaf names, `geom_nodelab()` the internal ones — each sits on the branch runni
 into its node, and on a **cladogram** the branches widen so the labels do not
 overprint (x is arbitrary there, so nothing is misrepresented). A phylogram's
 lengths are the datum and are never stretched, so its labels can crowd. Layout is rectangular; omitting
-`--size` fits one readable row per tip. Not implemented yet, and each says so:
-`layout=circular|slanted`, and joining an external table on tip name
-(`geom_tiplab(data=..., colour=...)`).
+`--size` fits one readable row per tip.
+
+**Join a table on node/tip name**, ggtree's `%<+%` idiom — the first text column
+is the key, `colour=` names the mapped column, and a discrete column gets a key
+while a numeric one gets a colourbar:
+
+```sh
+cinderplot 'tax.tre + geom_tree() + geom_tiplab()
+  + geom_nodepoint(data="levels.tsv", colour=level)' out.pdf      # internal nodes
+cinderplot 'tax.tre + geom_tree()
+  + geom_tiplab(data="acc.tsv", colour=accuracy)' out.pdf         # colour the labels
+```
+
+`geom_tippoint()` does the same at the tips. Input is **long form**: several
+rows for one name draw several marks stacked back along its branch, so a node
+belonging to three categories shows three dots. Names with no row simply get no
+mark. `layout=circular|slanted` is still unimplemented and says so.
 
 ### 4. Genome locus browser — stacked tracks over one or more windows
 

@@ -335,6 +335,13 @@ typedef struct {
     int free_x, free_y;                           /* facet_wrap(scales=): per-panel ranges */
     double x_angle, y_angle;                      /* scale_*_discrete(angle=); <0 = auto */
     int tree_mode, tree_tiplab, tree_nodelab;     /* geom_tree()/geom_tiplab()/geom_nodelab() */
+    int tree_nodepoint, tree_tippoint;            /* geom_nodepoint()/geom_tippoint() */
+    /* Tables joined to the tree on node/tip NAME. Several rows for one name
+     * draw several marks, which is how a node belonging to more than one
+     * category advertises itself. */
+    char *tree_np_data, *tree_np_col;             /* internal nodes */
+    char *tree_tp_data, *tree_tp_col;             /* tips */
+    char *tree_tl_data, *tree_tl_col;             /* tip LABEL colour */
     char *lab_title, *lab_x, *lab_y, *lab_colour, *lab_fill;
     char *lab_subtitle, *lab_caption;             /* labs(subtitle=, caption=) */
     /* scale_colour/fill_manual(values=): discrete palette override */

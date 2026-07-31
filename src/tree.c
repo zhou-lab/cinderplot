@@ -237,8 +237,91 @@ static double label_w(cairo_t *cr, const TNode *t, int tips, double sz) {
     return w;
 }
 
+/* ---------- joining a table to the tree ----------
+ *
+ * ggtree's `%<+%`: a table keyed on the node/tip NAME, one aesthetic mapped
+ * from a column. Long form throughout, because several rows for one name is
+ * not an error here -- it is the interesting case. A node belonging to three
+ * taxonomy levels gets three marks and advertises itself as a degenerate
+ * chain, where one mark means a level doing real work. */
+typedef struct {
+    const Column *key, *val;    /* name column, mapped column */
+    const DataFrame *df;
+    Factor *f;                  /* discrete: levels + per-row index */
+    Col *pal;                   /* discrete: one colour per level */
+    double dmin, dmax;          /* continuous: domain */
+    FillScale fs;               /* continuous: ramp */
+    int discrete;
+} Join;
+
+/* The key is the first text column; the mapped column is named by colour=. */
+static int join_load(Join *j, const char *path, const char *colname,
+                     const PlotSpec *spec, char *err) {
+    memset(j, 0, sizeof *j);
+    DataFrame *df = df_read_csv(path, err);
+    if (!df) return -1;
+    j->df = df;
+    for (int c = 0; c < df->ncol; c++)
+        if (df->cols[c].type == COL_STR) { j->key = &df->cols[c]; break; }
+    if (!j->key) {
+        snprintf(err, CP_ERRLEN, "%s has no text column to join on; the first "
+                 "text column is matched against the node names", path);
+        return -1;
+    }
+    if (!colname) {
+        snprintf(err, CP_ERRLEN, "joining %s needs colour=<column>", path);
+        return -1;
+    }
+    if (!(j->val = df_col(df, colname))) {
+        snprintf(err, CP_ERRLEN, "column `%s` not found in %s", colname, path);
+        return -1;
+    }
+    if (j->val == j->key) {
+        snprintf(err, CP_ERRLEN, "colour=%s is the join key; map a different "
+                 "column", colname);
+        return -1;
+    }
+    j->discrete = j->val->type == COL_STR;
+    if (j->discrete) {
+        j->f = factor_make(df, j->val);
+        j->pal = cp_xmalloc(j->f->nlev * sizeof(Col));
+        hue_palette(j->f->nlev, j->pal);
+    } else {
+        j->dmin = 1e300; j->dmax = -1e300;
+        for (int r = 0; r < df->nrow; r++) {
+            double v = j->val->num[r];
+            if (!isfinite(v)) continue;
+            if (v < j->dmin) j->dmin = v;
+            if (v > j->dmax) j->dmax = v;
+        }
+        if (j->dmin > j->dmax) { j->dmin = 0; j->dmax = 1; }
+        if (j->dmax == j->dmin) j->dmax = j->dmin + 1;
+        j->fs = spec->has_fill ? spec->fill : (FillScale){0};
+        if (!spec->has_fill) j->fs.kind = FILL_VIRIDIS;
+    }
+    return 0;
+}
+
+/* Colours for one name, in table order; returns how many rows matched. */
+static int join_lookup(const Join *j, const char *name, Col *out, int cap) {
+    if (!j->df || !name) return 0;
+    int n = 0;
+    for (int r = 0; r < j->df->nrow && n < cap; r++) {
+        if (!j->key->str[r] || strcmp(j->key->str[r], name)) continue;
+        if (j->discrete) {
+            if (j->f->idx[r] < 0) continue;
+            out[n++] = j->pal[j->f->idx[r]];
+        } else {
+            if (!isfinite(j->val->num[r])) continue;
+            out[n++] = fill_map_value(&j->fs, j->val->num[r], j->dmin, j->dmax);
+        }
+    }
+    return n;
+}
+
 static void emit(GTable *T, int R, int C, const TNode *t, const PlotSpec *spec,
-                 double x0, double x1, double y0, double y1, double lw, int root) {
+                 double x0, double x1, double y0, double y1, double lw, int root,
+                 const Join *jnode, const Join *jtip, const Join *jlab) {
 #define TX(v) (((v) - x0) / (x1 - x0))
 #define TY(v) (1.0 - ((v) - y0) / (y1 - y0))
     Grob *g;
@@ -261,6 +344,10 @@ static void emit(GTable *T, int R, int C, const TNode *t, const PlotSpec *spec,
         if (leaf ? spec->tree_tiplab : spec->tree_nodelab) {
             g = gt_add(T, G_TEXT, R, C, R, C);
             g->str = t->name; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
+            if (leaf && jlab->df) {          /* geom_tiplab(data=, colour=) */
+                Col c[1];
+                if (join_lookup(jlab, t->name, c, 1) > 0) g->col = c[0];
+            }
             /* A tip label reads outward from its tip. An internal label sits
              * above the branch running INTO its node and ends there: centring
              * it on the node put a parent's label over its child's wherever
@@ -274,8 +361,28 @@ static void emit(GTable *T, int R, int C, const TNode *t, const PlotSpec *spec,
             g->va = leaf ? V_INKCENTER : V_BOTTOM;
         }
     }
+    {   /* geom_nodepoint()/geom_tippoint(): one mark per matching row, walked
+         * back along the branch so several never sit on top of each other. */
+        const Join *j = tn_leaf(t) ? jtip : jnode;
+        Col cols[16];
+        int n = j->df ? join_lookup(j, t->name, cols, 16) : 0;
+        if (n > 0) {
+            double *px = cp_xmalloc(n * sizeof(double));
+            double *py = cp_xmalloc(n * sizeof(double));
+            Col *pc = cp_xmalloc(n * sizeof(Col));
+            double step = PT_RADIUS * 2.6 / (x1 - x0);
+            for (int k = 0; k < n; k++) {
+                px[k] = TX(t->x) - k * step;
+                py[k] = TY(t->y);
+                pc[k] = cols[k];
+            }
+            Grob *p = gt_add(T, G_POINTS, R, C, R, C);
+            p->n = n; p->px = px; p->py = py; p->pcol = pc;
+            p->radius = PT_RADIUS; p->clip = 1;
+        }
+    }
     for (int i = 0; i < t->nkid; i++)
-        emit(T, R, C, t->kid[i], spec, x0, x1, y0, y1, lw, 0);
+        emit(T, R, C, t->kid[i], spec, x0, x1, y0, y1, lw, 0, jnode, jtip, jlab);
 #undef TX
 #undef TY
 }
@@ -305,6 +412,18 @@ int render_tree(const PlotSpec *spec, const char *out,
     cairo_t *cr = cairo_create(msurf);
     cairo_select_font_face(cr, FONT_FAMILY, CAIRO_FONT_SLANT_NORMAL,
                            CAIRO_FONT_WEIGHT_NORMAL);
+    /* Joined tables, loaded before layout so the legend can size the margin. */
+    Join jnode, jtip, jlab;
+    memset(&jnode, 0, sizeof jnode);
+    memset(&jtip, 0, sizeof jtip);
+    memset(&jlab, 0, sizeof jlab);
+    if (spec->tree_nodepoint
+        && join_load(&jnode, spec->tree_np_data, spec->tree_np_col, spec, err)) return -1;
+    if (spec->tree_tippoint
+        && join_load(&jtip, spec->tree_tp_data, spec->tree_tp_col, spec, err)) return -1;
+    if (spec->tree_tl_data
+        && join_load(&jlab, spec->tree_tl_data, spec->tree_tl_col, spec, err)) return -1;
+
     /* Measure before laying out: on a cladogram the branch lengths depend on
      * how wide the labels are. */
     measure_labels(cr, root, spec->tree_tiplab, spec->tree_nodelab, SZ_AXIS_TEXT);
@@ -335,7 +454,9 @@ int render_tree(const PlotSpec *spec, const char *out,
         /* A fitted cladogram measured its branches in points already; anything
          * else gets a readable width per unit of depth. */
         double body = fit > 0 ? maxx : fmax(120.0, maxx * 26.0);
-        w_pt = fmin(30.0 * 72, fmax(3.0 * 72, 2 * MARGIN + tipw + body));
+        double legroom = (spec->tree_nodepoint || spec->tree_tippoint
+                          || spec->tree_tl_data) ? 90 : 0;
+        w_pt = fmin(30.0 * 72, fmax(3.0 * 72, 2 * MARGIN + tipw + body + legroom));
     }
     cairo_destroy(cr); cairo_surface_destroy(msurf);
 
@@ -345,10 +466,35 @@ int render_tree(const PlotSpec *spec, const char *out,
                            CAIRO_FONT_WEIGHT_NORMAL);
 
     GTable *T = cp_xcalloc(1, sizeof *T);
-    T->ncol = 3;
+    /* A joined aesthetic needs a key, or the colours say nothing. One legend,
+     * for whichever join is present -- a tree carrying two different mapped
+     * tables at once is not a figure worth encouraging. */
+    const Join *leg = jnode.df ? &jnode : jtip.df ? &jtip : jlab.df ? &jlab : NULL;
+    const char *leg_title = leg == &jnode ? spec->tree_np_col
+                          : leg == &jtip  ? spec->tree_tp_col
+                          : leg == &jlab  ? spec->tree_tl_col : NULL;
+    double legw = 0;
+    if (leg) {
+        double w = leg_title ? text_w(cr, SZ_BASE, leg_title) : 0;
+        if (leg->discrete)
+            for (int k = 0; k < leg->f->nlev; k++) {
+                double kw = text_w(cr, SZ_AXIS_TEXT, leg->f->levels[k]);
+                if (kw > w) w = kw;
+            }
+        else {
+            char b[32];
+            fmt_num(leg->dmax, b, sizeof b);
+            double kw = text_w(cr, SZ_AXIS_TEXT, b);
+            if (kw > w) w = kw;
+        }
+        legw = 2 * HALF_LINE + KEY_SIZE + TXT_GAP + w;
+    }
+
+    T->ncol = 4;
     T->colw[0] = upt(MARGIN);
     T->colw[1] = unull(1);
     T->colw[2] = upt(MARGIN + tipw);      /* room for the tip labels */
+    T->colw[3] = upt(legw ? legw + MARGIN : 0);
     T->nrow = 3;
     T->rowh[0] = upt(MARGIN + (spec->lab_title ? font_h(cr, SZ_TITLE) : 0));
     T->rowh[1] = unull(1);
@@ -365,7 +511,61 @@ int render_tree(const PlotSpec *spec, const char *out,
      * flush against the panel edge. */
     double y0 = -0.5, y1 = (nleaf - 1) + 0.5;
     double x0 = 0, x1 = maxx > 0 ? maxx : 1;
-    emit(T, R, C, root, spec, x0, x1, y0, y1, lw_pt(0.5), 1);
+    emit(T, R, C, root, spec, x0, x1, y0, y1, lw_pt(0.5), 1,
+         &jnode, &jtip, &jlab);
+
+    if (leg) {                        /* key, centred in its own column */
+        double ch = h_pt - 2 * MARGIN;
+        int nk = leg->discrete ? leg->f->nlev : 0;
+        double lh = font_h(cr, SZ_AXIS_TEXT);
+        double blockh = leg->discrete ? nk * fmax(KEY_SIZE, lh) : 6 * KEY_SIZE;
+        double titleh2 = leg_title ? font_h(cr, SZ_BASE) + HALF_LINE / 2 : 0;
+        double top = 0.5 + (blockh + titleh2) / 2 / ch;
+        if (leg_title) {
+            Grob *g2 = gt_add(T, G_TEXT, R, 3, R, 3);
+            g2->str = (char *)leg_title; g2->size = SZ_BASE; g2->col = C_BLACK;
+            g2->tx = 0; g2->ty = top; g2->hj = 0; g2->va = V_TOP;
+        }
+        double y = top - titleh2 / ch;
+        /* npc inside the legend CELL, which is legw wide -- not the figure. */
+        double cw = legw > 0 ? legw : 1;
+        if (leg->discrete) {
+            double kh = fmax(KEY_SIZE, lh) / ch;
+            for (int k = 0; k < nk; k++) {
+                double yc = y - (k + 0.5) * kh;
+                double *px = cp_xmalloc(sizeof(double)), *py = cp_xmalloc(sizeof(double));
+                Col *pc = cp_xmalloc(sizeof(Col));
+                px[0] = (KEY_SIZE / 2) / cw; py[0] = yc; pc[0] = leg->pal[k];
+                Grob *g2 = gt_add(T, G_POINTS, R, 3, R, 3);
+                g2->n = 1; g2->px = px; g2->py = py; g2->pcol = pc;
+                g2->radius = PT_RADIUS * 1.4;
+                g2 = gt_add(T, G_TEXT, R, 3, R, 3);
+                g2->str = leg->f->levels[k]; g2->size = SZ_AXIS_TEXT; g2->col = C_BLACK;
+                g2->tx = (KEY_SIZE + TXT_GAP) / cw; g2->ty = yc;
+                g2->hj = 0; g2->va = V_INKCENTER;
+            }
+        } else {
+            const int NB = 48;               /* the ramp, sampled into bands */
+            double barh = blockh / ch, bw = KEY_SIZE * 0.55 / cw;
+            for (int k = 0; k < NB; k++) {
+                double f0 = (double)k / NB, f1 = (double)(k + 1) / NB;
+                Grob *g2 = gt_add(T, G_RECT, R, 3, R, 3);
+                g2->sub = 1;                 /* without this a rect fills the cell */
+                g2->col = fill_map(&leg->fs, f0);
+                g2->x0 = 0; g2->x1 = bw;
+                g2->y0 = y - barh + f0 * barh; g2->y1 = y - barh + f1 * barh;
+            }
+            char b[32];
+            for (int k = 0; k < 2; k++) {
+                fmt_num(k ? leg->dmax : leg->dmin, b, sizeof b);
+                Grob *g2 = gt_add(T, G_TEXT, R, 3, R, 3);
+                g2->str = cp_xstrdup(b); g2->size = SZ_AXIS_TEXT; g2->col = C_BLACK;
+                g2->tx = bw + TXT_GAP / cw;
+                g2->ty = k ? y : y - barh;
+                g2->hj = 0; g2->va = V_INKCENTER;
+            }
+        }
+    }
 
     gt_resolve(T, 0, 0, w_pt, h_pt);
     gt_render(T, cr);

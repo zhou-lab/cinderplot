@@ -808,10 +808,20 @@ static int parse_term(P *p, PlotSpec *spec) {
         return expect(p, ')');
     }
     if (!strcmp(name, "geom_tree") || !strcmp(name, "geom_tiplab")
-        || !strcmp(name, "geom_nodelab")) {
+        || !strcmp(name, "geom_nodelab") || !strcmp(name, "geom_nodepoint")
+        || !strcmp(name, "geom_tippoint")) {
+        char **jdata = NULL, **jcol = NULL;
         if (!strcmp(name, "geom_tree")) spec->tree_mode = 1;
-        else if (!strcmp(name, "geom_tiplab")) spec->tree_tiplab = 1;
-        else spec->tree_nodelab = 1;
+        else if (!strcmp(name, "geom_tiplab")) {
+            spec->tree_tiplab = 1;
+            jdata = &spec->tree_tl_data; jcol = &spec->tree_tl_col;
+        } else if (!strcmp(name, "geom_nodepoint")) {
+            spec->tree_nodepoint = 1;
+            jdata = &spec->tree_np_data; jcol = &spec->tree_np_col;
+        } else if (!strcmp(name, "geom_tippoint")) {
+            spec->tree_tippoint = 1;
+            jdata = &spec->tree_tp_data; jcol = &spec->tree_tp_col;
+        } else spec->tree_nodelab = 1;
         skip_ws(p);
         while (*p->s != ')') {
             char *key = ident(p);
@@ -825,16 +835,16 @@ static int parse_term(P *p, PlotSpec *spec) {
                 if (strcmp(v, "rectangular"))
                     return fail(p, "geom_tree(layout=%s) is not implemented; "
                                 "only rectangular so far", v);
-            } else if (!strcmp(key, "data") || !strcmp(key, "colour")
-                    || !strcmp(key, "color")) {
-                /* Joining an external table on tip name is the feature that
-                 * makes a tree analytical rather than decorative, and it is not
-                 * built yet. Say so rather than drawing an uncoloured tree that
-                 * looks like it worked. */
-                return fail(p, "geom_tiplab(%s=) is not implemented yet; a tree "
-                            "cannot be joined to an external table", key);
+            } else if (!strcmp(key, "data")) {
+                if (!jdata) return fail(p, "%s() takes no data=", name);
+                if (!(*jdata = string_lit(p)))
+                    return fail(p, "data= expects a quoted path", "");
+            } else if (!strcmp(key, "colour") || !strcmp(key, "color")) {
+                if (!jcol) return fail(p, "%s() takes no colour=", name);
+                if (!(*jcol = ident(p)))
+                    return fail(p, "colour= expects a column name", "");
             } else return fail(p, "tree geom option `%s` not implemented; "
-                               "supported: layout=", key);
+                               "supported: layout=, data=, colour=", key);
             free(key);
             skip_ws(p);
             if (*p->s == ',') { p->s++; skip_ws(p); }
@@ -1092,8 +1102,9 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
                         "heatmap() or the track verbs", "");
         return 0;
     }
-    if (spec->tree_tiplab || spec->tree_nodelab)
-        return fail(&p, "geom_tiplab()/geom_nodelab() need a geom_tree()", "");
+    if (spec->tree_tiplab || spec->tree_nodelab
+        || spec->tree_nodepoint || spec->tree_tippoint)
+        return fail(&p, "the tree geoms need a geom_tree()", "");
     if (spec->nlayers == 0)
         return fail(&p, "no geom given; add e.g. + geom_point()", "");
     int nstat = 0, nref = 0;   /* stats compute y; reference lines are overlays */

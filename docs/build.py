@@ -676,7 +676,7 @@ __SECTIONS__
 # landing uses this; the gallery keeps STYLE/header() above.
 GEOMS = ["point", "line", "col", "bar", "histogram", "boxplot", "density", "rect", "segment",
          "tile", "raster", "text", "label", "text_repel", "hline", "vline", "abline",
-         "tree", "tiplab", "nodelab"]
+         "tree", "tiplab", "nodelab", "nodepoint", "tippoint"]
 SCALES = ["x / y log10", "percent labels", "genome x", "colour hue", "colour gradient",
           "gradient2", "manual colours", "discrete x / y", "free facet scales",
           "discrete label angle"]
