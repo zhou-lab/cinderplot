@@ -193,6 +193,28 @@ SECTIONS = [
 _THBASE = "data/mtcars.csv + aes(wt, mpg, colour=factor(cyl)) + geom_point()"
 _THEMES = [("bw", ""), ("minimal", ""), ("classic", ""), ("void", ""),
            ("linedraw", ""), ("light", ""), ("dark", ""), ("few", "requires ggthemes")]
+# Continuous palettes: the same matrix under each, so the comparison is the
+# colour and nothing else. No ggplot2 reference -- several of these have no
+# ggplot2 equivalent without viridisLite/scico, and the point is the ramp.
+_PALBASE = 'data/mtcars_heat.csv + heatmap(name="m", cluster=none, rownames=none)'
+_PALS = [("viridis", "perceptually uniform, the safe default"),
+         ("magma", "viridis family, warm"),
+         ("inferno", "viridis family, high contrast"),
+         ("plasma", "viridis family, bright"),
+         ("cividis", "colour-blind safe, greyscale-safe"),
+         ("rocket", "sequential, dark to light warm"),
+         ("mako", "sequential, dark to light cool"),
+         ("parula", "MATLAB's; the lab default for methylation beta"),
+         ("turbo", "rainbow without jet's false banding"),
+         ("coolwarm", "diverging; grey midpoint survives print"),
+         ("bwr", "diverging, pure white midpoint"),
+         ("jet", "legacy rainbow -- banding is an artefact, avoid")]
+SECTIONS.append(("Colour palettes", [
+    (f"pal-{n}", f"scale_fill_{n}() — {note}",
+     f"{_PALBASE} + scale_fill_{n}()", "")
+    for n, note in _PALS
+]))
+
 SECTIONS.append(("Themes", [
     (f"theme-{t}", f"theme_{t}", f"{_THBASE} + theme_{t}()",
      (f"# {note}\n" if note else "")
@@ -229,8 +251,9 @@ def no_gg(slug):
     """Slugs whose R reference needs a non-base package, so render() skips the
     gg PNG: theme showcases (same ggplot), the heatmap (ComplexHeatmap), the
     repelled labels (ggrepel), and the CNV plot (sesame)."""
-    return slug.startswith("theme-") or slug in ("heatmap", "textlabels", "k562cnv",
-                                                 "region", "regions", "tree")
+    return (slug.startswith("theme-") or slug.startswith("pal-")
+            or slug in ("heatmap", "textlabels", "k562cnv",
+                        "region", "regions", "tree"))
 
 def _up_to_date(slug):
     """A figure is up to date when its cinderplot output exists (and, for
@@ -677,9 +700,9 @@ __SECTIONS__
 GEOMS = ["point", "line", "col", "bar", "histogram", "boxplot", "density", "rect", "segment",
          "tile", "raster", "text", "label", "text_repel", "hline", "vline", "abline",
          "tree", "tiplab", "nodelab", "nodepoint", "tippoint"]
-SCALES = ["x / y log10", "percent labels", "genome x", "colour hue", "colour gradient",
-          "gradient2", "manual colours", "discrete x / y", "free facet scales",
-          "discrete label angle"]
+SCALES = ["x / y log10", "percent labels", "genome x", "colour hue",
+          "12 continuous palettes", "gradient / gradient2", "manual colours",
+          "discrete x / y", "free facet scales", "discrete label angle"]
 POSITIONS = ["stack", "dodge", "dodge2"]
 MODES = ["scatter / grammar", "heatmap + clustering", "genomic tracks", "Newick trees"]
 THEMES_CHIPS = ["gray", "bw", "minimal", "classic", "void", "linedraw",

@@ -75,7 +75,13 @@ and ignored (the output path is a command-line argument here).
   `geom_point(raster=TRUE)` — see trap 9.
 - **scales**: `scale_x_log10()` `scale_y_log10()` `scale_*_continuous(labels=percent,
   limits=)` `xlim()` `ylim()` `scale_*_manual(values=c(...))`
-  `scale_(fill|colour)_(viridis|jet|parula|bwr|gradient|gradient2)()`,
+  `scale_(fill|colour)_*()` continuous palettes: `viridis magma inferno plasma
+  cividis rocket mako` (perceptually uniform; `cividis` is also colour-blind and
+  greyscale safe), `parula` (the lab default for methylation beta), `turbo` (a
+  rainbow without `jet`'s false banding), `coolwarm`/`bwr` (diverging —
+  `coolwarm`'s grey midpoint survives print where `bwr`'s white does not), `jet`
+  (legacy, banding is an artefact), plus `gradient`/`gradient2` for your own
+  endpoints,
   `scale_x_genome("seqinfo.tsv.gz")`, `ideogram("cytoband.tsv.gz")`.
 - **also**: `facet_wrap(~v[, levels=c(...)][, scales=])`, `coord_flip()`, `guides(colour="none")`
   (or `--no-legend`), `labs()`/`xlab()`/`ylab()`/`ggtitle()`, and

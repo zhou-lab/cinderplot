@@ -453,6 +453,14 @@ static int parse_grad_scale(P *p, FillScale *fs, const char *k, const char *fn) 
     else if (!strcmp(k, "jet")) fs->kind = FILL_JET;
     else if (!strcmp(k, "parula")) fs->kind = FILL_PARULA;
     else if (!strcmp(k, "bwr")) fs->kind = FILL_BWR;
+    else if (!strcmp(k, "turbo")) fs->kind = FILL_TURBO;
+    else if (!strcmp(k, "coolwarm")) fs->kind = FILL_COOLWARM;
+    else if (!strcmp(k, "magma")) fs->kind = FILL_MAGMA;
+    else if (!strcmp(k, "inferno")) fs->kind = FILL_INFERNO;
+    else if (!strcmp(k, "plasma")) fs->kind = FILL_PLASMA;
+    else if (!strcmp(k, "cividis")) fs->kind = FILL_CIVIDIS;
+    else if (!strcmp(k, "rocket")) fs->kind = FILL_ROCKET;
+    else if (!strcmp(k, "mako")) fs->kind = FILL_MAKO;
     else if (!strcmp(k, "gradient")) {
         fs->kind = FILL_GRADIENT;
         parse_color("#132B43", &fs->low); parse_color("#56B1F7", &fs->high);
@@ -461,9 +469,10 @@ static int parse_grad_scale(P *p, FillScale *fs, const char *k, const char *fn) 
         parse_color("#832424", &fs->low); parse_color("white", &fs->mid);
         parse_color("#3A3A98", &fs->high); fs->midpoint = 0;
     } else {
-        char msg[128];
+        char msg[256];   /* the supported list is long now */
         snprintf(msg, sizeof msg, "`%s%s()` not implemented; supported: "
-                 "viridis, jet, parula, bwr, gradient, gradient2", fn, k);
+                 "viridis, magma, inferno, plasma, cividis, rocket, mako, "
+                 "parula, turbo, coolwarm, bwr, jet, gradient, gradient2", fn, k);
         return fail(p, "%s", msg);
     }
     skip_ws(p);

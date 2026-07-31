@@ -126,7 +126,9 @@ int log10_breaks(double tlo, double thi, double *tmaj, char **labs, int max_out)
 void hue_palette(int n, Col *out);
 
 /* continuous fill scales */
-typedef enum { FILL_VIRIDIS, FILL_JET, FILL_BWR, FILL_GRADIENT, FILL_GRADIENT2, FILL_PARULA } FillKind;
+typedef enum { FILL_VIRIDIS, FILL_JET, FILL_BWR, FILL_GRADIENT, FILL_GRADIENT2,
+               FILL_PARULA, FILL_TURBO, FILL_COOLWARM, FILL_MAGMA, FILL_INFERNO,
+               FILL_PLASMA, FILL_CIVIDIS, FILL_ROCKET, FILL_MAKO } FillKind;
 typedef struct {
     FillKind kind;
     Col low, mid, high;      /* gradient / gradient2 */
@@ -209,7 +211,12 @@ typedef struct {
     unsigned char *img; int img_w, img_h;      /* G_IMAGE: ARGB32 buffer */
 } Grob;
 
-#define GT_MAXDIM 32
+/* Bound on a gtable's rows/columns. It leaks into user-facing limits -- a
+ * discrete colour legend reserves 2*nlev+1 rows, so this was a 15-level cap on
+ * a colour aesthetic, which 20 cell types is enough to hit. The arrays are
+ * inside a heap-allocated GTable, so the cost of raising it is a few KB per
+ * figure and no code walks the bound itself. */
+#define GT_MAXDIM 256
 struct GTable {
     int nrow, ncol;
     Unit rowh[GT_MAXDIM], colw[GT_MAXDIM];
