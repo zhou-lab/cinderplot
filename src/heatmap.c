@@ -67,6 +67,7 @@ typedef struct {
     double ann_dmin, ann_dmax;      /* annotation: continuous scale range */
     FillScale ann_fill;             /* annotation: continuous colormap */
     int target, leg_discrete;       /* legend: source obj index; discrete key? */
+    int anchor;                     /* index of the object placed against (-1 = none) */
     HClust *tree; int dir, nleaf;   /* dendrogram */
     int *slot;                      /* dendrogram: data index -> display slot */
 } RObj;
@@ -384,6 +385,44 @@ static void draw_one_legend(GTable *T, const RObj *r, const RObj *tg,
 #undef LPTY
 }
 
+/* How far this object's row/column names stick out on `side`, in points, or 0
+ * when it draws no labels there. The same band is reserved twice, for two
+ * different reasons: as a page margin when it faces out of the figure, and as a
+ * gutter when it faces another panel. One measurement, so the two cannot drift.
+ * Column names are drawn rotated, so their extent along the axis is the text
+ * width either way. */
+static double label_band(cairo_t *cr, const RObj *r, Side side) {
+    if (r->o->type != HM_HEATMAP || !r->m) return 0;
+    const Matrix *m = r->m;
+    int row = side == SIDE_LEFT || side == SIDE_RIGHT;
+    if (row ? (r->o->rownames != side || !m->rn)
+            : (r->o->colnames != side || !m->cn)) return 0;
+    int n = row ? m->nr : m->nc;
+    char **lab = row ? m->rn : m->cn;
+    double wmax = 0;
+    for (int k = 0; k < n; k++) {
+        double tw = text_w(cr, SZ_AXIS_TEXT, lab[k]);
+        if (tw > wmax) wmax = tw;
+    }
+    return TXT_GAP + wmax;
+}
+
+/* The widest band among the objects whose `side` edge lies on coordinate `at`. */
+static double max_band_at(cairo_t *cr, const RObj *ro, int n, Side side, double at) {
+    double best = 0;
+    for (int i = 0; i < n; i++) {
+        const RObj *r = &ro[i];
+        double edge = side == SIDE_BOTTOM ? r->b
+                    : side == SIDE_TOP    ? r->b + r->h
+                    : side == SIDE_LEFT   ? r->l
+                                          : r->l + r->w;
+        if (fabs(edge - at) > 1e-6) continue;
+        double e = label_band(cr, r, side);
+        if (e > best) best = e;
+    }
+    return best;
+}
+
 int render_heatmap(const PlotSpec *spec, const char *out,
                    double w_pt, double h_pt, char *err) {
     RObj ro[MAX_HMOBJS];
@@ -426,6 +465,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
         /* anchor */
         RObj *a = NULL;
         const HPlace *pl = &o->place;
+        ro[i].anchor = -1;
         if (pl->kind != PL_FULL) {
             if (pl->anchor) {
                 int ai = find_obj(ro, i, pl->anchor);
@@ -433,6 +473,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                 a = &ro[ai];
             } else if (i > 0) a = &ro[i - 1];
             else { snprintf(err, CP_ERRLEN, "first object cannot have a relative placement"); return -1; }
+            ro[i].anchor = (int)(a - ro);
         }
 
         if (o->type == HM_ANNOTATION) {
@@ -659,27 +700,15 @@ int render_heatmap(const PlotSpec *spec, const char *out,
     for (int i = 0; i < n; i++) {
         RObj *r = &ro[i];
         if (r->o->type != HM_HEATMAP) continue;
-        Matrix *m = r->m;
-        if (r->o->rownames && m->rn) {
-            double wmax = 0;
-            for (int k = 0; k < m->nr; k++) {
-                double tw = text_w(cr, SZ_AXIS_TEXT, m->rn[k]);
-                if (tw > wmax) wmax = tw;
-            }
-            double e = TXT_GAP + wmax;
-            if (r->o->rownames == SIDE_RIGHT && fabs(r->l + r->w - 1) < EPS) shiftR = fmax(shiftR, e);
-            if (r->o->rownames == SIDE_LEFT  && fabs(r->l) < EPS)            shiftL = fmax(shiftL, e);
-        }
-        if (r->o->colnames && m->cn) {
-            double wmax = 0;
-            for (int k = 0; k < m->nc; k++) {
-                double tw = text_w(cr, SZ_AXIS_TEXT, m->cn[k]);
-                if (tw > wmax) wmax = tw;
-            }
-            double e = TXT_GAP + wmax;   /* rotated 90 -> text width along the axis */
-            if (r->o->colnames == SIDE_BOTTOM && fabs(r->b) < EPS)             shiftB = fmax(shiftB, e);
-            if (r->o->colnames == SIDE_TOP    && fabs(r->b + r->h - 1) < EPS)  shiftT = fmax(shiftT, e);
-        }
+        double e;
+        if ((e = label_band(cr, r, SIDE_RIGHT)) > 0 && fabs(r->l + r->w - 1) < EPS)
+            shiftR = fmax(shiftR, e);
+        if ((e = label_band(cr, r, SIDE_LEFT))  > 0 && fabs(r->l) < EPS)
+            shiftL = fmax(shiftL, e);
+        if ((e = label_band(cr, r, SIDE_BOTTOM)) > 0 && fabs(r->b) < EPS)
+            shiftB = fmax(shiftB, e);
+        if ((e = label_band(cr, r, SIDE_TOP))   > 0 && fabs(r->b + r->h - 1) < EPS)
+            shiftT = fmax(shiftT, e);
     }
     /* pass A2: in-situ annotation labels (labels=data) reserve outward margin,
      * like row names — a leader span plus the widest value label. */
@@ -799,6 +828,88 @@ int render_heatmap(const PlotSpec *spec, const char *out,
         g = gt_add(T, G_TEXT, 1, CC, 1, CC);
         g->str = spec->lab_title; g->size = SZ_TITLE; g->col = C_BLACK;
         g->tx = 0; g->ty = 1; g->hj = 0; g->va = V_TOP;
+    }
+
+    /* ---- interior gutters: label bands drawn BETWEEN two placed objects ----
+     *
+     * A placement anchors to the anchor's plot body, so beneath("a") puts the
+     * next panel directly under a's cells -- and a's bottom column labels, drawn
+     * outside that body, land on top of it. The page margins already reserve the
+     * labels that face outward (pass A); these are the same labels facing inward,
+     * and nothing reserved them.
+     *
+     * They cannot be reserved in rect space, because a rect unit is only worth a
+     * fixed number of points once the layout is known. So take them out of the
+     * canvas as fixed-point gutters and scale the rects into what remains, the
+     * way the outer gtable already treats its margins. Each gutter is recorded at
+     * the boundary it sits on; an object then shifts by every gutter at or below
+     * it (or at or left of it). The transform maps [0,1] onto [0,1], so pass A's
+     * boundary tests -- already done -- stay true. */
+    {
+        double bandv[MAX_HMOBJS], bandh[MAX_HMOBJS];   /* size, pt */
+        double atv[MAX_HMOBJS], ath[MAX_HMOBJS];       /* boundary, normalized */
+        int nv = 0, nh = 0;
+        for (int i = 0; i < n; i++) {
+            RObj *r = &ro[i];
+            if (r->anchor < 0 || r->o->type == HM_LEGEND) continue;
+            RObj *a = &ro[r->anchor];
+            PlaceKind pk = r->o->place.kind;
+            int vert = pk == PL_BENEATH || pk == PL_TOP_OF;
+            /* A boundary is sized by the widest band facing it from either
+             * side, not by this one pair: in a 2x2 grid both columns cross the
+             * same horizontal boundary, and the taller column's labels are the
+             * ones that have to fit. Same reason both sides count -- the upper
+             * panel's bottom labels and the lower panel's top labels occupy the
+             * same gap. */
+            double at, band;
+            if (vert) {
+                double hi = pk == PL_BENEATH ? a->b : r->b;              /* upper object's floor */
+                double lo = pk == PL_BENEATH ? r->b + r->h : a->b + a->h; /* lower object's ceiling */
+                band = max_band_at(cr, ro, n, SIDE_BOTTOM, hi)
+                     + max_band_at(cr, ro, n, SIDE_TOP, lo);
+                at = hi;
+            } else {
+                double lf = pk == PL_RIGHT_OF ? a->l + a->w : r->l + r->w; /* left object's edge */
+                double rt = pk == PL_RIGHT_OF ? r->l : a->l;               /* right object's edge */
+                band = max_band_at(cr, ro, n, SIDE_RIGHT, lf)
+                     + max_band_at(cr, ro, n, SIDE_LEFT, rt);
+                at = rt;
+            }
+            if (band <= 0) continue;
+            /* two placements can cross one boundary; record it once */
+            double *ats = vert ? atv : ath, *bands = vert ? bandv : bandh;
+            int *cnt = vert ? &nv : &nh, seen = 0;
+            for (int k = 0; k < *cnt; k++)
+                if (fabs(ats[k] - at) < 1e-6) {
+                    if (band > bands[k]) bands[k] = band;
+                    seen = 1; break;
+                }
+            if (!seen) { ats[*cnt] = at; bands[(*cnt)++] = band; }
+        }
+        double totv = 0, toth = 0;
+        for (int k = 0; k < nv; k++) totv += bandv[k];
+        for (int k = 0; k < nh; k++) toth += bandh[k];
+        /* Leave the panels a majority of the canvas: past that the figure is
+         * labels, and the user wants a bigger --size, not thinner cells. */
+        if (totv > 0.5 * ch_pt || toth > 0.5 * cw_pt) {
+            snprintf(err, CP_ERRLEN, "the labels between stacked panels need more "
+                     "room than the panels themselves; give a larger --size or "
+                     "turn some off with rownames=none / colnames=none");
+            return -1;
+        }
+        if (nv || nh) {
+            double sy = (ch_pt - totv) / ch_pt, sx = (cw_pt - toth) / cw_pt;
+            const double GEPS = 1e-9;
+            for (int i = 0; i < n; i++) {
+                RObj *r = &ro[i];
+                if (r->o->type == HM_LEGEND) continue;   /* margin chrome */
+                double dy = 0, dx = 0;
+                for (int k = 0; k < nv; k++) if (atv[k] <= r->b + GEPS) dy += bandv[k];
+                for (int k = 0; k < nh; k++) if (ath[k] <= r->l + GEPS) dx += bandh[k];
+                r->b = r->b * sy + PTY(dy); r->h *= sy;
+                r->l = r->l * sx + PTX(dx); r->w *= sx;
+            }
+        }
     }
 
     for (int i = 0; i < n; i++) {
