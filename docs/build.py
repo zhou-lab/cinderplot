@@ -175,6 +175,16 @@ SECTIONS = [
          'visualizeRegion("chr20", 44616522, 44655233, betas,\n'
          '                platform = "HM450", cluster.samples = TRUE)'),
     ]),
+    # Trees: the one mode whose input is a topology rather than a table, so the
+    # comparison is ggtree rather than ggplot2.
+    ("Trees", [
+        ("tree", "Newick taxonomy, tips and internal nodes",
+         'data/celltype68.tre + geom_tree() + geom_tiplab() + geom_nodelab()',
+         "# 68 cell types, four levels; internal nodes carry the level names\n"
+         "library(ggtree)   # Bioconductor, and it needs ape for the parse\n"
+         'tr <- ape::read.tree("celltype68.tre")\n'
+         "ggtree(tr) + geom_tiplab() + geom_nodelab()"),
+    ]),
 ]
 
 # Themes showcase: the same scatter under each theme. cinderplot renders these
@@ -219,7 +229,8 @@ def no_gg(slug):
     """Slugs whose R reference needs a non-base package, so render() skips the
     gg PNG: theme showcases (same ggplot), the heatmap (ComplexHeatmap), the
     repelled labels (ggrepel), and the CNV plot (sesame)."""
-    return slug.startswith("theme-") or slug in ("heatmap", "textlabels", "k562cnv", "region", "regions")
+    return slug.startswith("theme-") or slug in ("heatmap", "textlabels", "k562cnv",
+                                                 "region", "regions", "tree")
 
 def _up_to_date(slug):
     """A figure is up to date when its cinderplot output exists (and, for
