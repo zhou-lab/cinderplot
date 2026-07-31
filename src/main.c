@@ -254,7 +254,10 @@ int main(int argc, char **argv) {
 
     DataFrame *df = df_read_csv(spec.data_path, err);
     if (!df) { fprintf(stderr, "cinderplot: %s\n", err); return 1; }
-    if (render_plot(&spec, df, out, w_pt > 0 ? w_pt : 6 * 72, h_pt > 0 ? h_pt : 4 * 72, err)) {
+    /* Pass the size through unset. render_plot fits the canvas to the labels
+     * when it is, the way heatmap and track modes already size themselves; an
+     * explicit --size is never second-guessed. */
+    if (render_plot(&spec, df, out, w_pt, h_pt, err)) {
         fprintf(stderr, "cinderplot: %s\n", err);
         return 1;
     }

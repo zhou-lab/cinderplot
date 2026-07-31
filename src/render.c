@@ -1380,9 +1380,25 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
 #define PR(r) (4 + 3 * (r))
 #define PC(c) (4 + 2 * (c))
 
-    /* ---- surface & measurement ---- */
-    cairo_surface_t *surf = cp_surface_create(out, w_pt, h_pt);
-    cairo_t *cr = cairo_create(surf);
+    /* ---- measurement, then the real surface ----
+     * The canvas may still be sized from its own labels below, and a surface is
+     * fixed at creation, so measure on a scratch one first and open the output
+     * only once the size is settled. Nothing is drawn before then: gt_add only
+     * records grobs, and gt_render runs at the end. */
+    /* Font metrics differ between surface types, so measuring on a scratch
+     * surface and drawing on another moves text by a hair. Only the auto-fit
+     * path can afford that -- it just needs a size that fits -- so a caller who
+     * gave a size gets the output surface from the start, exactly as before. */
+    int autosize = (w_pt <= 0 || h_pt <= 0);
+    cairo_surface_t *msurf = NULL, *surf = NULL;
+    cairo_t *cr;
+    if (autosize) {
+        msurf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 8, 8);
+        cr = cairo_create(msurf);
+    } else {
+        surf = cp_surface_create(out, w_pt, h_pt);
+        cr = cairo_create(surf);
+    }
     cairo_select_font_face(cr, FONT_FAMILY, CAIRO_FONT_SLANT_NORMAL,
                            CAIRO_FONT_WEIGHT_NORMAL);
     const Theme *th = &THEMES[spec->theme];   /* active theme (THEME_GRAY = default) */
@@ -1513,6 +1529,43 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     T->rowh[1] = upt(spec->lab_title ? font_h(cr, SZ_TITLE) : 0);
     T->rowh[2] = upt(spec->lab_subtitle ? font_h(cr, SZ_BASE)
                    : spec->lab_title ? HALF_LINE : 0);
+    /* ---- auto-fit the canvas when no --size was given ----
+     * The 6x4 default ignores how much the figure has to show, so a 20-category
+     * axis or an 8-panel facet was squeezed into the same box as a 3-point
+     * scatter. Give every panel room for its own categories and let the figure
+     * grow, but never shrink below the old default, and never touch a size the
+     * caller asked for. */
+    {
+        double catpitch = labh * 1.15;          /* readable pitch for one category */
+        int maxx = 0, maxy = 0;
+        for (int p = 0; p < npan; p++) {
+            if (ps[p].nxlev > maxx) maxx = ps[p].nxlev;
+            if (ps[p].nylev > maxy) maxy = ps[p].nylev;
+        }
+        if (w_pt <= 0) {
+            double panelw = disc_x && maxx ? maxx * catpitch : 4.0 * 72;
+            double chrome = MARGIN + ylab_w + TICK_LEN + TXT_GAP + baseh + MARGIN
+                          + (leg ? gt_fixed_w(leg) + 2 * HALF_LINE : 0);
+            w_pt = chrome + ncolp * panelw + (ncolp - 1) * PANEL_SPACE;
+            w_pt = fmin(30.0 * 72, fmax(6.0 * 72, w_pt));
+        }
+        if (h_pt <= 0) {
+            double panelh = disc_y && maxy ? maxy * catpitch : 2.6 * 72;
+            double chrome = MARGIN * 2 + labh + TICK_LEN + TXT_GAP + baseh
+                          + (spec->lab_title ? font_h(cr, SZ_TITLE) : 0);
+            h_pt = chrome + nrowp * (panelh + striph) + (nrowp - 1) * PANEL_SPACE;
+            h_pt = fmin(30.0 * 72, fmax(4.0 * 72, h_pt));
+        }
+    }
+
+    if (autosize) {          /* size settled: open the real surface */
+        cairo_destroy(cr); cairo_surface_destroy(msurf);
+        surf = cp_surface_create(out, w_pt, h_pt);
+        cr = cairo_create(surf);
+        cairo_select_font_face(cr, FONT_FAMILY, CAIRO_FONT_SLANT_NORMAL,
+                               CAIRO_FONT_WEIGHT_NORMAL);
+    }
+
     /* ---- bottom-axis label angle ----
      * Discrete labels are drawn one per category, so a crowded axis runs them
      * into each other. Measure what a panel has to hold and lean them over when
