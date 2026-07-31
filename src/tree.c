@@ -56,6 +56,7 @@ typedef struct TNode {
     struct TNode **kid; int nkid, kidcap;
     double x, y;                /* laid-out position, data space */
     double lw;                  /* rendered label width, pt (0 if undrawn) */
+    int id;                     /* 1-based node number; see assign_ids() */
 } TNode;
 
 static TNode *tn_new(void) {
@@ -179,6 +180,40 @@ static TNode *newick_parse(const char *text, char *err) {
 
 static int tn_leaf(const TNode *t) { return t->nkid == 0; }
 
+/* Node numbers, following ape's phylo convention so a table generated in R
+ * lines up: tips are 1..Ntip in the order they appear reading the Newick left
+ * to right, then internal nodes from Ntip+1 with the ROOT first and the rest in
+ * preorder.
+ *
+ * This exists because names are not keys. A taxonomy that repeats a name down a
+ * single-child chain -- three nodes called Fibroblast -- cannot be joined on
+ * name at all, and the number is the only thing that distinguishes them. */
+static void assign_tips(TNode *t, int *next) {
+    if (tn_leaf(t)) { t->id = (*next)++; return; }
+    for (int i = 0; i < t->nkid; i++) assign_tips(t->kid[i], next);
+}
+static void assign_internal(TNode *t, int *next) {
+    if (tn_leaf(t)) return;
+    t->id = (*next)++;
+    for (int i = 0; i < t->nkid; i++) assign_internal(t->kid[i], next);
+}
+static void assign_ids(TNode *root, int *ntip_out) {
+    int tip = 1;
+    assign_tips(root, &tip);
+    *ntip_out = tip - 1;
+    int internal = tip;
+    assign_internal(root, &internal);
+}
+
+static TNode *find_by_id(TNode *t, int id) {
+    if (t->id == id) return t;
+    for (int i = 0; i < t->nkid; i++) {
+        TNode *f = find_by_id(t->kid[i], id);
+        if (f) return f;
+    }
+    return NULL;
+}
+
 /* Depth-first, assigning each leaf the next y. An internal node then sits at
  * the mean of its children, which is what makes a rectangular tree read as a
  * hierarchy rather than a tangle. x is depth, or the cumulative branch length
@@ -220,10 +255,14 @@ static void count_lengths(const TNode *t, int root, int *with, int *without) {
 
 /* Measure the label each node will actually draw, so the layout can make room
  * for it. A node that draws nothing measures zero and constrains nothing. */
-static void measure_labels(cairo_t *cr, TNode *t, int tips, int nodes, double sz) {
+static void measure_labels(cairo_t *cr, TNode *t, int tips, int nodes,
+                           int ids, double sz) {
     int leaf = tn_leaf(t);
     t->lw = (t->name && (leaf ? tips : nodes)) ? text_w(cr, sz, t->name) : 0;
-    for (int i = 0; i < t->nkid; i++) measure_labels(cr, t->kid[i], tips, nodes, sz);
+    if (ids && t->lw > 0) { char b[16]; snprintf(b, sizeof b, "%d", t->id);
+                            t->lw = text_w(cr, sz, b); }
+    for (int i = 0; i < t->nkid; i++)
+        measure_labels(cr, t->kid[i], tips, nodes, ids, sz);
 }
 
 /* widest tip / node label, for the margin they need */
@@ -250,6 +289,7 @@ typedef struct {
     Factor *f;                  /* discrete: levels + per-row index */
     Col *pal;                   /* discrete: one colour per level */
     double dmin, dmax;          /* continuous: domain */
+    int by_id;                  /* key is a node number, not a name */
     FillScale fs;               /* continuous: ramp */
     int discrete;
 } Join;
@@ -261,13 +301,16 @@ static int join_load(Join *j, const char *path, const char *colname,
     DataFrame *df = df_read_csv(path, err);
     if (!df) return -1;
     j->df = df;
-    for (int c = 0; c < df->ncol; c++)
-        if (df->cols[c].type == COL_STR) { j->key = &df->cols[c]; break; }
-    if (!j->key) {
-        snprintf(err, CP_ERRLEN, "%s has no text column to join on; the first "
-                 "text column is matched against the node names", path);
+    if (df->ncol < 2) {
+        snprintf(err, CP_ERRLEN, "%s needs at least two columns: the key, then "
+                 "the column named by colour=", path);
         return -1;
     }
+    /* The first column is the key. Numeric means node NUMBERS, text means node
+     * names -- which is how ggtree's %<+% reads its first column too, and the
+     * only way to address a tree whose names repeat. */
+    j->key = &df->cols[0];
+    j->by_id = j->key->type == COL_NUM;
     if (!colname) {
         snprintf(err, CP_ERRLEN, "joining %s needs colour=<column>", path);
         return -1;
@@ -316,7 +359,7 @@ static int count_named(const TNode *t, const char *name, int leaves) {
  * name is usually a defect in the tree anyway. */
 static int join_check_unique(const Join *j, const TNode *root, int leaves,
                              char *err) {
-    if (!j->df) return 0;
+    if (!j->df || j->by_id) return 0;   /* a number identifies one node already */
     for (int r = 0; r < j->df->nrow; r++) {
         const char *nm = j->key->str[r];
         if (!nm) continue;
@@ -336,11 +379,14 @@ static int join_check_unique(const Join *j, const TNode *root, int leaves,
 }
 
 /* Colours for one name, in table order; returns how many rows matched. */
-static int join_lookup(const Join *j, const char *name, Col *out, int cap) {
-    if (!j->df || !name) return 0;
+static int join_lookup(const Join *j, const char *name, int id, Col *out, int cap) {
+    if (!j->df) return 0;
+    if (!j->by_id && !name) return 0;
     int n = 0;
     for (int r = 0; r < j->df->nrow && n < cap; r++) {
-        if (!j->key->str[r] || strcmp(j->key->str[r], name)) continue;
+        if (j->by_id) {
+            if (j->key->num[r] != (double)id) continue;
+        } else if (!j->key->str[r] || strcmp(j->key->str[r], name)) continue;
         if (j->discrete) {
             if (j->f->idx[r] < 0) continue;
             out[n++] = j->pal[j->f->idx[r]];
@@ -424,10 +470,17 @@ static void emit(GTable *T, int R, int C, const TNode *t, const PlotSpec *spec,
         int leaf = tn_leaf(t);
         if (leaf ? spec->tree_tiplab : spec->tree_nodelab) {
             g = gt_add(T, G_TEXT, R, C, R, C);
-            g->str = t->name; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
+            /* label=id swaps the name for the node number, which is the only
+             * way to discover the numbers a numeric join has to use. */
+            if (spec->tree_lab_id) {
+                char *b = cp_xmalloc(16);
+                snprintf(b, 16, "%d", t->id);
+                g->str = b;
+            } else g->str = t->name;
+            g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
             if (leaf && jlab->df) {          /* geom_tiplab(data=, colour=) */
                 Col c[1];
-                if (join_lookup(jlab, t->name, c, 1) > 0) g->col = c[0];
+                if (join_lookup(jlab, t->name, t->id, c, 1) > 0) g->col = c[0];
             }
             if (circ) {
                 /* Radiating outward, each at its own angle, and flipped on the
@@ -459,7 +512,7 @@ static void emit(GTable *T, int R, int C, const TNode *t, const PlotSpec *spec,
          * back along the branch so several never sit on top of each other. */
         const Join *j = tn_leaf(t) ? jtip : jnode;
         Col cols[16];
-        int n = j->df ? join_lookup(j, t->name, cols, 16) : 0;
+        int n = j->df ? join_lookup(j, t->name, t->id, cols, 16) : 0;
         if (n > 0) {
             double *px = cp_xmalloc(n * sizeof(double));
             double *py = cp_xmalloc(n * sizeof(double));
@@ -512,6 +565,10 @@ int render_tree(const PlotSpec *spec, const char *out,
     }
     int has_blen = nwith > 0;
     root->blen = 0;                        /* the root has no parent to measure to */
+    int ntip = 0;
+    assign_ids(root, &ntip);
+    int nnode = 0;
+    for (int k = 1; find_by_id(root, k); k++) nnode = k;
     cairo_surface_t *msurf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 8, 8);
     cairo_t *cr = cairo_create(msurf);
     cairo_select_font_face(cr, FONT_FAMILY, CAIRO_FONT_SLANT_NORMAL,
@@ -528,13 +585,26 @@ int render_tree(const PlotSpec *spec, const char *out,
     if (spec->tree_tl_data
         && join_load(&jlab, spec->tree_tl_data, spec->tree_tl_col, spec, err)) return -1;
 
+    for (int w = 0; w < 3; w++) {   /* an id that matches nothing is a typo */
+        const Join *j = w == 0 ? &jnode : w == 1 ? &jtip : &jlab;
+        if (!j->df || !j->by_id) continue;
+        for (int r = 0; r < j->df->nrow; r++) {
+            int id = (int)j->key->num[r];
+            if (id != j->key->num[r] || !find_by_id(root, id)) {
+                snprintf(err, CP_ERRLEN, "node id %g is not in the tree (ids run "
+                         "1..%d)", j->key->num[r], nnode);
+                return -1;
+            }
+        }
+    }
     if (join_check_unique(&jnode, root, 0, err)) return -1;
     if (join_check_unique(&jtip, root, 1, err)) return -1;
     if (join_check_unique(&jlab, root, 1, err)) return -1;
 
     /* Measure before laying out: on a cladogram the branch lengths depend on
      * how wide the labels are. */
-    measure_labels(cr, root, spec->tree_tiplab, spec->tree_nodelab, SZ_AXIS_TEXT);
+    measure_labels(cr, root, spec->tree_tiplab, spec->tree_nodelab,
+                   spec->tree_lab_id, SZ_AXIS_TEXT);
     double tipw = spec->tree_tiplab ? label_w(cr, root, 1, SZ_AXIS_TEXT) : 0;
     double labh = font_h(cr, SZ_AXIS_TEXT);
 

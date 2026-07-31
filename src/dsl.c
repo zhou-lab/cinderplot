@@ -839,6 +839,12 @@ static int parse_term(P *p, PlotSpec *spec) {
                     spec->tree_layout = 2;
                 else return fail(p, "layout=%s invalid; use rectangular, slanted "
                                  "or circular", v);
+            } else if (!strcmp(key, "label")) {
+                char *v = string_lit(p);
+                if (!v) v = ident(p);
+                if (!v || strcmp(v, "id"))
+                    return fail(p, "label= expects id (the node number)", "");
+                spec->tree_lab_id = 1;
             } else if (!strcmp(key, "data")) {
                 if (!jdata) return fail(p, "%s() takes no data=", name);
                 if (!(*jdata = string_lit(p)))
@@ -848,7 +854,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                 if (!(*jcol = ident(p)))
                     return fail(p, "colour= expects a column name", "");
             } else return fail(p, "tree geom option `%s` not implemented; "
-                               "supported: layout=, data=, colour=", key);
+                               "supported: layout=, data=, colour=, label=", key);
             free(key);
             skip_ws(p);
             if (*p->s == ',') { p->s++; skip_ws(p); }

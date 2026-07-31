@@ -169,10 +169,22 @@ cinderplot 'tax.tre + geom_tree()
 rows for one name draw several marks stacked back along its branch, so a node
 belonging to three categories shows three dots. Names with no row get no mark.
 
-**The joined name must identify exactly one node.** If a name the table
-references occurs on more than one node, the join errors instead of matching all
-of them — every node called `A` matching every `A` row produces a figure that
-reads as correct and is not. A repeated name the table never mentions is fine.
+The key column's **type decides how it joins**, as ggtree's first column does:
+
+- **text** → joins by node/tip *name*. The name must identify exactly one node;
+  if it occurs on more than one the join errors rather than matching all of
+  them, because every node called `A` matching every `A` row produces a figure
+  that reads as correct and is not. A repeated name the table never mentions is
+  fine.
+- **numeric** → joins by node *id*, which is unique by construction and is the
+  only way to address a tree whose names repeat (a taxonomy that carries the
+  same name down a single-child chain).
+
+Ids follow ape's `phylo` convention: tips are `1..Ntip` in the order they appear
+reading the Newick left to right, then internal nodes from `Ntip+1` with the
+root first and the rest in preorder. See them with
+`geom_nodelab(label=id)` / `geom_tiplab(label=id)`, which is also how you check
+them against `ape` before generating a table in R.
 
 
 ### 4. Genome locus browser — stacked tracks over one or more windows

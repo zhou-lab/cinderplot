@@ -338,6 +338,7 @@ typedef struct {
     int tree_layout;                              /* 0 rectangular, 1 slanted, 2 circular */
     int tree_mode, tree_tiplab, tree_nodelab;     /* geom_tree()/geom_tiplab()/geom_nodelab() */
     int tree_nodepoint, tree_tippoint;            /* geom_nodepoint()/geom_tippoint() */
+    int tree_lab_id;                              /* geom_*lab(label=id): show numbers */
     /* Tables joined to the tree on node/tip NAME. Several rows for one name
      * draw several marks, which is how a node belonging to more than one
      * category advertises itself. */
