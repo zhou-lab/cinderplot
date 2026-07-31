@@ -35,6 +35,12 @@ cinderplot data.csv -x hp -y mpg -c cyl -f gear out.pdf      # shortcut flags
   decompressed.
 - Rows dropped for NA, or for non-positive values on a log axis, are reported on
   stderr, ggplot2-style.
+- **`data="path"` overrides the leading data source for one object**, so a
+  figure can combine several files. It is a keyword, never positional
+  (`heatmap("f.tsv", ...)` is an error). Accepted on `heatmap()`, on every track
+  verb, and on `geom_segment()`/`geom_rect()`; other geoms share the leading
+  source. So a grid of panels is `f1.tsv + heatmap(name="a") +
+  heatmap(data="f2.tsv", right_of("a"), name="b")`.
 
 ## Three modes, chosen by which verbs appear
 
