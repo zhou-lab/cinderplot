@@ -385,8 +385,20 @@ void gt_render(GTable *t, cairo_t *cr) {
                 for (int i = 0; i < g->n; i++) {
                     double w = cp_label_w(cr, SZ_AXIS_TEXT, g->labels[i]);
                     double pos = g->label_pos ? g->label_pos[i] : g->px[i];
-                    draw_label(cr, DX(pos) - w / 2,
-                               ry + TICK_LEN + TXT_GAP + fe.ascent, SZ_AXIS_TEXT, g->labels[i]);
+                    if (g->label_angle != 0) {
+                        /* Rotated labels end AT their tick and run up to the
+                         * right, as ggplot2's angle= with hjust=1 does, so a
+                         * long name leans away from its neighbour instead of
+                         * overrunning it. */
+                        cairo_save(cr);
+                        cairo_translate(cr, DX(pos), ry + TICK_LEN + TXT_GAP);
+                        cairo_rotate(cr, -g->label_angle * M_PI / 180.0);
+                        draw_label(cr, -w, fe.ascent * 0.36, SZ_AXIS_TEXT, g->labels[i]);
+                        cairo_restore(cr);
+                    } else {
+                        draw_label(cr, DX(pos) - w / 2,
+                                   ry + TICK_LEN + TXT_GAP + fe.ascent, SZ_AXIS_TEXT, g->labels[i]);
+                    }
                 }
             }
             break;

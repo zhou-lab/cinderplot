@@ -1513,16 +1513,65 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     T->rowh[1] = upt(spec->lab_title ? font_h(cr, SZ_TITLE) : 0);
     T->rowh[2] = upt(spec->lab_subtitle ? font_h(cr, SZ_BASE)
                    : spec->lab_title ? HALF_LINE : 0);
+    /* ---- bottom-axis label angle ----
+     * Discrete labels are drawn one per category, so a crowded axis runs them
+     * into each other. Measure what a panel has to hold and lean them over when
+     * they do not fit, which loses nothing (unlike thinning or truncating).
+     * A caller who named an angle gets it, including angle=0 for "leave them
+     * alone"; <0 is the default and means decide here. */
+    double bang = flip ? spec->y_angle : spec->x_angle;
+    int bdisc = flip ? disc_y : disc_x;
+    if (bang < 0) {
+        bang = 0;
+        if (bdisc) {
+            /* Rough panel width: the canvas less the left chrome and any
+             * legend, split between the columns. Exact enough to decide
+             * whether the labels fit, which is all this has to answer. */
+            double chrome = MARGIN + ylab_w + TICK_LEN + TXT_GAP + baseh + MARGIN
+                          + (leg ? gt_fixed_w(leg) + 2 * HALF_LINE : 0);
+            double panel_w = fmax(1, (w_pt - chrome) / ncolp);
+            double need = 0;
+            for (int p = 0; p < npan; p++) {
+                const PanelScale *S = &ps[p];
+                int n = flip ? S->nybr : S->nxbr;
+                char **lb = flip ? S->ylabs : S->xlabs;
+                double sum = 0;
+                for (int i = 0; i < n; i++)
+                    sum += cp_label_w(cr, SZ_AXIS_TEXT, lb[i]) + TXT_GAP;
+                if (sum > need) need = sum;
+            }
+            /* 45 degrees buys a factor of ~1/cos(45); past that go vertical. */
+            if (need > panel_w) bang = need > panel_w * 1.6 ? 90 : 45;
+        }
+    }
+    /* Height the rotated labels need: the longest one leaned over, plus the
+     * glyph height carried by the lean. */
+    double blab_h = labh;
+    if (bang > 0) {
+        double wmax = 0;
+        for (int p = 0; p < npan; p++) {
+            const PanelScale *S = &ps[p];
+            int n = flip ? S->nybr : S->nxbr;
+            char **lb = flip ? S->ylabs : S->xlabs;
+            for (int i = 0; i < n; i++) {
+                double w = cp_label_w(cr, SZ_AXIS_TEXT, lb[i]);
+                if (w > wmax) wmax = w;
+            }
+        }
+        double rad = bang * M_PI / 180.0;
+        blab_h = wmax * sin(rad) + labh * cos(rad);
+    }
+
     int bfree_l = flip ? spec->free_y : spec->free_x;
     for (int r = 0; r < nrowp; r++) {
         T->rowh[SR(r)] = upt(striph);
         T->rowh[PR(r)] = unull(1);
         if (r < nrowp - 1)
-            T->rowh[PR(r) + 1] = upt(bfree_l ? TICK_LEN + TXT_GAP + labh + PANEL_SPACE
+            T->rowh[PR(r) + 1] = upt(bfree_l ? TICK_LEN + TXT_GAP + blab_h + PANEL_SPACE
                                              : PANEL_SPACE);
     }
     int r_axis = 3 * nrowp + 2;
-    T->rowh[r_axis]     = upt(TICK_LEN + TXT_GAP + labh);
+    T->rowh[r_axis]     = upt(TICK_LEN + TXT_GAP + blab_h);
     T->rowh[r_axis + 1] = upt(HALF_LINE / 2);
     T->rowh[r_axis + 2] = upt(baseh);
     T->rowh[r_axis + 3] = upt(spec->lab_caption ? fmax(MARGIN, font_h(cr, SZ_AXIS_TEXT)) : MARGIN);
@@ -2090,6 +2139,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             g->n = flip ? S->nybr : S->nxbr;
             g->px = flip ? S->ynpc : S->xnpc;
             g->labels = flip ? S->ylabs : S->xlabs;
+            g->label_angle = bang;
             g->axis_styled = 1; g->tick_col = th->tick; g->hide_ticks = !th->tick_on;
             g->text_col = th->axis_text; g->hide_text = !th->axis_text_on;
         }
@@ -2106,6 +2156,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         if (genome_x) { g->n = gax_n; g->px = gax_pos; g->labels = gax_lab; }
         else {
             g->n = bax_n; g->px = bax_pos; g->labels = bax_lab;   /* log ticks drawn inside the panel */
+            g->label_angle = bang;
         }
         g->axis_styled = 1; g->tick_col = th->tick; g->hide_ticks = !th->tick_on;
         g->text_col = th->axis_text; g->hide_text = !th->axis_text_on;

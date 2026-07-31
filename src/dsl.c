@@ -807,6 +807,27 @@ static int parse_term(P *p, PlotSpec *spec) {
         spec->coord_flip = 1;
         return expect(p, ')');
     }
+    if (!strcmp(name, "scale_x_discrete") || !strcmp(name, "scale_y_discrete")) {
+        int isx = name[6] == 'x';
+        skip_ws(p);
+        while (*p->s != ')') {
+            char *key = ident(p);
+            if (!key || expect(p, '='))
+                return fail(p, "%s() supports angle=", name);
+            if (strcmp(key, "angle"))
+                return fail(p, "scale_*_discrete() option `%s` not implemented; "
+                            "supported: angle=", key);
+            free(key);
+            skip_ws(p);
+            double v = strtod(p->s, (char **)&p->s);
+            if (v < 0 || v > 90)
+                return fail(p, "angle= must be between 0 and 90", "");
+            if (isx) spec->x_angle = v; else spec->y_angle = v;
+            skip_ws(p);
+            if (*p->s == ',') { p->s++; skip_ws(p); }
+        }
+        return expect(p, ')');
+    }
     if (!strcmp(name, "facet_wrap")) {
         skip_ws(p);
         if (*p->s != '~') return fail(p, "facet_wrap() expects a formula: facet_wrap(~var)", "");
@@ -952,6 +973,9 @@ static int parse_term(P *p, PlotSpec *spec) {
 int dsl_parse(const char *src, PlotSpec *spec, char *err) {
     P p = {src, err};
     memset(spec, 0, sizeof *spec);
+    /* <0 means "decide from the measured labels"; 0 is a caller asking for
+     * horizontal, which is a different thing and must survive. */
+    spec->x_angle = spec->y_angle = -1;
     spec->fill.kind = FILL_VIRIDIS;              /* default heatmap fill */
     /* default theme = THEME_GRAY (enum 0, the memset default) */
 
