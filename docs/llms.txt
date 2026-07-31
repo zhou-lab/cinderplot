@@ -144,7 +144,10 @@ characters — `'Neuron, inhibitory'`, `'b''s cell'` for a literal quote. Branch
 lengths are **all-or-nothing**: give every branch one and x is cumulative
 length, or give none and x is depth (a cladogram). A mix is an error rather than
 a guess, and a length on the root is ignored. `geom_tiplab()` draws the
-leaf names, `geom_nodelab()` the internal ones. Layout is rectangular; omitting
+leaf names, `geom_nodelab()` the internal ones — each sits on the branch running
+into its node, and on a **cladogram** the branches widen so the labels do not
+overprint (x is arbitrary there, so nothing is misrepresented). A phylogram's
+lengths are the datum and are never stretched, so its labels can crowd. Layout is rectangular; omitting
 `--size` fits one readable row per tip. Not implemented yet, and each says so:
 `layout=circular|slanted`, and joining an external table on tip name
 (`geom_tiplab(data=..., colour=...)`).

@@ -55,6 +55,7 @@ typedef struct TNode {
     double blen;                /* branch length to parent; NAN when absent */
     struct TNode **kid; int nkid, kidcap;
     double x, y;                /* laid-out position, data space */
+    double lw;                  /* rendered label width, pt (0 if undrawn) */
 } TNode;
 
 static TNode *tn_new(void) {
@@ -182,9 +183,22 @@ static int tn_leaf(const TNode *t) { return t->nkid == 0; }
  * the mean of its children, which is what makes a rectangular tree read as a
  * hierarchy rather than a tangle. x is depth, or the cumulative branch length
  * when the file carries lengths. */
+/* `fit` widens a branch so the label at its far end clears the one behind it.
+ * Only for a cladogram: there x is depth, an arbitrary unit, so stretching a
+ * branch misrepresents nothing. On a phylogram the length is the datum and must
+ * be left alone -- the labels crowd instead, which is the honest failure. */
 static void layout(TNode *t, double px, int has_blen, double *next_y,
-                   double *maxx, int *nleaf) {
-    t->x = has_blen ? px + t->blen : px + 1;
+                   double *maxx, int *nleaf, double fit, const TNode *parent) {
+    double step = 1;
+    if (fit > 0 && parent) {
+        /* A node label ends at its node and runs back along the incoming
+         * branch, so the branch must hold that label whole, clear of where the
+         * parent's own label ended. */
+        (void)parent;
+        double need = t->lw + fit;
+        if (need > step) step = need;
+    }
+    t->x = has_blen ? px + t->blen : px + step;
     if (t->x > *maxx) *maxx = t->x;
     if (tn_leaf(t)) {
         t->y = (*next_y)++;
@@ -192,7 +206,7 @@ static void layout(TNode *t, double px, int has_blen, double *next_y,
         return;
     }
     for (int i = 0; i < t->nkid; i++)
-        layout(t->kid[i], t->x, has_blen, next_y, maxx, nleaf);
+        layout(t->kid[i], t->x, has_blen, next_y, maxx, nleaf, fit, t);
     t->y = (t->kid[0]->y + t->kid[t->nkid - 1]->y) / 2;
 }
 
@@ -202,6 +216,14 @@ static void layout(TNode *t, double px, int has_blen, double *next_y,
 static void count_lengths(const TNode *t, int root, int *with, int *without) {
     if (!root) { if (isnan(t->blen)) (*without)++; else (*with)++; }
     for (int i = 0; i < t->nkid; i++) count_lengths(t->kid[i], 0, with, without);
+}
+
+/* Measure the label each node will actually draw, so the layout can make room
+ * for it. A node that draws nothing measures zero and constrains nothing. */
+static void measure_labels(cairo_t *cr, TNode *t, int tips, int nodes, double sz) {
+    int leaf = tn_leaf(t);
+    t->lw = (t->name && (leaf ? tips : nodes)) ? text_w(cr, sz, t->name) : 0;
+    for (int i = 0; i < t->nkid; i++) measure_labels(cr, t->kid[i], tips, nodes, sz);
 }
 
 /* widest tip / node label, for the margin they need */
@@ -216,7 +238,7 @@ static double label_w(cairo_t *cr, const TNode *t, int tips, double sz) {
 }
 
 static void emit(GTable *T, int R, int C, const TNode *t, const PlotSpec *spec,
-                 double x0, double x1, double y0, double y1, double lw) {
+                 double x0, double x1, double y0, double y1, double lw, int root) {
 #define TX(v) (((v) - x0) / (x1 - x0))
 #define TY(v) (1.0 - ((v) - y0) / (y1 - y0))
     Grob *g;
@@ -239,16 +261,21 @@ static void emit(GTable *T, int R, int C, const TNode *t, const PlotSpec *spec,
         if (leaf ? spec->tree_tiplab : spec->tree_nodelab) {
             g = gt_add(T, G_TEXT, R, C, R, C);
             g->str = t->name; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
-            /* A tip label reads outward from its tip; an internal label would
-             * sit on top of the spine, so it goes just above its own node. */
-            g->tx = TX(t->x) + (leaf ? 0.006 : 0);
+            /* A tip label reads outward from its tip. An internal label sits
+             * above the branch running INTO its node and ends there: centring
+             * it on the node put a parent's label over its child's wherever
+             * the branch between them was short. */
+            /* The root has no incoming branch to sit on, so its label reads
+             * forward from the node instead of off the left edge. */
+            int fwd = leaf || root;
+            g->tx = TX(t->x) + (fwd ? 0.006 : -0.004);
             g->ty = TY(t->y) + (leaf ? 0 : 0.004);
-            g->hj = leaf ? 0 : 0.5;
+            g->hj = fwd ? 0 : 1;
             g->va = leaf ? V_INKCENTER : V_BOTTOM;
         }
     }
     for (int i = 0; i < t->nkid; i++)
-        emit(T, R, C, t->kid[i], spec, x0, x1, y0, y1, lw);
+        emit(T, R, C, t->kid[i], spec, x0, x1, y0, y1, lw, 0);
 #undef TX
 #undef TY
 }
@@ -274,17 +301,23 @@ int render_tree(const PlotSpec *spec, const char *out,
     }
     int has_blen = nwith > 0;
     root->blen = 0;                        /* the root has no parent to measure to */
-    double next_y = 0, maxx = 0;
-    int nleaf = 0;
-    layout(root, 0, has_blen, &next_y, &maxx, &nleaf);
-    if (nleaf < 1) { snprintf(err, CP_ERRLEN, "the tree has no tips"); return -1; }
-
     cairo_surface_t *msurf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 8, 8);
     cairo_t *cr = cairo_create(msurf);
     cairo_select_font_face(cr, FONT_FAMILY, CAIRO_FONT_SLANT_NORMAL,
                            CAIRO_FONT_WEIGHT_NORMAL);
+    /* Measure before laying out: on a cladogram the branch lengths depend on
+     * how wide the labels are. */
+    measure_labels(cr, root, spec->tree_tiplab, spec->tree_nodelab, SZ_AXIS_TEXT);
     double tipw = spec->tree_tiplab ? label_w(cr, root, 1, SZ_AXIS_TEXT) : 0;
     double labh = font_h(cr, SZ_AXIS_TEXT);
+
+    /* With fitting on, x is measured in points, so a branch is a real width
+     * rather than an abstract 1. */
+    double fit = (!has_blen && spec->tree_nodelab) ? TXT_GAP * 2 : 0;
+    double next_y = 0, maxx = 0;
+    int nleaf = 0;
+    layout(root, 0, has_blen, &next_y, &maxx, &nleaf, fit, NULL);
+    if (nleaf < 1) { snprintf(err, CP_ERRLEN, "the tree has no tips"); return -1; }
 
     /* Auto-fit: one readable row per tip, and enough width that the branching
      * is legible next to however long the tip labels are. */
@@ -298,8 +331,12 @@ int render_tree(const PlotSpec *spec, const char *out,
                     "60 in, so tip labels will crowd (set --size to override)\n",
                     nleaf, want / 72);
     }
-    if (w_pt <= 0) w_pt = fmin(30.0 * 72, fmax(3.0 * 72,
-                          2 * MARGIN + tipw + fmax(120.0, maxx * 26.0)));
+    if (w_pt <= 0) {
+        /* A fitted cladogram measured its branches in points already; anything
+         * else gets a readable width per unit of depth. */
+        double body = fit > 0 ? maxx : fmax(120.0, maxx * 26.0);
+        w_pt = fmin(30.0 * 72, fmax(3.0 * 72, 2 * MARGIN + tipw + body));
+    }
     cairo_destroy(cr); cairo_surface_destroy(msurf);
 
     cairo_surface_t *surf = cp_surface_create(out, w_pt, h_pt);
@@ -328,7 +365,7 @@ int render_tree(const PlotSpec *spec, const char *out,
      * flush against the panel edge. */
     double y0 = -0.5, y1 = (nleaf - 1) + 0.5;
     double x0 = 0, x1 = maxx > 0 ? maxx : 1;
-    emit(T, R, C, root, spec, x0, x1, y0, y1, lw_pt(0.5));
+    emit(T, R, C, root, spec, x0, x1, y0, y1, lw_pt(0.5), 1);
 
     gt_resolve(T, 0, 0, w_pt, h_pt);
     gt_render(T, cr);
