@@ -788,8 +788,21 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             int rowlab = hm->o->rownames && hm->m->rn, collab = hm->o->colnames && hm->m->cn;
             double cell_w = collab ? fmax(HM_CELL_BASE, axH * 1.1) : HM_CELL_BASE;
             double cell_h = rowlab ? fmax(HM_CELL_BASE, axH * 1.1) : HM_CELL_BASE;
-            aw = marL + hm->nc * cell_w / hm->w + marR;
-            ah = marT + titleh + titlegap + hm->nr * cell_h / hm->h + marB;
+            double body_w = hm->nc * cell_w / hm->w, chrome_w = marL + marR;
+            double body_h = hm->nr * cell_h / hm->h;
+            double chrome_h = marT + titleh + titlegap + marB;
+            /* A cell pitch alone ignores how long the labels are, so a small
+             * matrix with long names came out mostly text -- eight rows of
+             * twenty characters put more ink in the margin than in the data.
+             * Keep the cells at a majority of the figure by growing them when
+             * the chrome would otherwise dominate. */
+            const double BODY_SHARE = 0.55;
+            double min_w = BODY_SHARE / (1 - BODY_SHARE) * chrome_w;
+            double min_h = BODY_SHARE / (1 - BODY_SHARE) * chrome_h;
+            if (body_w < min_w) body_w = min_w;
+            if (body_h < min_h) body_h = min_h;
+            aw = chrome_w + body_w;
+            ah = chrome_h + body_h;
         } else {                                     /* no heatmap: sensible default */
             if (aw <= 0) aw = 6 * 72;
             if (ah <= 0) ah = 4 * 72;
