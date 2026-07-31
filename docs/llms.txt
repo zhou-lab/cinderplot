@@ -126,6 +126,13 @@ by its data column name, e.g. `legend(right_of("diagnosis"))`.
 `heatmap()`s gets per-panel labels. Booleans accept `TRUE`/`FALSE` as well as
 `on`/`off`.
 
+`aspect=` couples the figure's two dimensions so the **matrix** comes out at
+that ratio — `aspect=1` makes the matrix square, which for a non-square matrix
+means oblong cells (it is the matrix's shape, not a cell's). It chooses the plot
+dimensions, so it works with no `--size` or a partial one (`--size 6x` fixes the
+width and derives the height); with a full `--size` both proportions are already
+set and it errors rather than being ignored.
+
 `box=on` frames the cells and only the cells — the row/column names stay outside
 it. `box="grey40"` sets the colour and implies on. Off by default; works on
 `heatmap()` and `annotation()`. (`matrix()` tracks are always framed.)

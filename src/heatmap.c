@@ -788,6 +788,19 @@ int render_heatmap(const PlotSpec *spec, const char *out,
 
     double titlegap = titleh ? HALF_LINE : 0;
 
+    /* aspect= chooses the figure's proportions, so it has nothing to say when
+     * both dimensions are already given. Refuse rather than accept and ignore
+     * it -- a silently dropped option is the failure this codebase keeps
+     * hunting. */
+    for (int i = 0; i < n; i++)
+        if (ro[i].o->type == HM_HEATMAP && ro[i].o->aspect > 0
+            && w_pt > 0 && h_pt > 0) {
+            snprintf(err, CP_ERRLEN, "aspect= sets the figure's proportions, so it "
+                     "conflicts with a fully specified --size; give one or the "
+                     "other (a partial --size such as 6x works with it)");
+            return -1;
+        }
+
     /* ---- auto-fit: fill any auto (0) size axis from content. The canvas is
      * sized so the primary heatmap's cells hit a target edge (>= a label line
      * when that side is labelled), then grown to full canvas via the heatmap's
@@ -796,6 +809,8 @@ int render_heatmap(const PlotSpec *spec, const char *out,
         RObj *hm = NULL;
         for (int i = 0; i < n; i++) if (ro[i].o->type == HM_HEATMAP) { hm = &ro[i]; break; }
         double aw = w_pt, ah = h_pt;
+        int aspect_locked = 0;        /* aspect= already bounded aw/ah as a pair */
+        double chrome_w_keep = 0, chrome_h_keep = 0;
         if (hm && hm->w > 0 && hm->h > 0) {
             int rowlab = hm->o->rownames && hm->m->rn, collab = hm->o->colnames && hm->m->cn;
             double cell_w = collab ? fmax(HM_CELL_BASE, axH * 1.1) : HM_CELL_BASE;
@@ -819,6 +834,30 @@ int render_heatmap(const PlotSpec *spec, const char *out,
              * and their labels alone, so a title longer than the figure was
              * simply cut off -- and multi-panel figures need long titles,
              * because that is where the panel identities go. */
+            /* aspect=: couple the two dimensions. The ratio is the MATRIX's,
+             * not a cell's, so a non-square matrix under aspect=1 gets square
+             * overall with oblong cells. Grow the short side rather than
+             * shrinking the long one: the canvas is being chosen here, so
+             * keeping the cells their natural size costs only paper.
+             *
+             * The [MIN,MAX] clamp below is per-axis and would break the
+             * coupling, so the body is scaled as a unit to satisfy it and the
+             * clamp is then skipped. */
+            if (hm->o->aspect > 0 && body_w > 0 && body_h > 0) {
+                double want = hm->o->aspect;          /* body w/h */
+                if (body_w / body_h > want) body_h = body_w / want;
+                else                        body_w = body_h * want;
+                double up = fmax(1.0, fmax((HM_MIN_PT - chrome_w) / body_w,
+                                           (HM_MIN_PT - chrome_h) / body_h));
+                body_w *= up; body_h *= up;
+                double dn = fmin(1.0, fmin((HM_MAX_PT - chrome_w) / body_w,
+                                           (HM_MAX_PT - chrome_h) / body_h));
+                body_w *= dn; body_h *= dn;
+                aw = chrome_w + body_w;
+                ah = chrome_h + body_h;
+                chrome_w_keep = chrome_w; chrome_h_keep = chrome_h;
+                aspect_locked = 1;
+            }
             if (spec->lab_title) {
                 double tw = text_w(cr, SZ_TITLE, spec->lab_title) + 2 * MARGIN;
                 if (tw > aw) aw = tw;
@@ -827,8 +866,15 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             if (aw <= 0) aw = 6 * 72;
             if (ah <= 0) ah = 4 * 72;
         }
-        if (w_pt <= 0) w_pt = fmin(HM_MAX_PT, fmax(HM_MIN_PT, aw));
-        if (h_pt <= 0) h_pt = fmin(HM_MAX_PT, fmax(HM_MIN_PT, ah));
+        if (aspect_locked && hm && (w_pt > 0 || h_pt > 0)) {
+            /* A partial --size fixes one side; derive the other so the matrix
+             * still comes out at the requested ratio. */
+            double want = hm->o->aspect;
+            if (w_pt > 0) h_pt = chrome_h_keep + (w_pt - chrome_w_keep) / want;
+            else          w_pt = chrome_w_keep + (h_pt - chrome_h_keep) * want;
+        }
+        if (w_pt <= 0) w_pt = aspect_locked ? aw : fmin(HM_MAX_PT, fmax(HM_MIN_PT, aw));
+        if (h_pt <= 0) h_pt = aspect_locked ? ah : fmin(HM_MAX_PT, fmax(HM_MIN_PT, ah));
     }
 
     /* switch from the scratch measuring context to the real output surface */
