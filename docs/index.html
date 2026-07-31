@@ -152,7 +152,7 @@
         <a class="iconbtn" href="https://github.com/zhou-lab/cinderplot" aria-label="GitHub" title="GitHub"><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
         <a class="iconbtn" href="https://anaconda.org/zhou-lab/cinderplot" aria-label="Anaconda channel" title="Anaconda (zhou-lab channel)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16.5 9.4 7.5 4.21"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.27 6.96 12 12.01l8.73-5.05"/><path d="M12 22.08V12"/></svg></a>
         <button class="agentbtn" id="agentBtn" type="button"
-                data-cmd="Use cinderplot to render figures from CSV/TSV instead of writing a ggplot2 or matplotlib script. Read https://zhou-lab.github.io/cinderplot/llms.txt first — it covers installation, the grammar, the three modes and the traps."
+                data-cmd="Use cinderplot to render figures from CSV/TSV instead of writing a ggplot2 or matplotlib script. Read https://zhou-lab.github.io/cinderplot/llms.txt first — it covers installation, the grammar, the four modes and the traps."
                 title="Copy a prompt that points your coding agent at the cinderplot reference"
                 aria-label="Copy a prompt for your coding agent"><span class="ico"></span>agent prompt</button>
         <button class="install" id="installBox" type="button"
@@ -165,9 +165,9 @@
         </button>
       </div>
       <div class="hstats">
-        <div class="hstat"><b>16</b><span>geoms</span></div>
-        <div class="hstat"><b>8</b><span>scales</span></div>
-        <div class="hstat"><b>3</b><span>modes</span></div>
+        <div class="hstat"><b>20</b><span>geoms</span></div>
+        <div class="hstat"><b>10</b><span>scales</span></div>
+        <div class="hstat"><b>4</b><span>modes</span></div>
         <div class="hstat"><b>C11</b><span>+ Cairo</span></div>
       </div>
     </section>
@@ -200,10 +200,10 @@ cinderplot 'data.csv
         <a class="r" href="gallery.html">see it drawn →</a></div>
       <div class="panel__body">
         <div class="chipgrid">
-          <div class="chipset"><p class="k">Geoms</p><div class="chips"><span class="chip">geom_point</span><span class="chip">geom_line</span><span class="chip">geom_col</span><span class="chip">geom_bar</span><span class="chip">geom_histogram</span><span class="chip">geom_boxplot</span><span class="chip">geom_density</span><span class="chip">geom_rect</span><span class="chip">geom_segment</span><span class="chip">geom_raster</span><span class="chip">geom_text</span><span class="chip">geom_label</span><span class="chip">geom_text_repel</span><span class="chip">geom_hline</span><span class="chip">geom_vline</span><span class="chip">geom_abline</span></div></div>
-          <div class="chipset"><p class="k">Scales</p><div class="chips"><span class="chip">x / y log10</span><span class="chip">percent labels</span><span class="chip">genome x</span><span class="chip">colour hue</span><span class="chip">colour gradient</span><span class="chip">gradient2</span><span class="chip">manual colours</span><span class="chip">discrete x / y</span></div></div>
+          <div class="chipset"><p class="k">Geoms</p><div class="chips"><span class="chip">geom_point</span><span class="chip">geom_line</span><span class="chip">geom_col</span><span class="chip">geom_bar</span><span class="chip">geom_histogram</span><span class="chip">geom_boxplot</span><span class="chip">geom_density</span><span class="chip">geom_rect</span><span class="chip">geom_segment</span><span class="chip">geom_tile</span><span class="chip">geom_raster</span><span class="chip">geom_text</span><span class="chip">geom_label</span><span class="chip">geom_text_repel</span><span class="chip">geom_hline</span><span class="chip">geom_vline</span><span class="chip">geom_abline</span><span class="chip">geom_tree</span><span class="chip">geom_tiplab</span><span class="chip">geom_nodelab</span></div></div>
+          <div class="chipset"><p class="k">Scales</p><div class="chips"><span class="chip">x / y log10</span><span class="chip">percent labels</span><span class="chip">genome x</span><span class="chip">colour hue</span><span class="chip">colour gradient</span><span class="chip">gradient2</span><span class="chip">manual colours</span><span class="chip">discrete x / y</span><span class="chip">free facet scales</span><span class="chip">discrete label angle</span></div></div>
           <div class="chipset"><p class="k">Positions</p><div class="chips"><span class="chip">position_stack</span><span class="chip">position_dodge</span><span class="chip">position_dodge2</span></div></div>
-          <div class="chipset"><p class="k">Modes</p><div class="chips"><span class="chip">scatter / grammar</span><span class="chip">heatmap + clustering</span><span class="chip">genomic tracks</span></div></div>
+          <div class="chipset"><p class="k">Modes</p><div class="chips"><span class="chip">scatter / grammar</span><span class="chip">heatmap + clustering</span><span class="chip">genomic tracks</span><span class="chip">Newick trees</span></div></div>
           <div class="chipset"><p class="k">Themes</p><div class="chips"><span class="chip">theme_gray</span><span class="chip">theme_bw</span><span class="chip">theme_minimal</span><span class="chip">theme_classic</span><span class="chip">theme_void</span><span class="chip">theme_linedraw</span><span class="chip">theme_light</span><span class="chip">theme_dark</span><span class="chip">theme_few</span></div></div>
         </div>
       </div>

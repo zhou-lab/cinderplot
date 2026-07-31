@@ -664,11 +664,13 @@ __SECTIONS__
 # Landing-page content (compact, info-rich, lab-website style). Only the
 # landing uses this; the gallery keeps STYLE/header() above.
 GEOMS = ["point", "line", "col", "bar", "histogram", "boxplot", "density", "rect", "segment",
-         "raster", "text", "label", "text_repel", "hline", "vline", "abline"]
+         "tile", "raster", "text", "label", "text_repel", "hline", "vline", "abline",
+         "tree", "tiplab", "nodelab"]
 SCALES = ["x / y log10", "percent labels", "genome x", "colour hue", "colour gradient",
-          "gradient2", "manual colours", "discrete x / y"]
+          "gradient2", "manual colours", "discrete x / y", "free facet scales",
+          "discrete label angle"]
 POSITIONS = ["stack", "dodge", "dodge2"]
-MODES = ["scatter / grammar", "heatmap + clustering", "genomic tracks"]
+MODES = ["scatter / grammar", "heatmap + clustering", "genomic tracks", "Newick trees"]
 THEMES_CHIPS = ["gray", "bw", "minimal", "classic", "void", "linedraw",
                 "light", "dark", "few"]
 
@@ -838,7 +840,7 @@ LANDING_BODY = """<main>
       <div class="hstats">
         <div class="hstat"><b>__NGEOM__</b><span>geoms</span></div>
         <div class="hstat"><b>__NSCALE__</b><span>scales</span></div>
-        <div class="hstat"><b>3</b><span>modes</span></div>
+        <div class="hstat"><b>__NMODE__</b><span>modes</span></div>
         <div class="hstat"><b>C11</b><span>+ Cairo</span></div>
       </div>
     </section>
@@ -954,7 +956,7 @@ def cinder_version():
                   (REPO / "include" / "cinderplot.h").read_text())
     return m.group(1) if m else ""
 
-AGENT_PROMPT = ("Use cinderplot to render figures from CSV/TSV instead of writing a ggplot2 or matplotlib script. Read https://zhou-lab.github.io/cinderplot/llms.txt first — it covers installation, the grammar, the three modes and the traps.")
+AGENT_PROMPT = ("Use cinderplot to render figures from CSV/TSV instead of writing a ggplot2 or matplotlib script. Read https://zhou-lab.github.io/cinderplot/llms.txt first — it covers installation, the grammar, the four modes and the traps.")
 
 def landing_html():
     def chips(items):
@@ -962,6 +964,7 @@ def landing_html():
     body = (LANDING_BODY.replace("__AGENTPROMPT__", esc(AGENT_PROMPT))
             .replace("__VERSION__", cinder_version())
             .replace("__NGEOM__", str(len(GEOMS)))
+            .replace("__NMODE__", str(len(MODES)))
             .replace("__NSCALE__", str(len(SCALES)))
             .replace("__GEOMS__", chips(f"geom_{g}" for g in GEOMS))
             .replace("__SCALES__", chips(SCALES))

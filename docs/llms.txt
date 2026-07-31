@@ -17,7 +17,7 @@ Source: <https://github.com/zhou-lab/cinderplot>
 ## Install and invoke
 
 ```sh
-conda install -c zhou-lab cinderplot     # or: make && make install (needs cairo, zlib)
+conda install -c zhou-lab -c conda-forge cinderplot   # or: make && make install
 
 cinderplot '<expression>' out.pdf [--size WxH] [--dpi N]
 cat data.tsv | cinderplot 'heatmap(cluster=both)' out.png    # data on stdin
