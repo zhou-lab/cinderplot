@@ -115,7 +115,8 @@ cinderplot 'm.tsv + heatmap(name="m", cluster=both, rownames=right)
 
 Input is a **wide matrix** (first column may be row names). Placements are
 `top_of` / `beneath` / `left_of` / `right_of`, each taking an anchor name plus
-`pad=`/`width=`/`height=`. The first placed object must be a `heatmap()`.
+`pad=`/`width=`/`height=` (both size keys work on any placement — the one the
+placement would otherwise inherit from its anchor included). The first placed object must be a `heatmap()`.
 Clustering is hclust ward.D2, matching R. `annotation()` takes `column=` to pick
 which column colours the bar (default: the last). An annotation may be anchored
 by its data column name, e.g. `legend(right_of("diagnosis"))`.

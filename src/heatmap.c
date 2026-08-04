@@ -677,7 +677,11 @@ int render_heatmap(const PlotSpec *spec, const char *out,
               : o->type == HM_LEGEND ? a->h
               : o->type == HM_DENDROGRAM ? 0.2 * a->h
               : clampr((double)ro[i].nr / a->nr) * a->h;
-            ro[i].l = a->l; ro[i].w = a->w; ro[i].h = H;
+            /* A vertical placement inherits the anchor's width, but width=
+             * was still parsed -- so beneath(width=0.5) was accepted and
+             * dropped. Honour it: it means a narrower panel below. */
+            ro[i].l = a->l; ro[i].w = pl->width >= 0 ? pl->width : a->w;
+            ro[i].h = H;
             ro[i].b = pl->kind == PL_TOP_OF ? a->b + a->h + pl->pad
                                             : a->b - pl->pad - H;
             break;
@@ -687,7 +691,8 @@ int render_heatmap(const PlotSpec *spec, const char *out,
               : o->type == HM_LEGEND ? 0.05
               : o->type == HM_DENDROGRAM ? 0.2 * a->w
               : clampr((double)ro[i].nc / a->nc) * a->w;
-            ro[i].b = a->b; ro[i].h = a->h; ro[i].w = W;
+            ro[i].b = a->b; ro[i].w = W;      /* and height= beside it */
+            ro[i].h = pl->height >= 0 ? pl->height : a->h;
             ro[i].l = pl->kind == PL_RIGHT_OF ? a->l + a->w + pl->pad
                                               : a->l - pl->pad - W;
             break;
