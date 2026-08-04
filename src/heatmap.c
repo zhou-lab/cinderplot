@@ -435,6 +435,52 @@ static double max_band_at(cairo_t *cr, const RObj *ro, int n, Side side, double 
     return best;
 }
 
+/* The label bands falling BETWEEN placed objects, in points, keyed by the
+ * boundary each sits on. Depends only on the normalized rects and the text
+ * metrics -- never on the canvas size -- which is what lets auto-fit ask for
+ * them before it has chosen one. */
+static void gutter_bands(cairo_t *cr, const RObj *ro, int n,
+                         double *atv, double *bandv, int *nv,
+                         double *ath, double *bandh, int *nh) {
+    *nv = 0; *nh = 0;
+    for (int i = 0; i < n; i++) {
+        const RObj *r = &ro[i];
+        if (r->anchor < 0 || r->o->type == HM_LEGEND) continue;
+        const RObj *a = &ro[r->anchor];
+        PlaceKind pk = r->o->place.kind;
+        int vert = pk == PL_BENEATH || pk == PL_TOP_OF;
+        /* A boundary is sized by the widest band facing it from either side,
+         * not by this one pair: in a 2x2 grid both columns cross the same
+         * horizontal boundary, and the taller column's labels are the ones that
+         * have to fit. Both sides count for the same reason -- the upper panel's
+         * bottom labels and the lower panel's top labels share the gap. */
+        double at, band;
+        if (vert) {
+            double hi = pk == PL_BENEATH ? a->b : r->b;               /* upper floor */
+            double lo = pk == PL_BENEATH ? r->b + r->h : a->b + a->h; /* lower ceiling */
+            band = max_band_at(cr, ro, n, SIDE_BOTTOM, hi)
+                 + max_band_at(cr, ro, n, SIDE_TOP, lo);
+            at = hi;
+        } else {
+            double lf = pk == PL_RIGHT_OF ? a->l + a->w : r->l + r->w; /* left edge */
+            double rt = pk == PL_RIGHT_OF ? r->l : a->l;               /* right edge */
+            band = max_band_at(cr, ro, n, SIDE_RIGHT, lf)
+                 + max_band_at(cr, ro, n, SIDE_LEFT, rt);
+            at = rt;
+        }
+        if (band <= 0) continue;
+        /* two placements can cross one boundary; record it once */
+        double *ats = vert ? atv : ath, *bands = vert ? bandv : bandh;
+        int *cnt = vert ? nv : nh, seen = 0;
+        for (int k = 0; k < *cnt; k++)
+            if (fabs(ats[k] - at) < 1e-6) {
+                if (band > bands[k]) bands[k] = band;
+                seen = 1; break;
+            }
+        if (!seen) { ats[*cnt] = at; bands[(*cnt)++] = band; }
+    }
+}
+
 int render_heatmap(const PlotSpec *spec, const char *out,
                    double w_pt, double h_pt, char *err) {
     RObj ro[MAX_HMOBJS];
@@ -815,9 +861,19 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             int rowlab = hm->o->rownames && hm->m->rn, collab = hm->o->colnames && hm->m->cn;
             double cell_w = collab ? fmax(HM_CELL_BASE, axH * 1.1) : HM_CELL_BASE;
             double cell_h = rowlab ? fmax(HM_CELL_BASE, axH * 1.1) : HM_CELL_BASE;
-            double body_w = hm->nc * cell_w / hm->w, chrome_w = marL + marR;
+            /* Inter-panel label gutters are a fixed text cost the canvas has
+             * to carry. Counting them here, rather than after the canvas is
+             * chosen, is what stops auto-fit demanding a --size it was asked to
+             * work out for itself. */
+            double gv[MAX_HMOBJS], gh[MAX_HMOBJS], ga[MAX_HMOBJS], gb[MAX_HMOBJS];
+            int gnv, gnh;
+            gutter_bands(cr, ro, n, ga, gv, &gnv, gb, gh, &gnh);
+            double gut_h = 0, gut_w = 0;
+            for (int k = 0; k < gnv; k++) gut_h += gv[k];
+            for (int k = 0; k < gnh; k++) gut_w += gh[k];
+            double body_w = hm->nc * cell_w / hm->w, chrome_w = marL + marR + gut_w;
             double body_h = hm->nr * cell_h / hm->h;
-            double chrome_h = marT + titleh + titlegap + marB;
+            double chrome_h = marT + titleh + titlegap + marB + gut_h;
             /* A cell pitch alone ignores how long the labels are, so a small
              * matrix with long names came out mostly text -- eight rows of
              * twenty characters put more ink in the margin than in the data.
@@ -860,7 +916,15 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             }
             if (spec->lab_title) {
                 double tw = text_w(cr, SZ_TITLE, spec->lab_title) + 2 * MARGIN;
-                if (tw > aw) aw = tw;
+                if (tw > aw) {
+                    aw = tw;
+                    /* A title wider than the figure sets the width. Under
+                     * aspect= that would silently abandon the ratio -- the
+                     * matrix just stretches -- so grow the height to match.
+                     * The title wins on width; aspect still wins on shape. */
+                    if (aspect_locked)
+                        ah = chrome_h_keep + (aw - chrome_w_keep) / hm->o->aspect;
+                }
             }
         } else {                                     /* no heatmap: sensible default */
             if (aw <= 0) aw = 6 * 72;
@@ -947,43 +1011,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
         double bandv[MAX_HMOBJS], bandh[MAX_HMOBJS];   /* size, pt */
         double atv[MAX_HMOBJS], ath[MAX_HMOBJS];       /* boundary, normalized */
         int nv = 0, nh = 0;
-        for (int i = 0; i < n; i++) {
-            RObj *r = &ro[i];
-            if (r->anchor < 0 || r->o->type == HM_LEGEND) continue;
-            RObj *a = &ro[r->anchor];
-            PlaceKind pk = r->o->place.kind;
-            int vert = pk == PL_BENEATH || pk == PL_TOP_OF;
-            /* A boundary is sized by the widest band facing it from either
-             * side, not by this one pair: in a 2x2 grid both columns cross the
-             * same horizontal boundary, and the taller column's labels are the
-             * ones that have to fit. Same reason both sides count -- the upper
-             * panel's bottom labels and the lower panel's top labels occupy the
-             * same gap. */
-            double at, band;
-            if (vert) {
-                double hi = pk == PL_BENEATH ? a->b : r->b;              /* upper object's floor */
-                double lo = pk == PL_BENEATH ? r->b + r->h : a->b + a->h; /* lower object's ceiling */
-                band = max_band_at(cr, ro, n, SIDE_BOTTOM, hi)
-                     + max_band_at(cr, ro, n, SIDE_TOP, lo);
-                at = hi;
-            } else {
-                double lf = pk == PL_RIGHT_OF ? a->l + a->w : r->l + r->w; /* left object's edge */
-                double rt = pk == PL_RIGHT_OF ? r->l : a->l;               /* right object's edge */
-                band = max_band_at(cr, ro, n, SIDE_RIGHT, lf)
-                     + max_band_at(cr, ro, n, SIDE_LEFT, rt);
-                at = rt;
-            }
-            if (band <= 0) continue;
-            /* two placements can cross one boundary; record it once */
-            double *ats = vert ? atv : ath, *bands = vert ? bandv : bandh;
-            int *cnt = vert ? &nv : &nh, seen = 0;
-            for (int k = 0; k < *cnt; k++)
-                if (fabs(ats[k] - at) < 1e-6) {
-                    if (band > bands[k]) bands[k] = band;
-                    seen = 1; break;
-                }
-            if (!seen) { ats[*cnt] = at; bands[(*cnt)++] = band; }
-        }
+        gutter_bands(cr, ro, n, atv, bandv, &nv, ath, bandh, &nh);
         double totv = 0, toth = 0;
         for (int k = 0; k < nv; k++) totv += bandv[k];
         for (int k = 0; k < nh; k++) toth += bandh[k];
@@ -991,8 +1019,11 @@ int render_heatmap(const PlotSpec *spec, const char *out,
          * labels, and the user wants a bigger --size, not thinner cells. */
         if (totv > 0.5 * ch_pt || toth > 0.5 * cw_pt) {
             snprintf(err, CP_ERRLEN, "the labels between stacked panels need more "
-                     "room than the panels themselves; give a larger --size or "
-                     "turn some off with rownames=none / colnames=none");
+                     "room than the panels themselves at this size: they want "
+                     "%.1fin wide and %.1fin tall of the %.1fx%.1f given. Enlarge "
+                     "--size (or omit it and let auto-fit choose), or turn labels "
+                     "off with rownames=none / colnames=none",
+                     toth / 72, totv / 72, w_pt / 72, h_pt / 72);
             return -1;
         }
         if (nv || nh) {
