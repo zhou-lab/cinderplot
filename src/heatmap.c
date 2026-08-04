@@ -1020,16 +1020,33 @@ int render_heatmap(const PlotSpec *spec, const char *out,
         double totv = 0, toth = 0;
         for (int k = 0; k < nv; k++) totv += bandv[k];
         for (int k = 0; k < nh; k++) toth += bandh[k];
-        /* Leave the panels a majority of the canvas: past that the figure is
-         * labels, and the user wants a bigger --size, not thinner cells. */
-        if (totv > 0.5 * ch_pt || toth > 0.5 * cw_pt) {
-            snprintf(err, CP_ERRLEN, "the labels between stacked panels need more "
-                     "room than the panels themselves at this size: they want "
-                     "%.1fin wide and %.1fin tall of the %.1fx%.1f given. Enlarge "
-                     "--size (or omit it and let auto-fit choose), or turn labels "
-                     "off with rownames=none / colnames=none",
-                     toth / 72, totv / 72, w_pt / 72, h_pt / 72);
-            return -1;
+        /* Labels wanting more room than exists is not a reason to refuse to
+         * draw. Auto-fit has already grown the canvas for them and is capped at
+         * 30in, so past that -- or under a --size too small -- the only honest
+         * move is to give the panels a floor, let the gutters take the rest,
+         * and say on stderr what had to give. A cramped figure is visibly
+         * cramped; no figure at all is what breaks a pipeline.
+         *
+         * PANEL_FLOOR is the share of each axis the panels keep. Labels then
+         * crowd each other rather than the panels vanishing. */
+        const double PANEL_FLOOR = 0.15;
+        double capv = (1 - PANEL_FLOOR) * ch_pt, caph = (1 - PANEL_FLOOR) * cw_pt;
+        if (totv > capv || toth > caph) {
+            fprintf(stderr, "cinderplot: warning: labels between stacked panels "
+                    "want %.1fin wide and %.1fin tall of a %.1fx%.1fin figure; "
+                    "they have been squeezed and may overlap. Give a larger "
+                    "--size, or turn some off with rownames=none / colnames=none\n",
+                    toth / 72, totv / 72, w_pt / 72, h_pt / 72);
+            if (totv > capv) {
+                double f = capv / totv;
+                for (int k = 0; k < nv; k++) bandv[k] *= f;
+                totv = capv;
+            }
+            if (toth > caph) {
+                double f = caph / toth;
+                for (int k = 0; k < nh; k++) bandh[k] *= f;
+                toth = caph;
+            }
         }
         if (nv || nh) {
             double sy = (ch_pt - totv) / ch_pt, sx = (cw_pt - toth) / cw_pt;
