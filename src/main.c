@@ -47,7 +47,7 @@ static void print_help(void) {
     printf("  %sGRAMMAR%s   %s(compose layers with %s+%s%s)%s\n", H, R, D, K, R, D, R);
     printf("    %sdata.csv%s        a CSV/TSV path — or %s-%s / %sstdin%s / omitted = pipe, %s.gz%s = gzip/bgzip\n", K, R, K, R, K, R, K, R);
     printf("    %saes%s(x, y, …)    map columns to aesthetics\n", G, R);
-    printf("    %sgeom_*%s()        point · line · col · histogram · tile · text · segment · h/v/abline\n", G, R);
+    printf("    %sgeom_*%s()        point · jitter · line · col · histogram · tile · boxplot · text · h/v/abline\n", G, R);
     printf("    %sfacet_wrap%s(~g)  small multiples · %sscale_*%s · %stheme_*%s · %slabs%s(title=…)\n", G, R, G, R, G, R, G, R);
 
     printf("\n  %sFOUR MODES%s   %s(chosen from the verbs you use)%s\n", H, R, D, R);
