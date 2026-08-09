@@ -442,7 +442,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     int haspoint = 0, hasline = 0, hascol = 0, nhist = 0, hasbox = 0, hasbar = 0, hasdens = 0, hastext = 0;
     int hastile = 0;
     for (int i = 0; i < spec->nlayers; i++) {
-        if (spec->layers[i].type == GEOM_POINT) haspoint = 1;
+        if (spec->layers[i].type == GEOM_POINT
+            || spec->layers[i].type == GEOM_JITTER) haspoint = 1;
         if (spec->layers[i].type == GEOM_LINE) hasline = 1;
         if (spec->layers[i].type == GEOM_COL) hascol = 1;
         if (spec->layers[i].type == GEOM_TILE) hastile = 1;
@@ -1861,7 +1862,30 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         cum = top;
                     }
                 }
-            } else if (gt == GEOM_POINT) {
+            } else if (gt == GEOM_POINT || gt == GEOM_JITTER) {
+                const Layer *JL = &spec->layers[li];
+                /* geom_jitter: geom_point with a random offset, so overlapping
+                 * observations spread out and density becomes visible. On a
+                 * discrete axis every point otherwise stacks on the category
+                 * centre and 400 of them look like 40.
+                 *
+                 * The offset is deterministic. These figures are rebuilt from a
+                 * lab-notebook src block, so a plot that moved every render
+                 * would be a reproducibility bug, not a nicety -- hence a fixed
+                 * default seed, mixed with the layer index so two jitter layers
+                 * do not land identically, and seed= to choose another. */
+                unsigned jseed = (JL->has_jitter_seed ? JL->jitter_seed : 20260809u)
+                               + 1013u * (unsigned)li;
+                double jw = 0, jh = 0;
+                if (gt == GEOM_JITTER) {
+                    /* ggplot2 defaults both to 40% of the data resolution. We
+                     * default the VERTICAL to zero instead: y is a measured
+                     * value here, and moving it invents data. Ask for height=
+                     * to get ggplot's behaviour. */
+                    jw = JL->jitter_w > 0 ? JL->jitter_w : 0.4;
+                    jh = JL->jitter_h;
+                    if (disc_x && jw > 0.5) jw = 0.5;   /* never cross into the next slot */
+                }
                 int np = 0;
                 for (int r = 0; r < df->nrow; r++)
                     if (use[r] && (!ff || ff->idx[r] == p)) np++;
@@ -1871,7 +1895,20 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 np = 0;
                 for (int r = 0; r < df->nrow; r++) {
                     if (!use[r] || (ff && ff->idx[r] != p)) continue;
-                    px[np] = NPCX(TXR(r)); py[np] = NPCY(TY(yc->num[r]));
+                    double jx = TXR(r), jy = TY(yc->num[r]);
+                    if (gt == GEOM_JITTER) {
+                        /* one small deterministic PRNG, seeded per point so the
+                         * offset follows the ROW rather than the draw order --
+                         * re-sorting the input then moves nothing */
+                        unsigned h = jseed ^ (unsigned)(r * 2654435761u);
+                        h ^= h >> 15; h *= 2246822519u; h ^= h >> 13;
+                        h *= 3266489917u; h ^= h >> 16;
+                        double u1 = (double)(h & 0xFFFF) / 65535.0;
+                        double u2 = (double)((h >> 16) & 0xFFFF) / 65535.0;
+                        jx += (u1 * 2 - 1) * jw;
+                        jy += (u2 * 2 - 1) * jh;
+                    }
+                    px[np] = NPCX(jx); py[np] = NPCY(jy);
                     pcol[np] = spec->layers[li].has_color ? spec->layers[li].color
                              : cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BLACK;
                     if (prad) prad[np] = size_to_radius(szc->num[r], szmin, szmax);
@@ -2055,7 +2092,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         g->x0 = xl; g->x1 = xr; g->y0 = g->y1 = NPCY(b.med);
 
                         int nout = 0;
-                        for (int i = 0; i < ny; i++) if (ys[i] > b.whi || ys[i] < b.wlo) nout++;
+                        if (!spec->layers[li].no_outliers)
+                            for (int i = 0; i < ny; i++)
+                                if (ys[i] > b.whi || ys[i] < b.wlo) nout++;
                         if (nout) {
                             double *ox = cp_xmalloc(nout * sizeof(double)), *oy = cp_xmalloc(nout * sizeof(double));
                             Col *oc = cp_xmalloc(nout * sizeof(Col));

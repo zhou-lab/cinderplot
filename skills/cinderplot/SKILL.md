@@ -67,12 +67,24 @@ and ignored (the output path is a command-line argument here).
 - **aes**: `x`, `y` positionally, then named — `colour`/`color`/`fill`, `size`,
   `label`, `xend`/`xmax`, `yend`/`ymax`, `chrom`. A value is a bare column name
   or `factor(col[, levels=c(...)])`.
-- **geoms**: `point line col histogram boxplot bar segment rect density tile
-  raster hline vline abline text label`, plus `text_repel`/`label_repel`.
+- **geoms**: `point jitter line col histogram boxplot bar segment rect density
+  tile raster hline vline abline text label`, plus `text_repel`/`label_repel`.
   Up to 8 layers.
 - **layer options**: `size=`, `alpha=`, `linetype="solid"|"dashed"|"dotted"`,
-  `bins=` (histogram), `nudge_x=`/`nudge_y=` (text), and
-  `geom_point(raster=TRUE)` — see trap 9.
+  `bins=` (histogram), `nudge_x=`/`nudge_y=` (text),
+  `geom_point(raster=TRUE)` — see trap 9 — and
+  `geom_boxplot(outlier.shape=NA)` to hide the outlier marks when a jitter
+  layer already draws those points.
+- **`geom_jitter(width=, height=, size=, alpha=, seed=)`** is `geom_point()`
+  with a random offset, layerable over `geom_boxplot()` — the usual
+  box-plus-observations figure. On a discrete axis plain points stack on the
+  category centre, so 400 look like 40. `width=`/`height=` are half-ranges in
+  data units (so on a discrete axis `width=0.2` spans a fifth of the slot each
+  way; default `0.4`). **Two deliberate deviations from ggplot2**: vertical
+  jitter defaults to **0**, because y is usually a measured value and moving it
+  invents data — pass `height=` for ggplot's behaviour; and the offset is
+  **deterministic**, keyed off the row, so a figure regenerates identically.
+  `seed=` picks a different arrangement.
 - **scales**: `scale_x_log10()` `scale_y_log10()` `scale_*_continuous(labels=percent,
   limits=)` `xlim()` `ylim()` `scale_*_manual(values=c(...))`
   `scale_(fill|colour)_*()` continuous palettes: `viridis magma inferno plasma

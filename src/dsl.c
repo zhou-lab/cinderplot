@@ -583,6 +583,7 @@ static int parse_term(P *p, PlotSpec *spec) {
     GeomType gt = GEOM_POINT;
     int is_geom = 1, is_repel = 0;
     if (!strcmp(name, "geom_point")) gt = GEOM_POINT;
+    else if (!strcmp(name, "geom_jitter")) gt = GEOM_JITTER;
     else if (!strcmp(name, "geom_line")) gt = GEOM_LINE;
     else if (!strcmp(name, "geom_col")) gt = GEOM_COL;
     else if (!strcmp(name, "geom_histogram")) gt = GEOM_HISTOGRAM;
@@ -659,10 +660,46 @@ static int parse_term(P *p, PlotSpec *spec) {
                 } else if ((gt == GEOM_TEXT || gt == GEOM_LABEL) && !strcmp(key, "size")) {
                     l->txt_size = strtod(p->s, (char **)&p->s);
                     if (l->txt_size <= 0) return fail(p, "geom_text(size=...) must be > 0", "");
-                } else if (gt == GEOM_POINT && !strcmp(key, "size")) {
+                } else if (gt == GEOM_BOXPLOT
+                           && (!strcmp(key, "outlier.shape")
+                               || !strcmp(key, "outliers"))) {
+                    /* ggplot spells it outlier.shape=NA; the only value that
+                     * changes anything here is "no outliers", so accept NA and
+                     * the booleans and reject a shape we cannot draw. */
+                    char *v = string_lit(p);
+                    if (!v) v = ident(p);
+                    if (!v) return fail(p, "outlier.shape= expects NA, TRUE or FALSE", "");
+                    if (!strcmp(v, "NA") || !strcmp(v, "FALSE") || !strcmp(v, "false")
+                        || !strcmp(v, "none") || !strcmp(v, "off"))
+                        l->no_outliers = 1;
+                    else if (!strcmp(v, "TRUE") || !strcmp(v, "true")
+                             || !strcmp(v, "on"))
+                        l->no_outliers = 0;
+                    else return fail(p, "outlier.shape=%s not understood; "
+                                     "cinderplot draws one outlier shape, so only "
+                                     "NA/FALSE (hide) and TRUE (show) apply", v);
+                } else if (gt == GEOM_JITTER
+                           && (!strcmp(key, "width") || !strcmp(key, "height"))) {
+                    skip_ws(p);
+                    char *end;
+                    double v = strtod(p->s, &end);
+                    if (end == p->s || v < 0)
+                        return fail(p, "%s= expects a non-negative number", key);
+                    p->s = end;
+                    if (key[0] == 'w') l->jitter_w = v; else l->jitter_h = v;
+                } else if (gt == GEOM_JITTER && !strcmp(key, "seed")) {
+                    skip_ws(p);
+                    char *end;
+                    double v = strtod(p->s, &end);
+                    if (end == p->s) return fail(p, "seed= expects a number", "");
+                    p->s = end;
+                    l->jitter_seed = (unsigned)v; l->has_jitter_seed = 1;
+                } else if ((gt == GEOM_POINT || gt == GEOM_JITTER)
+                           && !strcmp(key, "size")) {
                     l->point_size = strtod(p->s, (char **)&p->s);
                     if (l->point_size <= 0) return fail(p, "geom_point(size=...) must be > 0", "");
-                } else if (gt == GEOM_POINT && (!strcmp(key, "raster")
+                } else if ((gt == GEOM_POINT || gt == GEOM_JITTER)
+                           && (!strcmp(key, "raster")
                                              || !strcmp(key, "rasterise")
                                              || !strcmp(key, "rasterize"))) {
                     /* ggrastr spelling, plus both -ise/-ize, since the point of
@@ -1033,7 +1070,7 @@ static int parse_term(P *p, PlotSpec *spec) {
         return expect(p, ')');
     }
     return fail(p, "`%s()` is not implemented; supported: aes(), geom_point(), "
-                   "geom_line(), geom_col(), geom_histogram(), geom_boxplot(), geom_bar(), "
+                   "geom_jitter(), geom_line(), geom_col(), geom_histogram(), geom_boxplot(), geom_bar(), "
                    "geom_density(), geom_tile()/geom_raster(), geom_segment(), geom_rect(), "
                    "geom_hline(), geom_vline(), geom_abline(), "
                    "geom_text()/geom_text_repel(), geom_label()/geom_label_repel(), "

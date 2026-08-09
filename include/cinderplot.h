@@ -250,7 +250,7 @@ typedef struct {
     char **levels; int nlevels;
 } AesEntry;
 
-typedef enum { GEOM_POINT, GEOM_LINE, GEOM_COL, GEOM_HISTOGRAM, GEOM_BOXPLOT, GEOM_BAR,
+typedef enum { GEOM_POINT, GEOM_JITTER, GEOM_LINE, GEOM_COL, GEOM_HISTOGRAM, GEOM_BOXPLOT, GEOM_BAR,
                GEOM_SEGMENT, GEOM_RECT, GEOM_DENSITY, GEOM_TILE,
                GEOM_HLINE, GEOM_VLINE, GEOM_ABLINE, GEOM_TEXT, GEOM_LABEL } GeomType;
 typedef struct {
@@ -268,6 +268,13 @@ typedef struct {
     double nudge_x, nudge_y;    /* geom_text/label: constant offset (data units) */
     int dash;                   /* linetype=: 0 solid, 1 dashed, 2 dotted */
     double alpha;               /* alpha=: 0 = unset (opaque), else 0..1 */
+    /* geom_jitter: half-range of the random offset, in DATA units, so on a
+     * discrete axis (spacing 1) width=0.2 spans one fifth of the slot either
+     * side. `seed` keeps a figure reproducible across renders. */
+    int no_outliers;            /* geom_boxplot(outlier.shape=NA): the points are
+                                 * already drawn by a jitter layer over the box */
+    double jitter_w, jitter_h;
+    unsigned jitter_seed; int has_jitter_seed;
     int raster;                 /* geom_point(raster=TRUE): draw the layer into an
                                  * embedded image instead of per-point vector marks
                                  * (ggrastr's idea); axes and text stay vector */
