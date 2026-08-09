@@ -98,7 +98,36 @@ static int append_quoted(char *buf, size_t cap, size_t *len, const char *s) {
     return appendf(buf, cap, len, "\"");
 }
 
+/* fontconfig, pulled in by Cairo, looks for its config under the prefix it was
+ * COMPILED with. A conda Cairo built elsewhere therefore misses it and prints
+ *
+ *   Fontconfig error: Cannot load default config file: File not found
+ *
+ * on every run, before main() gets a say. The render is unaffected -- it falls
+ * back to defaults and still finds the fonts -- but the message goes to stderr,
+ * once per invocation, and stderr is where this tool puts things worth reading
+ * ("removed N rows with missing values"). A warning that always fires teaches
+ * you to ignore the stream that carries the real ones.
+ *
+ * So point fontconfig at the system config before Cairo initialises, unless the
+ * caller has already chosen one. Nothing here overrides a deliberate setting,
+ * and if there is no system config we are no worse off than before. */
+static void quiet_fontconfig(void) {
+    if (getenv("FONTCONFIG_FILE") || getenv("FONTCONFIG_PATH")) return;
+    static const char *cands[] = { "/etc/fonts/fonts.conf",
+                                   "/usr/local/etc/fonts/fonts.conf",
+                                   "/opt/homebrew/etc/fonts/fonts.conf" };
+    for (size_t i = 0; i < sizeof cands / sizeof *cands; i++) {
+        FILE *f = fopen(cands[i], "r");
+        if (!f) continue;
+        fclose(f);
+        setenv("FONTCONFIG_FILE", cands[i], 0);
+        return;
+    }
+}
+
 int main(int argc, char **argv) {
+    quiet_fontconfig();
     const char *out = NULL, *expr = NULL, *data = NULL;   /* output is required */
     const char *fx = NULL, *fy = NULL, *fc = NULL, *ff = NULL, *ft = NULL;
     const char *fm = "point", *flog = NULL, *fregion = NULL;
