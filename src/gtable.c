@@ -148,6 +148,56 @@ static void ideo_path(cairo_t *cr, double xl, double xr, double top, double bot,
     cairo_close_path(cr);
 }
 
+/* The discrete shape palette. Six, like ggplot2's -- past that the glyphs stop
+ * being tellable apart, and ggplot2 refuses rather than inventing more. Drawn
+ * to roughly equal visual area so no level looks heavier than another. */
+void cp_point_path(cairo_t *cr, int shape, double cx, double cy, double r) {
+    switch (shape % 6) {
+    case 1: {                                   /* triangle up */
+        double a = r * 1.30;
+        cairo_move_to(cr, cx, cy - a);
+        cairo_line_to(cr, cx + a * 0.866, cy + a * 0.5);
+        cairo_line_to(cr, cx - a * 0.866, cy + a * 0.5);
+        cairo_close_path(cr);
+        break;
+    }
+    case 2: {                                   /* square */
+        double a = r * 0.886;
+        cairo_rectangle(cr, cx - a, cy - a, 2 * a, 2 * a);
+        break;
+    }
+    case 3: {                                   /* diamond */
+        double a = r * 1.25;
+        cairo_move_to(cr, cx, cy - a);
+        cairo_line_to(cr, cx + a, cy);
+        cairo_line_to(cr, cx, cy + a);
+        cairo_line_to(cr, cx - a, cy);
+        cairo_close_path(cr);
+        break;
+    }
+    case 4: {                                   /* triangle down */
+        double a = r * 1.30;
+        cairo_move_to(cr, cx, cy + a);
+        cairo_line_to(cr, cx + a * 0.866, cy - a * 0.5);
+        cairo_line_to(cr, cx - a * 0.866, cy - a * 0.5);
+        cairo_close_path(cr);
+        break;
+    }
+    case 5: {                                   /* plus */
+        double a = r * 1.25, w = r * 0.42;
+        cairo_move_to(cr, cx - w, cy - a); cairo_line_to(cr, cx + w, cy - a);
+        cairo_line_to(cr, cx + w, cy - w); cairo_line_to(cr, cx + a, cy - w);
+        cairo_line_to(cr, cx + a, cy + w); cairo_line_to(cr, cx + w, cy + w);
+        cairo_line_to(cr, cx + w, cy + a); cairo_line_to(cr, cx - w, cy + a);
+        cairo_line_to(cr, cx - w, cy + w); cairo_line_to(cr, cx - a, cy + w);
+        cairo_line_to(cr, cx - a, cy - w); cairo_line_to(cr, cx - w, cy - w);
+        cairo_close_path(cr);
+        break;
+    }
+    default: cairo_arc(cr, cx, cy, r, 0, 2 * M_PI); break;   /* circle */
+    }
+}
+
 void gt_render(GTable *t, cairo_t *cr) {
     for (int gi = 0; gi < t->ngrobs; gi++) {
         Grob *g = &t->grobs[gi];
@@ -282,8 +332,8 @@ void gt_render(GTable *t, cairo_t *cr) {
                     for (int k = 0; k < g->n; k++) {
                         double rr = g->pradius ? g->pradius[k] : g->radius;
                         set_col_a(ic, g->pcol[k], g->alpha);
-                        cairo_arc(ic, g->px[k] * rw, rh - g->py[k] * rh,
-                                  rr, 0, 2 * M_PI);
+                        cp_point_path(ic, g->pshape ? g->pshape[k] : g->shape,
+                                      g->px[k] * rw, rh - g->py[k] * rh, rr);
                         cairo_fill(ic);
                     }
                     cairo_destroy(ic);
@@ -303,7 +353,8 @@ void gt_render(GTable *t, cairo_t *cr) {
                 for (int k = 0; k < g->n; k++) {
                     set_col_a(cr, g->pcol[k], g->alpha);
                     double r0 = g->pradius ? g->pradius[k] : g->radius;
-                    cairo_arc(cr, DX(g->px[k]), DY(g->py[k]), r0, 0, 2 * M_PI);
+                    cp_point_path(cr, g->pshape ? g->pshape[k] : g->shape,
+                                  DX(g->px[k]), DY(g->py[k]), r0);
                     cairo_fill(cr);
                 }
                 break;
@@ -312,14 +363,16 @@ void gt_render(GTable *t, cairo_t *cr) {
             while (i < g->n) {
                 Col c = g->pcol[i];
                 double rad = g->pradius ? g->pradius[i] : g->radius;  /* size aes = per-point */
+                int sh = g->pshape ? g->pshape[i] : g->shape;   /* shape joins the run key */
                 int j = i, nb = 0;
                 set_col_a(cr, c, g->alpha);
                 while (j < g->n && nb < BATCH
                        && g->pcol[j].r == c.r && g->pcol[j].g == c.g
                        && g->pcol[j].b == c.b
-                       && (g->pradius ? g->pradius[j] : g->radius) == rad) {
+                       && (g->pradius ? g->pradius[j] : g->radius) == rad
+                       && (g->pshape ? g->pshape[j] : g->shape) == sh) {
                     cairo_new_sub_path(cr);      /* else arcs join with a line */
-                    cairo_arc(cr, DX(g->px[j]), DY(g->py[j]), rad, 0, 2 * M_PI);
+                    cp_point_path(cr, sh, DX(g->px[j]), DY(g->py[j]), rad);
                     j++; nb++;
                 }
                 cairo_fill(cr);

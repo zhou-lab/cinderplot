@@ -29,7 +29,8 @@ static double font_h(cairo_t *cr, double size) {
 }
 
 static GTable *build_legend(cairo_t *cr, const Theme *th, const char *title, const Factor *f,
-                            const Col *pal, int haspoint, int hasline, int hasbox, int hastext) {
+                            const Col *pal, int haspoint, int hasline, int hasbox, int hastext,
+                            const int *shapes) {
     GTable *t = cp_xcalloc(1, sizeof(GTable));
     double label_w = 0;
     for (int i = 0; i < f->nlev; i++) {
@@ -73,6 +74,7 @@ static GTable *build_legend(cairo_t *cr, const Theme *th, const char *title, con
             g = gt_add(t, G_POINTS, r, 0, r, 0);
             g->n = 1; g->px = &half; g->py = &half;
             g->pcol = &pal[i]; g->radius = PT_RADIUS;
+            if (shapes) g->shape = shapes[i];   /* the key IS the glyph here */
         }
         if (hastext) {                       /* geom_text/geom_label key: a letter */
             g = gt_add(t, G_TEXT, r, 0, r, 0);
@@ -628,6 +630,33 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                  "implemented; map a discrete column instead");
         return -1;
     }
+    /* aes(shape=): a discrete column mapped to point glyphs. Six levels, as in
+     * ggplot2 -- past that the glyphs stop being tellable apart, and refusing
+     * is more use than inventing a seventh nobody can name. */
+    Factor *shf = NULL;
+    if (spec->shape.col) {
+        const Column *shc = df_col(df, spec->shape.col);
+        if (!shc) {
+            snprintf(err, CP_ERRLEN, "column `%s` not found", spec->shape.col);
+            return -1;
+        }
+        if (!haspoint) {
+            snprintf(err, CP_ERRLEN, "aes(shape=) needs a point layer "
+                     "(geom_point or geom_jitter)");
+            return -1;
+        }
+        shf = factor_make(df, shc);
+        if (spec->shape.nlevels
+            && factor_relevel(shf, df->nrow, spec->shape.levels,
+                              spec->shape.nlevels, "shape", err)) return -1;
+        if (shf->nlev > 6) {
+            snprintf(err, CP_ERRLEN, "aes(shape=%s) has %d levels; the shape "
+                     "palette holds 6 -- map a lower-cardinality column, or use "
+                     "facet_wrap() for this one", spec->shape.col, shf->nlev);
+            return -1;
+        }
+    }
+
     /* aes(size=): numeric column mapped to point area (geom_point) */
     const Column *szc = NULL;
     if (spec->size.col) {
@@ -665,7 +694,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 : genome_x ? (roff[r] >= 0 && !isnan(xc->num[r]))
                 : !isnan(xc->num[r]);
         int ok = xok && (!yc || (disc_y ? yf->idx[r] >= 0 : !isnan(yc->num[r])))
-              && (!cf || cf->idx[r] >= 0)
+              && (!cf || cf->idx[r] >= 0) && (!shf || shf->idx[r] >= 0)
               && (!cont_col || isfinite(colc->num[r]))
               && (!ff || ff->idx[r] >= 0)
               && (!szc || !isnan(szc->num[r]));
@@ -1510,7 +1539,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     const char *col_title = spec->lab_colour ? spec->lab_colour : spec->colour.expr;
     /* Guides stack top-to-bottom: colour (or fill) first, then size — the
      * order ggplot uses for a point layer mapping both. */
-    GTable *guides[2]; int nguide = 0;
+    GTable *guides[3]; int nguide = 0;
     if (cf) {
         pal = cp_xmalloc(cf->nlev * sizeof(Col));
         if (spec->has_manual) {                 /* scale_*_manual(values=) */
@@ -1529,7 +1558,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
          * and bars are coloured from it; only the guide is dropped. */
         if (!spec->no_legend)
             guides[nguide++] = build_legend(cr, th, col_title, cf, pal, haspoint,
-                               hasline || hasseg || hasdens, hasbox || hasbar || hasrect || hastile, hastext);   /* tiles key as filled boxes */
+                               hasline || hasseg || hasdens, hasbox || hasbar || hasrect || hastile, hastext,
+                               NULL);   /* tiles key as filled boxes */
     } else if (cont_col && !spec->no_legend) {
         guides[nguide++] = build_colorbar_legend(cr, th, col_title, &cscale, cdmin, cdmax);
     }
@@ -1542,6 +1572,15 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         int sdec = axis_decimals(sbr, nf);
         const char *sz_title = spec->size.expr;
         guides[nguide++] = build_size_legend(cr, th, sz_title, sbr, srad, nf, sdec);
+    }
+    if (shf && !spec->no_legend) {
+        /* A shape legend keys the GLYPH, so its swatches are all one colour --
+         * otherwise the reader reads a colour that means nothing. */
+        Col *spal = cp_xmalloc(shf->nlev * sizeof(Col));
+        int *sidx = cp_xmalloc(shf->nlev * sizeof(int));
+        for (int i = 0; i < shf->nlev; i++) { spal[i] = C_BLACK; sidx[i] = i; }
+        const char *sh_title = spec->shape.expr;
+        guides[nguide++] = build_legend(cr, th, sh_title, shf, spal, 1, 0, 0, 0, sidx);
     }
     if (nguide) leg = stack_guides(guides, nguide);
 
@@ -1909,6 +1948,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 double *px = cp_xmalloc(np * sizeof(double)), *py = cp_xmalloc(np * sizeof(double));
                 Col *pcol = cp_xmalloc(np * sizeof(Col));
                 double *prad = szc ? cp_xmalloc(np * sizeof(double)) : NULL;   /* size aes */
+                int *pshp = shf ? cp_xmalloc(np * sizeof(int)) : NULL;         /* shape aes */
                 np = 0;
                 for (int r = 0; r < df->nrow; r++) {
                     if (!use[r] || (ff && ff->idx[r] != p)) continue;
@@ -1929,10 +1969,12 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     pcol[np] = spec->layers[li].has_color ? spec->layers[li].color
                              : cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BLACK;
                     if (prad) prad[np] = size_to_radius(szc->num[r], szmin, szmax);
+                    if (pshp) pshp[np] = shf->idx[r];
                     np++;
                 }
                 g = gt_add(T, G_POINTS, R, C, R, C);
                 g->n = np; g->px = px; g->py = py; g->pcol = pcol; g->pradius = prad;
+                g->pshape = pshp;
                 g->raster = spec->layers[li].raster;
                 g->radius = spec->layers[li].point_size > 0
                           ? PT_RADIUS * spec->layers[li].point_size / 1.5 : PT_RADIUS;

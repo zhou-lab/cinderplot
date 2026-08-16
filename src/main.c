@@ -283,7 +283,8 @@ int main(int argc, char **argv) {
     char *needed[MAX_LAYERS + 16];
     int nneeded = 0;
     const AesEntry *aes[] = { &spec.x, &spec.y, &spec.colour, &spec.xend,
-                              &spec.yend, &spec.label, &spec.size, &spec.chrom };
+                              &spec.yend, &spec.label, &spec.size, &spec.shape,
+                              &spec.chrom };
     for (size_t i = 0; i < sizeof aes / sizeof *aes; i++)
         if (aes[i]->col) needed[nneeded++] = aes[i]->col;
     if (spec.facet_var) needed[nneeded++] = spec.facet_var;

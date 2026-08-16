@@ -197,6 +197,8 @@ typedef struct {
     int n;                                     /* points / axis breaks */
     const double *px, *py; const Col *pcol; double radius;
     const double *pradius;                     /* G_POINTS: per-point radius (size aes); NULL = use `radius` */
+    const int *pshape;                         /* G_POINTS: per-point glyph (shape aes); NULL = circles */
+    int shape;                                 /* G_POINTS: one glyph for every point */
     int raster;                                /* G_POINTS: rasterize into an embedded image */
     int dash;                                  /* G_LINE/G_POLYLINE: 0 solid, 1 dashed, 2 dotted */
     double alpha;                              /* 0 = opaque (unset); else 0..1 fill/stroke alpha */
@@ -241,6 +243,8 @@ void cp_set_dpi(double dpi);                        /* PNG raster resolution (de
 /* Emit the finished surface: write_to_png for image surfaces, surface_finish
  * for vector ones. Returns the resulting cairo status. */
 cairo_status_t cp_surface_emit(cairo_surface_t *surf, const char *out);
+/* one point glyph, path only -- caller fills. shape 0..5, see cp_point_path. */
+void cp_point_path(cairo_t *cr, int shape, double cx, double cy, double r);
 
 /* ---------- dsl.c: verbatim ggplot subset ---------- */
 /* col NULL = unset; levels (from factor(col, levels=c(...))) imposes the
@@ -334,6 +338,7 @@ typedef struct {
     AesEntry xend, yend;            /* geom_segment endpoints */
     AesEntry label;                 /* geom_text/geom_label label column */
     AesEntry size;                  /* geom_point size: numeric -> point area */
+    AesEntry shape;                 /* geom_point shape: discrete -> point glyph */
     AesEntry chrom;                 /* genome scale: chromosome column */
     int coord_flip;                 /* coord_flip(): swap the x and y axes */
     char *genome_seqinfo;           /* scale_x_genome: seqinfo TSV path */

@@ -66,7 +66,12 @@ cinderplot 'ggplot("mtcars.csv", aes(hp, mpg, colour=factor(cyl))) + geom_point(
 and ignored (the output path is a command-line argument here).
 
 - **aes**: `x`, `y` positionally, then named — `colour`/`color`/`fill`, `size`,
-  `label`, `xend`/`xmax`, `yend`/`ymax`, `chrom`. A value is a bare column name
+  `shape`, `label`, `xend`/`xmax`, `yend`/`ymax`, `chrom`. `shape=` maps a
+  **discrete** column to point glyphs (circle, triangle, square, diamond,
+  triangle-down, plus) with its own legend, so a scatter can carry two factors
+  at once — colour for one, shape for the other. Six levels maximum, as in
+  ggplot2: past that the glyphs stop being tellable apart, so it errors rather
+  than inventing a seventh. Needs a point layer. A value is a bare column name
   or `factor(col[, levels=c(...)])`.
 - **geoms**: `point jitter line col histogram boxplot bar segment rect density
   tile raster hline vline abline text label`, plus `text_repel`/`label_repel`.
