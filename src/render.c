@@ -752,9 +752,26 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
 /* genome offset applied to any within-chromosome position (e.g. xend) */
 #define GX(r, v) (genome_x ? (roff[r] + (v)) : (v))
 
-    /* ---- panel grid: ggplot2 wrap_dims = rev(grDevices::n2mfrow(n)) ---- */
+    /* ---- panel grid: ggplot2 wrap_dims = rev(grDevices::n2mfrow(n)), unless
+     * the caller fixed one side. ncol= matters whenever the panels cross two
+     * factors: at 8 panels the automatic shape wraps 3 per row, which splits
+     * the pairs the figure exists to compare into different rows, and no
+     * levels= ordering can fix that. ---- */
     int npan = ff ? ff->nlev : 1, ncolp, nrowp;
-    if (npan <= 3)       { ncolp = npan;            nrowp = 1; }
+    if (spec->facet_ncol > 0 && spec->facet_nrow > 0) {
+        ncolp = spec->facet_ncol; nrowp = spec->facet_nrow;
+        if (ncolp * nrowp < npan) {
+            snprintf(err, CP_ERRLEN, "facet_wrap(ncol=%d, nrow=%d) holds %d panels "
+                     "but there are %d", ncolp, nrowp, ncolp * nrowp, npan);
+            return -1;
+        }
+    } else if (spec->facet_ncol > 0) {
+        ncolp = spec->facet_ncol;
+        nrowp = (npan + ncolp - 1) / ncolp;
+    } else if (spec->facet_nrow > 0) {
+        nrowp = spec->facet_nrow;
+        ncolp = (npan + nrowp - 1) / nrowp;
+    } else if (npan <= 3)  { ncolp = npan;            nrowp = 1; }
     else if (npan <= 6)  { ncolp = (npan + 1) / 2;  nrowp = 2; }
     else if (npan <= 12) { ncolp = (npan + 2) / 3;  nrowp = 3; }
     else {

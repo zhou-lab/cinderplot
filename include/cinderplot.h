@@ -349,6 +349,7 @@ typedef struct {
     char *facet_var;
     char **facet_levels; int n_facet_levels;      /* facet_wrap(~v, levels=c(...)) */
     int free_x, free_y;                           /* facet_wrap(scales=): per-panel ranges */
+    int facet_ncol, facet_nrow;                   /* facet_wrap(ncol=/nrow=); 0 = auto */
     double x_angle, y_angle;                      /* scale_*_discrete(angle=); <0 = auto */
     int tree_layout;                              /* 0 rectangular, 1 slanted, 2 circular */
     int tree_mode, tree_tiplab, tree_nodelab;     /* geom_tree()/geom_tiplab()/geom_nodelab() */

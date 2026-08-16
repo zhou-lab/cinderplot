@@ -953,6 +953,15 @@ static int parse_term(P *p, PlotSpec *spec) {
                 return fail(p, "facet_wrap() supports levels=c(...) and scales=", "");
             if (!strcmp(key, "levels")) {
                 if (parse_levels(p, &spec->facet_levels, &spec->n_facet_levels)) return -1;
+            } else if (!strcmp(key, "ncol") || !strcmp(key, "nrow")) {
+                skip_ws(p);
+                char *end;
+                double v = strtod(p->s, &end);
+                if (end == p->s || v < 1 || v != (int)v)
+                    return fail(p, "%s= expects a positive whole number", key);
+                p->s = end;
+                if (key[1] == 'c') spec->facet_ncol = (int)v;
+                else spec->facet_nrow = (int)v;
             } else if (!strcmp(key, "scales")) {
                 char *v = string_lit(p);
                 if (!v) v = ident(p);          /* scales=free reads as well as "free" */
@@ -963,7 +972,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                 else if (!strcmp(v, "free"))   { spec->free_x = 1; spec->free_y = 1; }
                 else return fail(p, "scales=%s invalid; use fixed, free_x, free_y, or free", v);
             } else return fail(p, "facet_wrap() option `%s` not implemented; "
-                               "supported: levels=c(...), scales=", key);
+                               "supported: levels=c(...), scales=, ncol=, nrow=", key);
             free(key);
             skip_ws(p);
         }
