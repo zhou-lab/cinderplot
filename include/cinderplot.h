@@ -2,7 +2,7 @@
 #ifndef CINDERPLOT_H
 #define CINDERPLOT_H
 
-#define CINDERPLOT_VERSION "0.7.0"
+#define CINDERPLOT_VERSION "0.7.1"
 
 /* Size of the caller-supplied error buffer passed to every *_read / render /
  * dsl_parse entry point (see main.c: char err[CP_ERRLEN]). All error
@@ -255,7 +255,7 @@ typedef struct {
 } AesEntry;
 
 typedef enum { GEOM_POINT, GEOM_JITTER, GEOM_LINE, GEOM_COL, GEOM_HISTOGRAM, GEOM_BOXPLOT, GEOM_BAR,
-               GEOM_SEGMENT, GEOM_RECT, GEOM_DENSITY, GEOM_TILE,
+               GEOM_SEGMENT, GEOM_RECT, GEOM_DENSITY, GEOM_SMOOTH, GEOM_TILE,
                GEOM_HLINE, GEOM_VLINE, GEOM_ABLINE, GEOM_TEXT, GEOM_LABEL } GeomType;
 typedef struct {
     GeomType type;
@@ -264,6 +264,8 @@ typedef struct {
     char *ycol;          /* per-layer y column override (NULL = inherit) */
     Col color; int has_color;   /* constant layer colour override */
     double bw, adjust;          /* geom_density: bandwidth (0 = nrd0) x adjust */
+    double span;                /* geom_smooth: loess span (0 = ggplot's 0.75) */
+    int se_given;               /* geom_smooth: se= was written out */
     double slope, intercept;    /* geom_abline; hline/vline store value in intercept */
     int has_slope, has_intercept;
     double txt_size;            /* geom_text/label font size (ggplot mm; 0 = default) */
@@ -349,6 +351,8 @@ typedef struct {
     double xlim_lo, xlim_hi, ylim_lo, ylim_hi;   /* user axis limits (data space) */
     int has_xlim, has_ylim;                       /* xlim()/ylim() or scale_*_log10(limits=) */
     int x_pct, y_pct;                             /* scale_*_continuous(labels=percent) */
+    double x_breaks[40], y_breaks[40];            /* scale_*_continuous(breaks=c(...)) */
+    int n_x_breaks, n_y_breaks;                   /* 0 = choose them automatically */
     ThemeType theme;                              /* theme_*(); THEME_GRAY = 0 = default */
     int no_legend;                  /* guides(colour="none"|fill="none") or --no-legend */
     char *facet_var;

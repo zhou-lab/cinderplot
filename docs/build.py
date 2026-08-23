@@ -697,7 +697,7 @@ __SECTIONS__
 
 # Landing-page content (compact, info-rich, lab-website style). Only the
 # landing uses this; the gallery keeps STYLE/header() above.
-GEOMS = ["point", "jitter", "line", "col", "bar", "histogram", "boxplot", "density",
+GEOMS = ["point", "jitter", "line", "smooth", "col", "bar", "histogram", "boxplot", "density",
          "rect", "segment", "tile", "raster", "text", "label", "text_repel",
          "hline", "vline", "abline",
          "tree", "tiplab", "nodelab", "nodepoint", "tippoint"]

@@ -73,15 +73,24 @@ and ignored (the output path is a command-line argument here).
   ggplot2: past that the glyphs stop being tellable apart, so it errors rather
   than inventing a seventh. Needs a point layer. A value is a bare column name
   or `factor(col[, levels=c(...)])`.
-- **geoms**: `point jitter line col histogram boxplot bar segment rect density
-  tile raster hline vline abline text label`, plus `text_repel`/`label_repel`.
+- **geoms**: `point jitter line smooth col histogram boxplot bar segment rect
+  density tile raster hline vline abline text label`, plus
+  `text_repel`/`label_repel`.
   Up to 8 layers.
 - **layer options**: `size=`, `alpha=`, `linetype="solid"|"dashed"|"dotted"`,
   `bins=` (histogram), `nudge_x=`/`nudge_y=` (text),
   `geom_point(raster=TRUE)` — see trap 9 — and
   `geom_boxplot(outlier.shape=NA)` to hide the outlier marks when a jitter
   layer already draws those points.
-- **`geom_jitter(width=, height=, size=, alpha=, seed=)`** is `geom_point()`
+- **`geom_smooth(se=FALSE, span=)`** fits a LOESS (local quadratic, tricube
+weights) per colour group per panel — the points-plus-trend idiom for a noisy
+signal. `span=` is the fraction of the data in each local fit, default `0.75` as
+in ggplot2; smaller follows the data more closely. **`se=FALSE` is required**:
+ggplot2 defaults it to `TRUE`, the confidence ribbon is not implemented, and
+drawing the line without saying so would show less uncertainty than you asked
+for.
+
+**`geom_jitter(width=, height=, size=, alpha=, seed=)`** is `geom_point()`
   with a random offset, layerable over `geom_boxplot()` — the usual
   box-plus-observations figure. On a discrete axis plain points stack on the
   category centre, so 400 look like 40. `width=`/`height=` are half-ranges in
@@ -92,7 +101,7 @@ and ignored (the output path is a command-line argument here).
   **deterministic**, keyed off the row, so a figure regenerates identically.
   `seed=` picks a different arrangement.
 - **scales**: `scale_x_log10()` `scale_y_log10()` `scale_*_continuous(labels=percent,
-  limits=)` `xlim()` `ylim()` `scale_*_manual(values=c(...))`
+  limits=, breaks=c(...))` `xlim()` `ylim()` `scale_*_manual(values=c(...))`
   `scale_(fill|colour)_*()` continuous palettes: `viridis magma inferno plasma
   cividis rocket mako` (perceptually uniform; `cividis` is also colour-blind and
   greyscale safe), `parula` (the lab default for methylation beta), `turbo` (a
@@ -265,9 +274,9 @@ Every unimplemented verb, aesthetic or option fails with a message that
 **enumerates the supported subset**, so a wrong guess costs one fast run and
 returns a menu rather than a syntax error.
 
-Known absent: `geom_smooth()`, `facet_grid()`, `facet_wrap(scales=)`, an
-arbitrary `theme()` (presets only), stacked/dodged bars, and statistical
-transformations beyond binning and density.
+Known absent: `facet_grid()`, the `geom_smooth()` confidence ribbon (`se=TRUE`),
+an arbitrary `theme()` (presets only), stacked/dodged bars, and statistical
+transformations beyond binning, density and loess.
 
 ## Traps
 

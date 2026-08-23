@@ -585,6 +585,7 @@ static int parse_term(P *p, PlotSpec *spec) {
     int is_geom = 1, is_repel = 0;
     if (!strcmp(name, "geom_point")) gt = GEOM_POINT;
     else if (!strcmp(name, "geom_jitter")) gt = GEOM_JITTER;
+    else if (!strcmp(name, "geom_smooth")) gt = GEOM_SMOOTH;
     else if (!strcmp(name, "geom_line")) gt = GEOM_LINE;
     else if (!strcmp(name, "geom_col")) gt = GEOM_COL;
     else if (!strcmp(name, "geom_histogram")) gt = GEOM_HISTOGRAM;
@@ -644,6 +645,25 @@ static int parse_term(P *p, PlotSpec *spec) {
                 } else if (se && !strcmp(key, "y")) {
                     l->ycol = ident(p);
                     if (!l->ycol) return fail(p, "y= expects a column name", "");
+                } else if (gt == GEOM_SMOOTH && !strcmp(key, "span")) {
+                    skip_ws(p);
+                    char *end;
+                    double v = strtod(p->s, &end);
+                    if (end == p->s || v <= 0 || v > 1)
+                        return fail(p, "span= expects a fraction in (0, 1]", "");
+                    p->s = end; l->span = v;
+                } else if (gt == GEOM_SMOOTH && !strcmp(key, "se")) {
+                    char *v = string_lit(p);
+                    if (!v) v = ident(p);
+                    if (!v) return fail(p, "se= expects TRUE or FALSE", "");
+                    /* ggplot defaults se=TRUE. The ribbon is not implemented, and
+                     * quietly drawing the line without it would be a figure that
+                     * claims less uncertainty than the caller asked to see. */
+                    if (strcmp(v, "FALSE") && strcmp(v, "false") && strcmp(v, "F"))
+                        return fail(p, "geom_smooth(se=TRUE) is not implemented -- "
+                                    "the confidence ribbon is missing, not hidden; "
+                                    "pass se=FALSE for the fitted line alone", "");
+                    l->se_given = 1;
                 } else if (gt == GEOM_DENSITY && !strcmp(key, "bw")) {
                     l->bw = strtod(p->s, (char **)&p->s);
                     if (l->bw <= 0) return fail(p, "geom_density(bw=...) must be > 0", "");
@@ -787,7 +807,34 @@ static int parse_term(P *p, PlotSpec *spec) {
                 skip_ws(p); if (*p->s == ')') p->s++;
                 if (isx) { spec->xlim_lo = lo; spec->xlim_hi = hi; spec->has_xlim = 1; }
                 else     { spec->ylim_lo = lo; spec->ylim_hi = hi; spec->has_ylim = 1; }
-            } else return fail(p, "scale_*_continuous option `%s` not implemented (labels=percent, limits=)", key);
+            } else if (!strcmp(key, "breaks")) {
+                /* Explicit tick positions. The automatic ones are chosen for a
+                 * readable count, not a readable WIDTH -- a genomic coordinate
+                 * prints 202004000 and the labels collide, which is otherwise
+                 * only fixable by rescaling the data. */
+                if (p->s[0] == 'c' && p->s[1] == '(') p->s += 2;
+                else return fail(p, "breaks= expects c(a, b, ...)", "");
+                double *br = isx ? spec->x_breaks : spec->y_breaks;
+                int *nbr = isx ? &spec->n_x_breaks : &spec->n_y_breaks;
+                *nbr = 0;
+                for (;;) {
+                    skip_ws(p);
+                    if (*p->s == ')') { p->s++; break; }
+                    char *end;
+                    double v = strtod(p->s, &end);
+                    if (end == p->s) return fail(p, "bad number in breaks=c(...)", "");
+                    p->s = end;
+                    if (*nbr >= 40)
+                        return fail(p, "breaks=c(...) holds at most 40 values", "");
+                    br[(*nbr)++] = v;
+                    skip_ws(p);
+                    if (*p->s == ',') { p->s++; continue; }
+                    if (*p->s == ')') { p->s++; break; }
+                    return fail(p, "expected , or ) in breaks=c(...)", "");
+                }
+                if (*nbr == 0) return fail(p, "breaks=c() is empty", "");
+            } else return fail(p, "scale_*_continuous option `%s` not implemented "
+                               "(labels=percent, limits=, breaks=)", key);
             skip_ws(p);
             if (*p->s == ',') { p->s++; skip_ws(p); }
         }
@@ -1182,6 +1229,11 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
     if (spec->tree_tiplab || spec->tree_nodelab
         || spec->tree_nodepoint || spec->tree_tippoint)
         return fail(&p, "the tree geoms need a geom_tree()", "");
+    for (int i = 0; i < spec->nlayers; i++)
+        if (spec->layers[i].type == GEOM_SMOOTH && !spec->layers[i].se_given)
+            return fail(&p, "geom_smooth() defaults to se=TRUE in ggplot2 and the "
+                        "confidence ribbon is not implemented here; say se=FALSE "
+                        "to ask for the fitted line alone", "");
     if (spec->nlayers == 0)
         return fail(&p, "no geom given; add e.g. + geom_point()", "");
     int nstat = 0, nref = 0;   /* stats compute y; reference lines are overlays */
