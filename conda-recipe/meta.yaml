@@ -17,6 +17,13 @@ build:
 requirements:
   build:
     - {{ compiler('c') }}
+    # Target an OLD glibc. Without this the CI runner's compiler links against
+    # whatever glibc ubuntu-latest ships (2.39 as of this writing), and the
+    # resulting package will not start on a cluster -- the lab HPC is RHEL 9
+    # with glibc 2.34, and 0.7.x died there with "GLIBC_2.38 not found" while
+    # the identical source built locally needed only 2.34. 2.17 is the
+    # conda-forge baseline and covers everything from CentOS 7 up.
+    - sysroot_linux-64 2.17  # [linux]
     - make
     - pkg-config
   host:
