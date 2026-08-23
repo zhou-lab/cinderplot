@@ -84,7 +84,9 @@ and ignored (the output path is a command-line argument here).
 - **`geom_smooth(se=FALSE, span=)`** fits a LOESS (local quadratic, tricube
 weights) per colour group per panel — the points-plus-trend idiom for a noisy
 signal. `span=` is the fraction of the data in each local fit, default `0.75` as
-in ggplot2; smaller follows the data more closely. **`se=FALSE` is required**:
+in ggplot2. **Treat the default as a starting point, not an answer**: over a
+wide window it will flatten real structure into one broad arc. On a genomic
+trace `0.1`–`0.15` keeps the per-CpG detail while still showing the trend. **`se=FALSE` is required**:
 ggplot2 defaults it to `TRUE`, the confidence ribbon is not implemented, and
 drawing the line without saying so would show less uncertainty than you asked
 for.
