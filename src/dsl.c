@@ -763,15 +763,17 @@ static int parse_term(P *p, PlotSpec *spec) {
         p->s++;
         return 0;
     }
-    if (!strcmp(name, "scale_x_log10") || !strcmp(name, "scale_y_log10")) {
+    if (!strcmp(name, "scale_x_log10") || !strcmp(name, "scale_y_log10") ||
+        !strcmp(name, "scale_x_log2")  || !strcmp(name, "scale_y_log2")) {
         int isx = (name[6] == 'x');
-        if (isx) spec->log_x = 1; else spec->log_y = 1;
+        int base = name[strlen(name) - 1] == '2' ? 2 : 10;
+        if (isx) spec->log_x = base; else spec->log_y = base;
         skip_ws(p);
         while (*p->s != ')') {                        /* optional limits=c(lo, hi) */
             char *key = ident(p);
-            if (!key || expect(p, '=')) return fail(p, "bad scale_*_log10 argument", "");
+            if (!key || expect(p, '=')) return fail(p, "bad scale_*_log argument", "");
             skip_ws(p);
-            if (strcmp(key, "limits")) return fail(p, "scale_*_log10 option `%s` not implemented (only limits=)", key);
+            if (strcmp(key, "limits")) return fail(p, "scale_*_log option `%s` not implemented (only limits=)", key);
             if (p->s[0] == 'c' && p->s[1] == '(') p->s += 2;
             else return fail(p, "limits= expects c(lo, hi)", "");
             double lo = strtod(p->s, (char **)&p->s);
@@ -1132,7 +1134,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                    "geom_hline(), geom_vline(), geom_abline(), "
                    "geom_text()/geom_text_repel(), geom_label()/geom_label_repel(), "
                    "labs()/xlab()/ylab()/ggtitle(), "
-                   "facet_wrap(~var[, levels=c(...)]), coord_flip(), scale_x_log10(), scale_y_log10(), scale_*_continuous(), xlim(), ylim(), "
+                   "facet_wrap(~var[, levels=c(...)]), coord_flip(), scale_x_log10()/scale_x_log2(), scale_y_log10()/scale_y_log2(), scale_*_continuous(), xlim(), ylim(), "
                    "scale_*_manual(), theme_bw()/theme_minimal()/theme_classic()/..., guides(colour=\"none\"), "
                    "heatmap(), annotation(), legend(), scale_fill_*(), "
                    "region()/regions(), coverage(), interval(), genes(), arcs(), matrix(), cytoband()", name);

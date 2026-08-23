@@ -103,24 +103,32 @@ void fmt_break(double v, int decimals, char *buf, size_t cap) {
     snprintf(buf, cap, "%.*f", decimals, v);
 }
 
-/* log10 scale majors: integer powers of ten within the range, labelled 10^k
- * (rendered with a superscript exponent by the axis renderer). This is the
- * scientific-notation style (R's trans_breaks("log10", 10^x) + math_format);
- * cinderplot uses it as the default for scale_x/y_log10, deviating from
- * ggplot's default value labels. The 1..9 x 10^k structure is shown by the
- * log tick marks (see log_ticks/log_minors in render.c). Many decades are
- * thinned so labels stay legible. Labels are "10^k" for the renderer to split. */
-int log10_breaks(double tlo, double thi, double *tmaj, char **labs, int max_out) {
+/* log scale majors: integer powers of the base within the range, labelled
+ * base^k (rendered with a superscript exponent by the axis renderer). This is
+ * the scientific-notation style (R's trans_breaks("log10", 10^x) +
+ * math_format); cinderplot uses it as the default for scale_x/y_log10,
+ * deviating from ggplot's default value labels. The sub-structure within each
+ * step is shown by the log tick marks (see log_ticks/log_minors in render.c).
+ * Crowded ranges are thinned so labels stay legible. Labels are "base^k" for
+ * the renderer to split.
+ *
+ * Base 2 rungs are only ~0.3 decades apart, so a range wide enough to be worth
+ * a log2 axis holds several times more of them than it would decades -- hence
+ * the higher thinning threshold, which keeps a 2^10..2^22 coverage ladder at
+ * every other power rather than collapsing it to six labels. */
+int log_breaks(int base, double tlo, double thi, double *tmaj, char **labs,
+               int max_out) {
     int klo = (int)ceil(tlo - 1e-9), khi = (int)floor(thi + 1e-9);
-    int ndec = khi - klo + 1;
-    if (ndec < 1) return 0;                    /* no whole decade in range */
+    int nstep = khi - klo + 1;
+    if (nstep < 1) return 0;                   /* no whole power in range */
+    int keep = base == 2 ? 12 : 7;             /* labels to show before thinning */
     int by = 1;
-    if (ndec > 7) by = (ndec - 1) / 6 + 1;     /* thin crowded multi-decade axes */
+    if (nstep > keep) by = (nstep - 1) / (keep - 1) + 1;
     int n = 0;
     for (int k = klo; k <= khi && n < max_out; k += by) {
         tmaj[n] = k;
         labs[n] = cp_xmalloc(16);
-        sprintf(labs[n], "10^%d", k);
+        sprintf(labs[n], "%d^%d", base ? base : 10, k);
         n++;
     }
     return n;

@@ -253,15 +253,57 @@ static int make_minors(const double *maj, int nmaj, double lo, double hi, double
     return n;
 }
 
-/* log10 minor breaks: d x 10^k for d in 2..9, in transformed (log10) space,
- * filtered to [lo, hi] — the characteristic log grid. Majors are drawn on top,
- * so a minor coinciding with a major is simply covered. */
-static int log_minors(double lo, double hi, double *out, int max_out) {
+/* The sub-structure drawn between consecutive powers of the base, as offsets in
+ * transformed space within one step: for base 10 the familiar 1..9 ladder, for
+ * base 2 just the midpoint 1.5 (2..9 would land outside the octave, and the one
+ * interior point is what ggplot's log2 minor breaks amount to). Index 0 is the
+ * power itself. */
+static int log_subdiv(int base, double *off, double *val) {
+    if (base == 2) {
+        off[0] = 0.0; val[0] = 1.0;
+        off[1] = log2(1.5); val[1] = 1.5;
+        return 2;
+    }
+    for (int d = 1; d <= 9; d++) { off[d - 1] = log10((double)d); val[d - 1] = d; }
+    return 9;
+}
+
+/* log minor breaks: the sub-division above repeated over every power, in
+ * transformed space, filtered to [lo, hi] — the characteristic log grid.
+ * Majors are drawn on top, so a minor coinciding with a major is simply
+ * covered. */
+static int log_minors(int base, double lo, double hi, double *out, int max_out) {
+    double off[9], val[9];
+    int nd = log_subdiv(base, off, val);
     int n = 0;
     for (int k = (int)floor(lo) - 1; k <= (int)ceil(hi) + 1 && n < max_out; k++)
-        for (int d = 2; d <= 9 && n < max_out; d++) {
-            double t = k + log10((double)d);
+        for (int d = 1; d < nd && n < max_out; d++) {   /* skip the power itself */
+            double t = k + off[d];
             if (t >= lo - 1e-9 && t <= hi + 1e-9) out[n++] = t;
+        }
+    return n;
+}
+
+/* log tick marks (ggplot annotation_logticks): the sub-division ladder over
+ * every power, in transformed space, with a length per mark — long at the power
+ * itself, mid at the half-way value (5 for base 10, 1.5 for base 2), short at
+ * the rest. Positions are transformed-space; the caller maps them to npc.
+ * Lengths in points (ggplot defaults 0.3/0.2/0.1 cm). */
+static int log_tick_marks(int base, double lo, double hi, double *pos,
+                          double *len, int max_out) {
+    const double CM_PT = 72.0 / 2.54;
+    const double LONG = 0.30 * CM_PT, MID = 0.20 * CM_PT, SHORT = 0.10 * CM_PT;
+    double off[9], val[9];
+    int nd = log_subdiv(base, off, val);
+    double half = base == 2 ? 1.5 : 5.0;
+    int n = 0;
+    for (int k = (int)floor(lo) - 1; k <= (int)ceil(hi) + 1 && n < max_out; k++)
+        for (int d = 0; d < nd && n < max_out; d++) {
+            double t = k + off[d];
+            if (t < lo - 1e-9 || t > hi + 1e-9) continue;
+            pos[n] = t;
+            len[n] = val[d] == 1.0 ? LONG : val[d] == half ? MID : SHORT;
+            n++;
         }
     return n;
 }
@@ -399,7 +441,8 @@ static double tile_step(const DataFrame *df, const int *use, const Factor *ff,
         if (!use[r] || (ff && ff->idx[r] != panel)) continue;
         double t = col->num[r];
         if (isnan(t)) continue;
-        if ((is_x ? spec->log_x : spec->log_y)) { if (t <= 0) continue; t = log10(t); }
+        int lb = is_x ? spec->log_x : spec->log_y;
+        if (lb) { if (t <= 0) continue; t = cp_logt(lb, t); }
         v[n++] = t;
     }
     double step = 0, lo = 0, hi = 0;
@@ -471,7 +514,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         snprintf(err, CP_ERRLEN, "x column `%s` is not numeric", spec->x.col); return -1;
     }
     if (disc_x && spec->log_x) {
-        snprintf(err, CP_ERRLEN, "scale_x_log10() needs a continuous x"); return -1;
+        snprintf(err, CP_ERRLEN, "scale_x_log%d() needs a continuous x",
+                 spec->log_x); return -1;
     }
     if (disc_x && nhist) {
         snprintf(err, CP_ERRLEN, "geom_histogram() needs a continuous x"); return -1;
@@ -515,7 +559,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 && factor_relevel(yf, df->nrow, spec->y.levels, spec->y.nlevels,
                                   "y", err)) return -1;
             if (spec->log_y) {
-                snprintf(err, CP_ERRLEN, "scale_y_log10() cannot apply to a discrete y");
+                snprintf(err, CP_ERRLEN, "scale_y_log%d() cannot apply to a discrete y",
+                         spec->log_y);
                 return -1;
             }
         }
@@ -767,7 +812,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         if (szmax <= szmin) szmax = szmin + 1;
     }
 
-#define TY(v) (spec->log_y ? log10(v) : (v))
+#define TY(v) (cp_logt(spec->log_y, (v)))
 /* transformed x for row r: category position (discrete), genome offset+pos
  * (genome), or raw value (continuous) */
 /* Discrete free scales renumber the categories a panel actually shows, so a
@@ -778,7 +823,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
 #define YVAL(r) (disc_y ? (double)((ymap ? ymap[yf->idx[r]] : yf->idx[r]) + 1) : yc->num[r])
 #define XVAL(r) (disc_x ? (double)((xmap ? xmap[xf->idx[r]] : xf->idx[r]) + 1) \
                : genome_x ? (roff[r] + xc->num[r]) : xc->num[r])
-#define TXR(r)  (spec->log_x ? log10(XVAL(r)) : XVAL(r))
+#define TXR(r)  (cp_logt(spec->log_x, XVAL(r)))
 /* genome offset applied to any within-chromosome position (e.g. xend) */
 #define GX(r, v) (genome_x ? (roff[r] + (v)) : (v))
 
@@ -827,7 +872,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             if (t < txmin) txmin = t;
             if (t > txmax) txmax = t;
             if (xec && !isnan(xec->num[r])) {   /* segment end extends x range */
-                double te = spec->log_x ? log10(xec->num[r]) : xec->num[r];
+                double te = cp_logt(spec->log_x, xec->num[r]);
                 if (te < txmin) txmin = te;
                 if (te > txmax) txmax = te;
             }
@@ -955,12 +1000,11 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         tymax = 0;
         for (int li = 0; li < spec->nlayers; li++)
             if (spec->layers[li].type == GEOM_HISTOGRAM) {
-                double ymax = spec->log_y ? log10((double)hist[li].max)
-                                          : (double)hist[li].max;
+                double ymax = cp_logt(spec->log_y, (double)hist[li].max);
                 if (ymax > tymax) tymax = ymax;
             }
     } else if (hasbar) {
-        tymin = 0; tymax = spec->log_y ? log10((double)barmax) : (double)barmax;
+        tymin = 0; tymax = cp_logt(spec->log_y, (double)barmax);
     } else if (hasdens) {
         tymin = 0; tymax = dens_max;
     } else {
@@ -993,7 +1037,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             /* Same guard hline has: a value <= 0 has no place on a log axis, and
              * feeding its NaN into the comparisons below only works by accident
              * of IEEE semantics. */
-            double t = spec->log_x ? (L->intercept > 0 ? log10(L->intercept) : NAN)
+            double t = spec->log_x ? (L->intercept > 0
+                                      ? cp_logt(spec->log_x, L->intercept) : NAN)
                                    : L->intercept;
             if (isfinite(t)) {
                 if (t < txmin) txmin = t;
@@ -1028,12 +1073,12 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         return -1;
     }
     if (spec->has_xlim && !disc_x && !genome_x) {
-        txmin = spec->log_x ? log10(spec->xlim_lo) : spec->xlim_lo;
-        txmax = spec->log_x ? log10(spec->xlim_hi) : spec->xlim_hi;
+        txmin = cp_logt(spec->log_x, spec->xlim_lo);
+        txmax = cp_logt(spec->log_x, spec->xlim_hi);
     }
     if (spec->has_ylim) {
-        tymin = spec->log_y ? log10(spec->ylim_lo) : spec->ylim_lo;
-        tymax = spec->log_y ? log10(spec->ylim_hi) : spec->ylim_hi;
+        tymin = cp_logt(spec->log_y, spec->ylim_lo);
+        tymax = cp_logt(spec->log_y, spec->ylim_hi);
     }
     /* warn about data outside the limits: cinderplot clips such points to the
      * panel (ggplot drops them). Report the count like ggplot's "Removed N". */
@@ -1104,13 +1149,13 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             gax_lab[i] = cp_xstrdup(nm);
         }
     } else if (spec->log_x) {
-        nxbr = log10_breaks(x0, x1, xbr, xlabs, 16);
+        nxbr = log_breaks(spec->log_x, x0, x1, xbr, xlabs, 16);
     } else {
         int nb; 
         if (spec->n_x_breaks) {          /* scale_x_continuous(breaks=c(...)) */
             nb = spec->n_x_breaks;
-            for (int i = 0; i < nb; i++) xbr[i] = spec->log_x ? log10(spec->x_breaks[i])
-                                                              : spec->x_breaks[i];
+            for (int i = 0; i < nb; i++)
+                xbr[i] = cp_logt(spec->log_x, spec->x_breaks[i]);
         } else nb = extended_breaks(x0, x1, 5, xbr, 16);
         int n = 0;
         for (int i = 0; i < nb; i++) if (xbr[i] >= x0 && xbr[i] <= x1) xbr[n++] = xbr[i];
@@ -1133,13 +1178,13 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         nybr = yf->nlev;
         for (int i = 0; i < nybr; i++) { ybr[i] = i + 1; ylabs[i] = cp_xstrdup(yf->levels[i]); }
     } else if (spec->log_y) {
-        nybr = log10_breaks(y0, y1, ybr, ylabs, 16);
+        nybr = log_breaks(spec->log_y, y0, y1, ybr, ylabs, 16);
     } else {
         int nb;
         if (spec->n_y_breaks) {          /* scale_y_continuous(breaks=c(...)) */
             nb = spec->n_y_breaks;
-            for (int i = 0; i < nb; i++) ybr[i] = spec->log_y ? log10(spec->y_breaks[i])
-                                                              : spec->y_breaks[i];
+            for (int i = 0; i < nb; i++)
+                ybr[i] = cp_logt(spec->log_y, spec->y_breaks[i]);
         } else nb = extended_breaks(y0, y1, 5, ybr, 16);
         int n = 0;
         for (int i = 0; i < nb; i++) if (ybr[i] >= y0 && ybr[i] <= y1) ybr[n++] = ybr[i];
@@ -1163,37 +1208,23 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     for (int i = 0; i < nybr; i++) ynpc[i] = NPCY(ybr[i]);
     double xmin_br[32], ymin_br[32];
     int nxmin = (disc_x || genome_x) ? 0
-              : spec->log_x ? log_minors(x0, x1, xmin_br, 32)
+              : spec->log_x ? log_minors(spec->log_x, x0, x1, xmin_br, 32)
               : make_minors(xbr, nxbr, x0, x1, xmin_br);
     int nymin = disc_y ? 0
-              : spec->log_y ? log_minors(y0, y1, ymin_br, 32)
+              : spec->log_y ? log_minors(spec->log_y, y0, y1, ymin_br, 32)
               : make_minors(ybr, nybr, y0, y1, ymin_br);
 
-    /* log tick marks (ggplot annotation_logticks): 1..9 x 10^k drawn INSIDE the
-     * panel from the axis edge inward — long at decades, mid at 5, short at the
-     * rest. Lengths in points (ggplot defaults 0.3/0.2/0.1 cm), npc at draw. */
-    const double CM_PT = 72.0 / 2.54;
-    const double LT_LONG = 0.30 * CM_PT, LT_MID = 0.20 * CM_PT, LT_SHORT = 0.10 * CM_PT;
+    /* log tick marks drawn INSIDE the panel from the axis edge inward. */
     double xlt_pos[80], xlt_len[80]; int xlt_n = 0;
     double ylt_pos[80], ylt_len[80]; int ylt_n = 0;
-    if (spec->log_x)
-        for (int k = (int)floor(x0) - 1; k <= (int)ceil(x1) + 1 && xlt_n < 80; k++)
-            for (int d = 1; d <= 9 && xlt_n < 80; d++) {
-                double t = k + log10((double)d);
-                if (t >= x0 - 1e-9 && t <= x1 + 1e-9) {
-                    xlt_pos[xlt_n] = NPCX(t);
-                    xlt_len[xlt_n] = d == 1 ? LT_LONG : d == 5 ? LT_MID : LT_SHORT; xlt_n++;
-                }
-            }
-    if (spec->log_y)
-        for (int k = (int)floor(y0) - 1; k <= (int)ceil(y1) + 1 && ylt_n < 80; k++)
-            for (int d = 1; d <= 9 && ylt_n < 80; d++) {
-                double t = k + log10((double)d);
-                if (t >= y0 - 1e-9 && t <= y1 + 1e-9) {
-                    ylt_pos[ylt_n] = NPCY(t);
-                    ylt_len[ylt_n] = d == 1 ? LT_LONG : d == 5 ? LT_MID : LT_SHORT; ylt_n++;
-                }
-            }
+    if (spec->log_x) {
+        xlt_n = log_tick_marks(spec->log_x, x0, x1, xlt_pos, xlt_len, 80);
+        for (int i = 0; i < xlt_n; i++) xlt_pos[i] = NPCX(xlt_pos[i]);
+    }
+    if (spec->log_y) {
+        ylt_n = log_tick_marks(spec->log_y, y0, y1, ylt_pos, ylt_len, 80);
+        for (int i = 0; i < ylt_n; i++) ylt_pos[i] = NPCY(ylt_pos[i]);
+    }
 
     /* ---- gather the trained range and its breaks into the shared panel scale.
      * Under facet_wrap(scales="fixed") -- every figure today -- all panels point
@@ -1253,7 +1284,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         if (t < lo) lo = t;
                         if (t > hi) hi = t;
                         if (xec && !isnan(xec->num[r])) {
-                            double te = spec->log_x ? log10(xec->num[r]) : xec->num[r];
+                            double te = cp_logt(spec->log_x, xec->num[r]);
                             if (te < lo) lo = te;
                             if (te > hi) hi = te;
                         }
@@ -1265,8 +1296,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                      * the axis frees the BREAKS, not the limits. Without this
                      * the limit parsed, ran, and did nothing. */
                     if (spec->has_xlim) {
-                        lo = spec->log_x ? log10(spec->xlim_lo) : spec->xlim_lo;
-                        hi = spec->log_x ? log10(spec->xlim_hi) : spec->xlim_hi;
+                        lo = cp_logt(spec->log_x, spec->xlim_lo);
+                        hi = cp_logt(spec->log_x, spec->xlim_hi);
                     }
                     if (lo > hi) { lo = 0; hi = 0; }
                     if (hi == lo) { lo -= 0.5; hi += 0.5; }
@@ -1301,7 +1332,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                                 if (cnt > mx) mx = cnt;
                             }
                         }
-                        lo = 0; hi = spec->log_y ? log10((double)(mx ? mx : 1)) : (double)mx;
+                        lo = 0; hi = cp_logt(spec->log_y, (double)(mx ? mx : 1));
                     } else if (hasbar) {
                         int mx = 0;
                         for (int cat = 0; cat < xf->nlev; cat++) {
@@ -1310,7 +1341,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                                 total += barcount[((size_t)(p * xf->nlev + cat)) * barng + gq];
                             if (total > mx) mx = total;
                         }
-                        lo = 0; hi = spec->log_y ? log10((double)(mx ? mx : 1)) : (double)mx;
+                        lo = 0; hi = cp_logt(spec->log_y, (double)(mx ? mx : 1));
                     } else if (hasdens) {
                         double mx = 0;
                         for (int di = 0; di < ndens; di++)
@@ -1339,8 +1370,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         }
                     }
                     if (spec->has_ylim) {      /* as for x above */
-                        lo = spec->log_y ? log10(spec->ylim_lo) : spec->ylim_lo;
-                        hi = spec->log_y ? log10(spec->ylim_hi) : spec->ylim_hi;
+                        lo = cp_logt(spec->log_y, spec->ylim_lo);
+                        hi = cp_logt(spec->log_y, spec->ylim_hi);
                     }
                     if (lo > hi) { lo = 0; hi = 0; }
                     if (hi == lo) { lo -= 0.5; hi += 0.5; }
@@ -1368,7 +1399,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 } else if (spec->log_x) {
                     S->xbr = cp_xmalloc(16 * sizeof(double));
                     S->xlabs = cp_xmalloc(16 * sizeof(char *));
-                    S->nxbr = log10_breaks(S->x0, S->x1, S->xbr, S->xlabs, 16);
+                    S->nxbr = log_breaks(spec->log_x, S->x0, S->x1, S->xbr, S->xlabs, 16);
                 } else {
                     S->xbr = cp_xmalloc(16 * sizeof(double));
                     S->xlabs = cp_xmalloc(16 * sizeof(char *));
@@ -1388,21 +1419,16 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     S->xnpc[i] = (S->xbr[i] - S->x0) / (S->x1 - S->x0);
                 S->xmin_br = cp_xmalloc(32 * sizeof(double));
                 S->nxmin = disc_x ? 0
-                         : spec->log_x ? log_minors(S->x0, S->x1, S->xmin_br, 32)
+                         : spec->log_x ? log_minors(spec->log_x, S->x0, S->x1, S->xmin_br, 32)
                          : make_minors(S->xbr, S->nxbr, S->x0, S->x1, S->xmin_br);
                 S->xlt_n = 0;
                 if (spec->log_x) {
                     S->xlt_pos = cp_xmalloc(80 * sizeof(double));
                     S->xlt_len = cp_xmalloc(80 * sizeof(double));
-                    for (int k = (int)floor(S->x0) - 1; k <= (int)ceil(S->x1) + 1 && S->xlt_n < 80; k++)
-                        for (int d = 1; d <= 9 && S->xlt_n < 80; d++) {
-                            double t = k + log10((double)d);
-                            if (t >= S->x0 - 1e-9 && t <= S->x1 + 1e-9) {
-                                S->xlt_pos[S->xlt_n] = (t - S->x0) / (S->x1 - S->x0);
-                                S->xlt_len[S->xlt_n] = d == 1 ? LT_LONG : d == 5 ? LT_MID : LT_SHORT;
-                                S->xlt_n++;
-                            }
-                        }
+                    S->xlt_n = log_tick_marks(spec->log_x, S->x0, S->x1,
+                                              S->xlt_pos, S->xlt_len, 80);
+                    for (int i = 0; i < S->xlt_n; i++)
+                        S->xlt_pos[i] = (S->xlt_pos[i] - S->x0) / (S->x1 - S->x0);
                 }
             }
             if (spec->free_y) {
@@ -1418,7 +1444,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 } else if (spec->log_y) {
                     S->ybr = cp_xmalloc(16 * sizeof(double));
                     S->ylabs = cp_xmalloc(16 * sizeof(char *));
-                    S->nybr = log10_breaks(S->y0, S->y1, S->ybr, S->ylabs, 16);
+                    S->nybr = log_breaks(spec->log_y, S->y0, S->y1, S->ybr, S->ylabs, 16);
                 } else {
                     S->ybr = cp_xmalloc(16 * sizeof(double));
                     S->ylabs = cp_xmalloc(16 * sizeof(char *));
@@ -1438,21 +1464,16 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     S->ynpc[i] = (S->ybr[i] - S->y0) / (S->y1 - S->y0);
                 S->ymin_br = cp_xmalloc(32 * sizeof(double));
                 S->nymin = disc_y ? 0
-                         : spec->log_y ? log_minors(S->y0, S->y1, S->ymin_br, 32)
+                         : spec->log_y ? log_minors(spec->log_y, S->y0, S->y1, S->ymin_br, 32)
                          : make_minors(S->ybr, S->nybr, S->y0, S->y1, S->ymin_br);
                 S->ylt_n = 0;
                 if (spec->log_y) {
                     S->ylt_pos = cp_xmalloc(80 * sizeof(double));
                     S->ylt_len = cp_xmalloc(80 * sizeof(double));
-                    for (int k = (int)floor(S->y0) - 1; k <= (int)ceil(S->y1) + 1 && S->ylt_n < 80; k++)
-                        for (int d = 1; d <= 9 && S->ylt_n < 80; d++) {
-                            double t = k + log10((double)d);
-                            if (t >= S->y0 - 1e-9 && t <= S->y1 + 1e-9) {
-                                S->ylt_pos[S->ylt_n] = (t - S->y0) / (S->y1 - S->y0);
-                                S->ylt_len[S->ylt_n] = d == 1 ? LT_LONG : d == 5 ? LT_MID : LT_SHORT;
-                                S->ylt_n++;
-                            }
-                        }
+                    S->ylt_n = log_tick_marks(spec->log_y, S->y0, S->y1,
+                                              S->ylt_pos, S->ylt_len, 80);
+                    for (int i = 0; i < S->ylt_n; i++)
+                        S->ylt_pos[i] = (S->ylt_pos[i] - S->y0) / (S->y1 - S->y0);
                 }
             }
         }
@@ -1893,7 +1914,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     g->x0 = NPCX(hs->start + b * hs->width);
                     g->x1 = NPCX(hs->start + (b + 1) * hs->width);
                     g->y0 = base;
-                    g->y1 = NPCY(spec->log_y ? log10((double)cnt) : (double)cnt);
+                    g->y1 = NPCY(cp_logt(spec->log_y, (double)cnt));
                 }
             } else if (gt == GEOM_DENSITY) {
                 int di = li2di[li];
@@ -1940,8 +1961,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         g->x0 = NPCX(xi - 0.45); g->x1 = NPCX(xi + 0.45);
                         /* honour scale_y_log10 like geom_histogram/geom_col; the
                          * bottom segment starts at the axis base (log10(0) = -inf) */
-                        g->y0 = cum <= 0 ? base : NPCY(spec->log_y ? log10(cum) : cum);
-                        g->y1 = NPCY(spec->log_y ? log10(top) : top);
+                        g->y0 = cum <= 0 ? base : NPCY(cp_logt(spec->log_y, cum));
+                        g->y1 = NPCY(cp_logt(spec->log_y, top));
                         cum = top;
                     }
                 }
@@ -2178,7 +2199,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     g->lw = lw_pt(0.5); g->clip = 1;
                     g->x0 = NPCX(TXR(r));
                     g->x1 = NPCX(xec ? (genome_x ? GX(r, xec->num[r])
-                                      : spec->log_x ? log10(xec->num[r]) : xec->num[r])
+                                      : cp_logt(spec->log_x, xec->num[r]))
                                      : TXR(r));
                     g->y0 = NPCY(TY(yc->num[r]));
                     g->y1 = NPCY(yec ? TY(yec->num[r]) : TY(yc->num[r]));
@@ -2234,7 +2255,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     if (isnan(xec->num[r]) || isnan(yec->num[r])) continue;
                     double a = NPCX(TXR(r));
                     double b = NPCX(genome_x ? GX(r, xec->num[r])
-                                  : spec->log_x ? log10(xec->num[r]) : xec->num[r]);
+                                  : cp_logt(spec->log_x, xec->num[r]));
                     double c0 = NPCY(TY(yc->num[r])), d = NPCY(TY(yec->num[r]));
                     g = gt_add(T, G_RECT, R, C, R, C);
                     g->col = cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : fixed;
@@ -2318,7 +2339,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 }
             } else if (gt == GEOM_VLINE) {
                 const Layer *L = &spec->layers[li];
-                double xt = spec->log_x ? log10(L->intercept) : L->intercept;
+                double xt = cp_logt(spec->log_x, L->intercept);
                 double xn = NPCX(xt);
                 if (L->has_intercept && isfinite(xn)) {
                     g = gt_add(T, G_LINE, R, C, R, C);

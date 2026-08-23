@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <math.h>       /* cp_logt below */
 
 /* Fail-fast allocation wrappers. cinderplot is a one-shot CLI, so the sane
  * response to an allocation failure is a clear message and exit, not error
@@ -118,9 +119,16 @@ int extended_breaks(double dmin, double dmax, int m, double *out, int max_out);
 void fmt_num(double v, char *buf, size_t cap);
 int axis_decimals(const double *br, int n);
 void fmt_break(double v, int decimals, char *buf, size_t cap);
-/* majors for a log10 scale, positions in TRANSFORMED (log10) space,
- * labels in data space; returns count */
-int log10_breaks(double tlo, double thi, double *tmaj, char **labs, int max_out);
+/* majors for a log scale of the given base, positions in TRANSFORMED (log)
+ * space, labels in data space; returns count */
+int log_breaks(int base, double tlo, double thi, double *tmaj, char **labs,
+               int max_out);
+
+/* Data value -> log axis space. base 0 is the identity, so call sites can pass
+ * spec->log_x straight through instead of branching on whether it is set. */
+static inline double cp_logt(int base, double v) {
+    return base == 10 ? log10(v) : base == 2 ? log2(v) : v;
+}
 
 /* ---------- palette.c: scale_colour_hue for n levels ---------- */
 void hue_palette(int n, Col *out);
@@ -347,6 +355,10 @@ typedef struct {
     char *ideogram_path;            /* ideogram(): cytoband TSV path */
     Layer layers[MAX_LAYERS];
     int nlayers;
+    /* Log axis base: 0 = linear, else the base (10 from scale_*_log10(), 2 from
+     * scale_*_log2()). Truthy means "this axis is logged", which is how most
+     * call sites read it; only the transform and the break/tick generators
+     * care which base it is. */
     int log_x, log_y;
     double xlim_lo, xlim_hi, ylim_lo, ylim_hi;   /* user axis limits (data space) */
     int has_xlim, has_ylim;                       /* xlim()/ylim() or scale_*_log10(limits=) */

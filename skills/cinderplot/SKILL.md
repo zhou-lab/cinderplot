@@ -101,7 +101,11 @@ for.
   invents data — pass `height=` for ggplot's behaviour; and the offset is
   **deterministic**, keyed off the row, so a figure regenerates identically.
   `seed=` picks a different arrangement.
-- **scales**: `scale_x_log10()` `scale_y_log10()` `scale_*_continuous(labels=percent,
+- **scales**: `scale_x_log10()` `scale_y_log10()` `scale_x_log2()` `scale_y_log2()`
+  (each takes `limits=c(lo,hi)` in data space. Reach for log2 when the variable
+  was *sampled* at powers of two — a coverage or subsampling ladder: log10 spaces
+  those points correctly but its 10^k ticks land between the rungs you measured.)
+  `scale_*_continuous(labels=percent,
   limits=, breaks=c(...))` `xlim()` `ylim()` `scale_*_manual(values=c(...))`
   `scale_(fill|colour)_*()` continuous palettes: `viridis magma inferno plasma
   cividis rocket mako` (perceptually uniform; `cividis` is also colour-blind and
