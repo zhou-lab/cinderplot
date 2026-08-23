@@ -23,9 +23,15 @@ endif
 endif
 endif
 
+# -std=gnu11, not -std=c11: we use strdup/strndup/fileno, which are POSIX
+# rather than ISO C. -std=c11 defines __STRICT_ANSI__, and glibc then hides
+# them unless a feature-test macro asks for them. _DEFAULT_SOURCE covers that
+# on glibc >= 2.19, but the 2.17 headers the conda recipe now builds against
+# predate it and ignore it, so a strict-ANSI build there fails to compile.
+# gnu11 clears __STRICT_ANSI__, and every glibc exposes POSIX 2008 by default.
 CPPFLAGS += -D_DEFAULT_SOURCE -Iinclude $(CAIRO_CFLAGS)
 CFLAGS ?= -O2
-CFLAGS += -std=c11 -Wall -Wextra
+CFLAGS += -std=gnu11 -Wall -Wextra
 LDLIBS += $(CAIRO_LIBS) -lm -lz
 
 TARGET := cinderplot
