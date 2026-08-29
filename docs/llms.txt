@@ -30,6 +30,9 @@ cinderplot data.csv -x hp -y mpg -c cyl -f gear out.pdf      # shortcut flags
   double quotes. Newlines inside the expression are fine.
 - `--size WxH` in inches. A partial `9x` or `x7` auto-fits the other axis.
   Omit it entirely and every mode fits the canvas to its own content.
+- `--font FAMILY` sets the figure font in every mode (default Arial); use the
+  family name `fc-list` reports. A family the backend cannot find warns on
+  stderr and falls back rather than failing the render.
 - `--dump-spec` prints the desugared expression without rendering.
 - The delimiter is **sniffed from the first line** — a tab anywhere means TSV,
   otherwise CSV. The extension is ignored, except that `.gz` (gzip or bgzip) is
@@ -102,7 +105,11 @@ for.
   invents data — pass `height=` for ggplot's behaviour; and the offset is
   **deterministic**, keyed off the row, so a figure regenerates identically.
   `seed=` picks a different arrangement.
-- **scales**: `scale_x_log10()` `scale_y_log10()` `scale_*_continuous(labels=percent,
+- **scales**: `scale_x_log10()` `scale_y_log10()` `scale_x_log2()` `scale_y_log2()`
+  (each takes `limits=c(lo,hi)` in data space. Reach for log2 when the variable
+  was *sampled* at powers of two — a coverage or subsampling ladder: log10 spaces
+  those points correctly but its 10^k ticks land between the rungs you measured.)
+  `scale_*_continuous(labels=percent,
   limits=, breaks=c(...))` `xlim()` `ylim()` `scale_*_manual(values=c(...))`
   `scale_(fill|colour)_*()` continuous palettes: `viridis magma inferno plasma
   cividis rocket mako` (perceptually uniform; `cividis` is also colour-blind and
@@ -155,7 +162,11 @@ placement would otherwise inherit from its anchor included). The first placed ob
 `rownames=` takes `left|right|none` and `colnames=` takes `top|bottom|none`
 (`off`/`hide` also read as `none`); **both default to none**, so a heatmap with
 no `colnames=` renders that axis unlabelled. Clustering is hclust ward.D2,
-matching R. `annotation()` takes `column=` to pick
+matching R. `box=` frames the matrix body; `grid=` strokes the separators
+between cells so a row can be traced on a near-white matrix — both take
+`on`/`off` or a quoted colour (`grid="grey70"`), and `grid=` drops itself with
+a stderr warning when the cell pitch falls under ~4pt, where the lines would
+out-ink the fills. `annotation()` takes `column=` to pick
 which column colours the bar (default: the last). An annotation may be anchored
 by its data column name, e.g. `legend(right_of("diagnosis"))`.
 
@@ -310,4 +321,5 @@ transformations beyond binning, density and loess.
    300-dpi image (as R's ggrastr does), leaving axes, ticks and legend as vector
    text: ~9 s and 0.35 MB. Aggregating geoms do not need it.
 10. **The default font is Arial.** If it is missing, Cairo substitutes and the
-    figure will not match the gallery.
+    figure will not match the gallery. `--font FAMILY` overrides it; a family
+    the backend cannot find warns on stderr instead of failing.
