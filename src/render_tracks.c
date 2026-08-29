@@ -507,7 +507,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
      * only after auto-fit (below) resolves any auto (0) size axis. */
     cairo_surface_t *msurf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 8, 8);
     cairo_t *cr = cairo_create(msurf);
-    cairo_select_font_face(cr, FONT_FAMILY, CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_select_font_face(cr, cp_font_family, CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
 
     /* ---- genomic axis: pick unit, nice breaks, format with suffix ---- */
     double span = x1 - x0;
@@ -598,7 +598,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
     cairo_destroy(cr); cairo_surface_destroy(msurf);
     cairo_surface_t *surf = cp_surface_create(out, w_pt, h_pt);
     cr = cairo_create(surf);
-    cairo_select_font_face(cr, FONT_FAMILY, CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_select_font_face(cr, cp_font_family, CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
 
     double panel_w = w_pt - MARGIN - labw - (labw > 0 ? lab_pad : 0) - rmargin;  /* pt */
 

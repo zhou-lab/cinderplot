@@ -16,13 +16,17 @@
 #include <string.h>
 #include <unistd.h>
 
+/* The figure font, read by every cairo_select_font_face() site across the
+ * four modes; --font FAMILY overrides it below. */
+const char *cp_font_family = FONT_FAMILY_DEFAULT;
+
 static const char *USAGE =
     "usage: cinderplot [DSL-expr | flags] [data] out.{pdf,svg,png}\n"
     "         output is REQUIRED — a trailing filename or -o FILE (format from the extension)\n"
     "         data: a leading DSL token, or omitted / '-' / 'stdin' = read stdin\n"
     "  DSL:   'data.csv + aes(x, y, colour=factor(g)) + geom_point() + facet_wrap(~g)'\n"
     "  flags: -x COL -y COL [-c COL] [-f COL] [-t TITLE] [-m point|line|col|histogram] [--log x|y|xy]\n"
-    "         --size WxH (partial Wx / xH auto-fits) · --dpi N · --dump-spec · --version · --help\n";
+    "         --size WxH (partial Wx / xH auto-fits) · --dpi N · --font FAMILY · --dump-spec · --version · --help\n";
 
 /* A modern, sectioned --help. Colour is enabled for a TTY (or CLICOLOR_FORCE)
  * and suppressed by NO_COLOR, so piped/redirected output stays plain text. */
@@ -66,6 +70,7 @@ static void print_help(void) {
     printf("    %s-o%s FILE %sor%s FILE  output %s(required)%s — format from the extension (%s.pdf .svg .png%s)\n", G, R, D, R, D, R, K, R);
     printf("    %s--size%s WxH     inches; a partial %sWx%s or %sxH%s auto-fits the other axis %s(omit = auto)%s\n", G, R, K, R, K, R, D, R);
     printf("    %s--dpi%s N        raster density for %s.png%s %s(default 96)%s\n", G, R, K, R, D, R);
+    printf("    %s--font%s FAMILY  figure font, all modes %s(default Arial; warns if not found)%s\n", G, R, D, R);
     printf("    %s--no-header%s    headerless input — columns become %sV1, V2, …%s %s(R style)%s\n", G, R, K, R, D, R);
     printf("    %s--no-legend%s    drop the colour/fill/size guide %s(same as guides(colour=\"none\"))%s\n", G, R, D, R);
     printf("    %s-x -y -c -f -t -m --log%s   shortcut flags that desugar to the grammar\n", G, R);
@@ -126,6 +131,33 @@ static void quiet_fontconfig(void) {
     }
 }
 
+/* Cairo's toy font API cannot fail: a family the backend does not know is
+ * silently substituted with its default, so a mistyped --font would render in
+ * the fallback and say nothing. There is no portable "did it resolve" query
+ * either, so probe by metrics: measure a string under the requested family
+ * and under a name that cannot exist, and if every extent agrees the request
+ * fell back too. Only false positive: explicitly naming the backend's own
+ * default family — the figure is still right in that case. */
+static int font_resolves(const char *family) {
+    cairo_surface_t *s = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 4, 4);
+    cairo_t *cr = cairo_create(s);
+    const char *probe = "AQWjgq10 kern metrics";
+    cairo_text_extents_t t1, t2;
+    cairo_font_extents_t f1, f2;
+    cairo_select_font_face(cr, family, CAIRO_FONT_SLANT_NORMAL,
+                           CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_set_font_size(cr, 100);
+    cairo_text_extents(cr, probe, &t1);
+    cairo_font_extents(cr, &f1);
+    cairo_select_font_face(cr, "cinderplot-no-such-family-8c1f",
+                           CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_text_extents(cr, probe, &t2);
+    cairo_font_extents(cr, &f2);
+    cairo_destroy(cr);
+    cairo_surface_destroy(s);
+    return memcmp(&t1, &t2, sizeof t1) != 0 || memcmp(&f1, &f2, sizeof f1) != 0;
+}
+
 int main(int argc, char **argv) {
     quiet_fontconfig();
     const char *out = NULL, *expr = NULL, *data = NULL;   /* output is required */
@@ -173,6 +205,7 @@ int main(int argc, char **argv) {
                 return 1;
             }
         }
+        else if (!strcmp(a, "--font") && i + 1 < argc) cp_font_family = argv[++i];
         else if (!strcmp(a, "--dump-spec")) dump = 1;
         else if (!strcmp(a, "--no-header") || !strcmp(a, "-H")) cp_set_no_header(1);
         else if (!strcmp(a, "--no-legend")) no_legend = 1;
@@ -185,13 +218,20 @@ int main(int argc, char **argv) {
                  !strcmp(a, "-c") || !strcmp(a, "-f") || !strcmp(a, "-t") ||
                  !strcmp(a, "-m") || !strcmp(a, "--log") || !strcmp(a, "-r") ||
                  !strcmp(a, "--region") || !strcmp(a, "--size") ||
-                 !strcmp(a, "--dpi")) {
+                 !strcmp(a, "--dpi") || !strcmp(a, "--font")) {
             fprintf(stderr, "cinderplot: missing argument for %s\n%s", a, USAGE);
             return 1;
         }
         else if (a[0] == '-' && a[1]) { fprintf(stderr, "cinderplot: unknown flag %s\n%s", a, USAGE); return 1; }
         else if (npos < 8) pos[npos++] = a;
     }
+
+    /* Warn — once, up front — when --font names a family the backend cannot
+     * find, because Cairo will substitute its default without a word. */
+    if (strcmp(cp_font_family, FONT_FAMILY_DEFAULT) && !font_resolves(cp_font_family))
+        fprintf(stderr, "cinderplot: warning: font family \"%s\" not found; "
+                "the font backend substituted its default (fc-list shows the "
+                "families it knows)\n", cp_font_family);
 
     /* Resolve output + primary data from bare positionals. Output is required:
      * -o wins, else the LAST positional. A remaining leading positional is the

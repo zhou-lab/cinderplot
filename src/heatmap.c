@@ -742,7 +742,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
      * on that side sits at the normalized bbox boundary (0 or 1). */
     cairo_surface_t *msurf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 8, 8);
     cairo_t *cr = cairo_create(msurf);           /* scratch: measure chrome first */
-    cairo_select_font_face(cr, FONT_FAMILY, CAIRO_FONT_SLANT_NORMAL,
+    cairo_select_font_face(cr, cp_font_family, CAIRO_FONT_SLANT_NORMAL,
                            CAIRO_FONT_WEIGHT_NORMAL);
     cairo_font_extents_t fe;
     cairo_set_font_size(cr, SZ_AXIS_TEXT); cairo_font_extents(cr, &fe);
@@ -950,7 +950,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
     cairo_destroy(cr); cairo_surface_destroy(msurf);
     cairo_surface_t *surf = cp_surface_create(out, w_pt, h_pt);
     cr = cairo_create(surf);
-    cairo_select_font_face(cr, FONT_FAMILY, CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_select_font_face(cr, cp_font_family, CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
 
     /* labs(x=)/labs(y=) name the two axes. They ride inside the existing left
      * and bottom margins rather than getting rows of their own, because the

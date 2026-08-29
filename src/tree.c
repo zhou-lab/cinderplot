@@ -571,7 +571,7 @@ int render_tree(const PlotSpec *spec, const char *out,
     for (int k = 1; find_by_id(root, k); k++) nnode = k;
     cairo_surface_t *msurf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 8, 8);
     cairo_t *cr = cairo_create(msurf);
-    cairo_select_font_face(cr, FONT_FAMILY, CAIRO_FONT_SLANT_NORMAL,
+    cairo_select_font_face(cr, cp_font_family, CAIRO_FONT_SLANT_NORMAL,
                            CAIRO_FONT_WEIGHT_NORMAL);
     /* Joined tables, loaded before layout so the legend can size the margin. */
     Join jnode, jtip, jlab;
@@ -654,7 +654,7 @@ int render_tree(const PlotSpec *spec, const char *out,
 
     cairo_surface_t *surf = cp_surface_create(out, w_pt, h_pt);
     cr = cairo_create(surf);
-    cairo_select_font_face(cr, FONT_FAMILY, CAIRO_FONT_SLANT_NORMAL,
+    cairo_select_font_face(cr, cp_font_family, CAIRO_FONT_SLANT_NORMAL,
                            CAIRO_FONT_WEIGHT_NORMAL);
 
     GTable *T = cp_xcalloc(1, sizeof *T);

@@ -1533,7 +1533,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         surf = cp_surface_create(out, w_pt, h_pt);
         cr = cairo_create(surf);
     }
-    cairo_select_font_face(cr, FONT_FAMILY, CAIRO_FONT_SLANT_NORMAL,
+    cairo_select_font_face(cr, cp_font_family, CAIRO_FONT_SLANT_NORMAL,
                            CAIRO_FONT_WEIGHT_NORMAL);
     const Theme *th = &THEMES[spec->theme];   /* active theme (THEME_GRAY = default) */
 
@@ -1706,7 +1706,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         cairo_destroy(cr); cairo_surface_destroy(msurf);
         surf = cp_surface_create(out, w_pt, h_pt);
         cr = cairo_create(surf);
-        cairo_select_font_face(cr, FONT_FAMILY, CAIRO_FONT_SLANT_NORMAL,
+        cairo_select_font_face(cr, cp_font_family, CAIRO_FONT_SLANT_NORMAL,
                                CAIRO_FONT_WEIGHT_NORMAL);
     }
 

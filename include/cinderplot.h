@@ -64,7 +64,12 @@ static inline double lw_pt(double u) { return u * 2.845276 * 72.0 / 96.0; }
 #define PT_RADIUS    2.15
 #define PANEL_SPACE  HALF_LINE
 #define STRIP_PAD    (0.8 * HALF_LINE)
-#define FONT_FAMILY  "Arial"
+/* The figure font. A variable, not a constant: --font FAMILY overrides it
+ * (main.c), and every cairo_select_font_face() site reads it, so one flag
+ * reaches all four modes. Cairo substitutes silently when the family is
+ * missing; main.c warns for that at startup (cp_font_resolves). */
+#define FONT_FAMILY_DEFAULT "Arial"
+extern const char *cp_font_family;
 
 static const Col C_PANEL  = {0.922, 0.922, 0.922};   /* grey92 */
 static const Col C_WHITE  = {1, 1, 1};
