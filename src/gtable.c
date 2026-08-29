@@ -274,15 +274,40 @@ void gt_render(GTable *t, cairo_t *cr) {
             }
             cairo_stroke(cr);
             break;
-        case G_LINE:
+        case G_LINE: {
             set_col_a(cr, g->col, g->alpha);
             cairo_set_line_width(cr, g->lw);
             set_dash(cr, g->dash, g->lw);
-            cairo_move_to(cr, DX(g->x0), DY(g->y0));
-            cairo_line_to(cr, DX(g->x1), DY(g->y1));
+            double lx0 = DX(g->x0), ly0 = DY(g->y0);
+            double lx1 = DX(g->x1), ly1 = DY(g->y1);
+            /* Cairo's half-pixel rule: on a raster surface an axis-aligned
+             * hairline whose centre falls between pixel rows is smeared over
+             * two rows at half darkness, so a run of parallel lines (a heatmap
+             * cell grid) comes out unevenly dark. Snap the constant coordinate
+             * to the nearest pixel centre, in device space. Vector surfaces
+             * render exact coordinates and are left alone. */
+            if (g->snap && cairo_surface_get_type(cairo_get_target(cr))
+                           == CAIRO_SURFACE_TYPE_IMAGE) {
+                if (lx0 == lx1) {
+                    double dx = lx0, dy = ly0;
+                    cairo_user_to_device(cr, &dx, &dy);
+                    dx = floor(dx) + 0.5;
+                    cairo_device_to_user(cr, &dx, &dy);
+                    lx0 = lx1 = dx;
+                } else if (ly0 == ly1) {
+                    double dx = lx0, dy = ly0;
+                    cairo_user_to_device(cr, &dx, &dy);
+                    dy = floor(dy) + 0.5;
+                    cairo_device_to_user(cr, &dx, &dy);
+                    ly0 = ly1 = dy;
+                }
+            }
+            cairo_move_to(cr, lx0, ly0);
+            cairo_line_to(cr, lx1, ly1);
             cairo_stroke(cr);
             cairo_set_dash(cr, NULL, 0, 0);
             break;
+        }
         case G_POINTS: {
             /* Coalesce consecutive points that share a colour and radius into
              * one path and one fill. Cairo exposes no marker reuse, so a fill

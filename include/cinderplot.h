@@ -214,6 +214,8 @@ typedef struct {
     int shape;                                 /* G_POINTS: one glyph for every point */
     int raster;                                /* G_POINTS: rasterize into an embedded image */
     int dash;                                  /* G_LINE/G_POLYLINE: 0 solid, 1 dashed, 2 dotted */
+    int snap;                                  /* G_LINE: snap an axis-aligned hairline to the
+                                                * pixel grid on raster surfaces (heatmap grid=) */
     double alpha;                              /* 0 = opaque (unset); else 0..1 fill/stroke alpha */
     char **labels;                             /* axis tick labels */
     const double *label_pos;                   /* optional label positions, else ticks */
@@ -326,6 +328,8 @@ typedef struct {
     double aspect;                 /* heatmap: drawn width/height ratio (0 = free) */
     int box;                       /* heatmap/annotation: frame the cells (0 = none) */
     Col box_col;                   /* box= colour, when box is set */
+    int grid;                      /* heatmap/annotation: stroke cell separators (0 = none) */
+    Col grid_col;                  /* grid= colour, when grid is set */
     HPlace place;
 } HMObj;
 #define MAX_HMOBJS 16

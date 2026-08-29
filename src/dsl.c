@@ -436,9 +436,31 @@ static int parse_hm_args(P *p, HMObj *o, int want_data) {
                              || !strcmp(v, "false") || !strcmp(v, "FALSE")) o->box = 0;
                     else return fail(p, "box=%s invalid; use on/off or a quoted colour", v);
                 }
+            } else if (!strcmp(key, "grid")) {
+                /* Separators BETWEEN the cells, where box= frames the block.
+                 * Same spelling rules as box=: a quoted value is a colour and
+                 * implies on. geom_tile(colour="grey70") is the ggplot2 idea. */
+                skip_ws(p);
+                if (*p->s == '"') {
+                    char *v = string_lit(p);
+                    if (!v || parse_color(v, &o->grid_col))
+                        return fail(p, "grid= expects on/off or a quoted colour", "");
+                    o->grid = 1;
+                } else {
+                    char *v = ident(p);
+                    if (!v) return fail(p, "grid= expects on/off or a quoted colour", "");
+                    if (!strcmp(v, "on") || !strcmp(v, "true") || !strcmp(v, "TRUE")) {
+                        o->grid = 1;
+                        Col grey = {0.702, 0.702, 0.702};   /* grey70: dim on white, legible on fills */
+                        o->grid_col = grey;
+                    }
+                    else if (!strcmp(v, "none") || !strcmp(v, "off")
+                             || !strcmp(v, "false") || !strcmp(v, "FALSE")) o->grid = 0;
+                    else return fail(p, "grid=%s invalid; use on/off or a quoted colour", v);
+                }
             } else return fail(p, "option `%s` not implemented; supported: name=, data=, "
-                                  "cluster=, rownames=, colnames=, labels=, box=, aspect=, "
-                                  "placements", key);
+                                  "cluster=, rownames=, colnames=, labels=, box=, grid=, "
+                                  "aspect=, placements", key);
         } else {
             p->s = save;
             char *v = raw_token(p);

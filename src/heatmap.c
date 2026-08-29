@@ -1189,6 +1189,44 @@ int render_heatmap(const PlotSpec *spec, const char *out,
         g->hj = 0; g->va = V_BOTTOM;
     }
 
+    /* grid=: stroke the separators BETWEEN cells, so a reader can trace a row
+     * to its column on a near-white matrix (geom_tile(colour=) is the ggplot2
+     * idea). Drawn over the fills -- vector rects or the raster image alike --
+     * and before box=, so the frame stays on top. Dropped with a warning when
+     * the cell pitch falls under 4pt: at that density even a 0.2-linewidth
+     * stroke per cell out-inks the fills and the panel reads grey. */
+    for (int i = 0; i < n; i++) {
+        RObj *r = &ro[i];
+        if (!r->o->grid) continue;
+        if (r->o->type != HM_HEATMAP && r->o->type != HM_ANNOTATION) {
+            snprintf(err, CP_ERRLEN, "grid= applies to heatmap() and annotation()");
+            return -1;
+        }
+        int nrc, ncc;   /* display cell counts */
+        if (r->o->type == HM_HEATMAP) { nrc = r->m->nr; ncc = r->m->nc; }
+        else if (r->ann_horiz)        { nrc = 1; ncc = r->ann_n; }
+        else                          { nrc = r->ann_n; ncc = 1; }
+        double cwc = r->w * cw_pt / ncc, chc = r->h * ch_pt / nrc;   /* pitch, pt */
+        if (cwc < 4 || chc < 4) {
+            fprintf(stderr, "cinderplot: warning: grid= dropped: %dx%d cells "
+                    "are %.1fx%.1fpt; under ~4pt the separators out-ink the "
+                    "fills\n", nrc, ncc, cwc, chc);
+            continue;
+        }
+        for (int k = 1; k < ncc; k++) {
+            g = gt_add(T, G_LINE, CR, CC, CR, CC);
+            g->col = r->o->grid_col; g->lw = lw_pt(0.2); g->snap = 1;
+            g->x0 = g->x1 = r->l + k * (r->w / ncc);
+            g->y0 = r->b; g->y1 = r->b + r->h;
+        }
+        for (int k = 1; k < nrc; k++) {
+            g = gt_add(T, G_LINE, CR, CC, CR, CC);
+            g->col = r->o->grid_col; g->lw = lw_pt(0.2); g->snap = 1;
+            g->y0 = g->y1 = r->b + k * (r->h / nrc);
+            g->x0 = r->l; g->x1 = r->l + r->w;
+        }
+    }
+
     /* box=: frame the cells, and only the cells -- the rect is the matrix body,
      * so row/column names stay outside it. Drawn after every object so a frame
      * sits on top of its own cells rather than under a later neighbour's. */
