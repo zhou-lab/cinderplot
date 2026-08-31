@@ -44,7 +44,11 @@ cinderplot data.csv -x hp -y mpg -c cyl -f gear out.pdf      # shortcut flags
   (`heatmap("f.tsv", ...)` is an error). Accepted on `heatmap()`, on every track
   verb, and on `geom_segment()`/`geom_rect()`; other geoms share the leading
   source. So a grid of panels is `f1.tsv + heatmap(name="a") +
-  heatmap(data="f2.tsv", right_of("a"), name="b")`.
+  heatmap(data="f2.tsv", right_of("a"), name="b")`. A `geom_rect(data=)` file
+  holding all four corner columns (x/xend + y/yend) draws one rect per row,
+  with a mapped colour/fill read from that file through the same scale as the
+  main data; without y/yend it is a region-highlight band spanning the panel
+  height.
 
 ## Four modes, chosen by which verbs appear
 
@@ -162,11 +166,7 @@ placement would otherwise inherit from its anchor included). The first placed ob
 `rownames=` takes `left|right|none` and `colnames=` takes `top|bottom|none`
 (`off`/`hide` also read as `none`); **both default to none**, so a heatmap with
 no `colnames=` renders that axis unlabelled. Clustering is hclust ward.D2,
-matching R. `box=` frames the matrix body; `grid=` strokes the separators
-between cells so a row can be traced on a near-white matrix — both take
-`on`/`off` or a quoted colour (`grid="grey70"`), and `grid=` drops itself with
-a stderr warning when the cell pitch falls under ~4pt, where the lines would
-out-ink the fills. `annotation()` takes `column=` to pick
+matching R. `annotation()` takes `column=` to pick
 which column colours the bar (default: the last). An annotation may be anchored
 by its data column name, e.g. `legend(right_of("diagnosis"))`.
 
@@ -185,6 +185,16 @@ set and it errors rather than being ignored.
 `box=on` frames the cells and only the cells — the row/column names stay outside
 it. `box="grey40"` sets the colour and implies on. Off by default; works on
 `heatmap()` and `annotation()`. (`matrix()` tracks are always framed.)
+
+`grid=` strokes the separators *between* cells, so a row can be traced across a
+near-white matrix — same spellings as `box=` (`on`/`off`, or a quoted colour
+that implies on; default grey70). It drops itself with a stderr warning when
+cells fall under ~4pt, where the lines would out-ink the fills.
+
+`labels=on` prints each cell's value — the confusion-matrix / parameter-grid
+staple (`geom_tile() + geom_text(aes(label=))`). One font size is fitted to the
+cells, and each number switches black/white against its fill's luminance; under
+4pt of text the labels drop with a warning.
 
 `cluster=` takes `rows cols both none diagonal symmetric` (`off` = `none`). The
 last two are for a **confusion matrix**, where the axes share a vocabulary and
@@ -321,5 +331,4 @@ transformations beyond binning, density and loess.
    300-dpi image (as R's ggrastr does), leaving axes, ticks and legend as vector
    text: ~9 s and 0.35 MB. Aggregating geoms do not need it.
 10. **The default font is Arial.** If it is missing, Cairo substitutes and the
-    figure will not match the gallery. `--font FAMILY` overrides it; a family
-    the backend cannot find warns on stderr instead of failing.
+    figure will not match the gallery.

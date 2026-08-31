@@ -29,6 +29,9 @@ cinderplot data.csv -x hp -y mpg -c cyl -f gear out.pdf      # shortcut flags
   double quotes. Newlines inside the expression are fine.
 - `--size WxH` in inches. A partial `9x` or `x7` auto-fits the other axis.
   Omit it entirely and every mode fits the canvas to its own content.
+- `--font FAMILY` sets the figure font in every mode (default Arial); use the
+  family name `fc-list` reports. A family the backend cannot find warns on
+  stderr and falls back rather than failing the render.
 - `--dump-spec` prints the desugared expression without rendering.
 - The delimiter is **sniffed from the first line** — a tab anywhere means TSV,
   otherwise CSV. The extension is ignored, except that `.gz` (gzip or bgzip) is
@@ -40,7 +43,11 @@ cinderplot data.csv -x hp -y mpg -c cyl -f gear out.pdf      # shortcut flags
   (`heatmap("f.tsv", ...)` is an error). Accepted on `heatmap()`, on every track
   verb, and on `geom_segment()`/`geom_rect()`; other geoms share the leading
   source. So a grid of panels is `f1.tsv + heatmap(name="a") +
-  heatmap(data="f2.tsv", right_of("a"), name="b")`.
+  heatmap(data="f2.tsv", right_of("a"), name="b")`. A `geom_rect(data=)` file
+  holding all four corner columns (x/xend + y/yend) draws one rect per row,
+  with a mapped colour/fill read from that file through the same scale as the
+  main data; without y/yend it is a region-highlight band spanning the panel
+  height.
 
 ## Four modes, chosen by which verbs appear
 
@@ -177,6 +184,16 @@ set and it errors rather than being ignored.
 `box=on` frames the cells and only the cells — the row/column names stay outside
 it. `box="grey40"` sets the colour and implies on. Off by default; works on
 `heatmap()` and `annotation()`. (`matrix()` tracks are always framed.)
+
+`grid=` strokes the separators *between* cells, so a row can be traced across a
+near-white matrix — same spellings as `box=` (`on`/`off`, or a quoted colour
+that implies on; default grey70). It drops itself with a stderr warning when
+cells fall under ~4pt, where the lines would out-ink the fills.
+
+`labels=on` prints each cell's value — the confusion-matrix / parameter-grid
+staple (`geom_tile() + geom_text(aes(label=))`). One font size is fitted to the
+cells, and each number switches black/white against its fill's luminance; under
+4pt of text the labels drop with a warning.
 
 `cluster=` takes `rows cols both none diagonal symmetric` (`off` = `none`). The
 last two are for a **confusion matrix**, where the axes share a vocabulary and
