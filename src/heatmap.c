@@ -1244,6 +1244,56 @@ int render_heatmap(const PlotSpec *spec, const char *out,
         g->y0 = r->b; g->y1 = r->b + r->h;
     }
 
+    /* labels= on a heatmap: print each cell's value -- the confusion-matrix /
+     * parameter-grid staple (geom_tile() + geom_text(aes(label=))). One font
+     * size for the whole matrix, shrunk until the widest label fits its cell,
+     * and black/white text chosen per cell against the fill's luminance so a
+     * number stays readable on both ends of the ramp. Under 4pt of text the
+     * numbers are decoration, not data: dropped with a warning, as grid=
+     * does. labels= used to be consumed only by annotation(), so on a
+     * heatmap it parsed and silently vanished -- the silent-drop class. */
+    for (int i = 0; i < n; i++) {
+        RObj *r = &ro[i];
+        if (r->o->type != HM_HEATMAP || !r->o->label_data) continue;
+        Matrix *m = r->m;
+        double cwc = r->w * cw_pt / m->nc, chc = r->h * ch_pt / m->nr;
+        char buf[64];
+        double maxw = 0;                  /* widest label at SZ_AXIS_TEXT */
+        for (int rr = 0; rr < m->nr; rr++)
+            for (int cc = 0; cc < m->nc; cc++) {
+                double v = m->v[(size_t)r->roword[rr] * m->nc + r->coword[cc]];
+                if (isnan(v)) continue;
+                snprintf(buf, sizeof buf, "%.3g", v);
+                double tw = text_w(cr, SZ_AXIS_TEXT, buf);
+                if (tw > maxw) maxw = tw;
+            }
+        if (maxw <= 0) continue;          /* all-NA matrix */
+        double sz = SZ_AXIS_TEXT;         /* font metrics scale linearly */
+        if (maxw > 0.9 * cwc) sz *= 0.9 * cwc / maxw;
+        if (axH * sz / SZ_AXIS_TEXT > 0.8 * chc) sz = 0.8 * chc * SZ_AXIS_TEXT / axH;
+        if (sz < 4) {
+            fprintf(stderr, "cinderplot: warning: labels= dropped: %dx%d cells "
+                    "of %.1fx%.1fpt leave under 4pt of text; enlarge --size "
+                    "or drop labels=\n", m->nr, m->nc, cwc, chc);
+            continue;
+        }
+        for (int rr = 0; rr < m->nr; rr++)
+            for (int cc = 0; cc < m->nc; cc++) {
+                double v = m->v[(size_t)r->roword[rr] * m->nc + r->coword[cc]];
+                if (isnan(v)) continue;   /* as geom_text() skips NA labels */
+                snprintf(buf, sizeof buf, "%.3g", v);
+                Col f = fill_map_value(&spec->fill, v, dmin, dmax);
+                double lum = 0.299 * f.r + 0.587 * f.g + 0.114 * f.b;
+                Col dark = {0.1, 0.1, 0.1};
+                g = gt_add(T, G_TEXT, CR, CC, CR, CC);
+                g->str = cp_xstrdup(buf); g->size = sz;
+                g->col = lum < 0.5 ? C_WHITE : dark;
+                g->tx = r->l + (cc + 0.5) * (r->w / m->nc);
+                g->ty = r->b + r->h - (rr + 0.5) * (r->h / m->nr);
+                g->hj = 0.5; g->va = V_INKCENTER;
+            }
+    }
+
     /* ---- rigid legends: vertical legends STACK in their side margin,
      * centred as a group on the canvas; horizontal legends centre on
      * the target (ComplexHeatmap-style legend packing) ---- */

@@ -324,7 +324,8 @@ typedef struct {
                                     * (NULL = the last, the historical default) */
     ClusterMode cluster;           /* heatmap only */
     Side rownames, colnames;       /* heatmap label sides (SIDE_NONE = off) */
-    int label_data;                /* annotation: label value runs in situ + bezier leaders */
+    int label_data;                /* annotation: in-situ value runs + bezier leaders;
+                                    * heatmap: print each cell's value */
     double aspect;                 /* heatmap: drawn width/height ratio (0 = free) */
     int box;                       /* heatmap/annotation: frame the cells (0 = none) */
     Col box_col;                   /* box= colour, when box is set */
