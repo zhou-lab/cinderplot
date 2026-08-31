@@ -858,6 +858,42 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         return -1;
     }
 
+    /* A per-layer data= file is the same file in every panel, so read it once
+     * and keep it. It used to be opened, parsed and typed once per panel. */
+    DataFrame *layer_df[MAX_LAYERS] = {0};
+
+    /* A 4-corner rect layer from its own file (x/xend + y/yend all present
+     * there) takes part in scale training, as main-data rects do — otherwise
+     * a rect reaching past the main data is silently clipped at the panel
+     * edge. Region-highlight bands (no y extent in the file) never trained
+     * the scales and still do not. */
+    double lxmin = 1e300, lxmax = -1e300, lymin = 1e300, lymax = -1e300;
+    for (int li = 0; li < spec->nlayers; li++) {
+        const Layer *L = &spec->layers[li];
+        if (L->type != GEOM_RECT || !L->data || genome_x) continue;
+        if (!layer_df[li] && !(layer_df[li] = df_read_csv(L->data, err)))
+            return -1;
+        DataFrame *d2 = layer_df[li];
+        const Column *c_x = df_col(d2, spec->x.col);
+        const Column *c_xe = spec->xend.col ? df_col(d2, spec->xend.col) : NULL;
+        const Column *c_y = spec->y.col ? df_col(d2, spec->y.col) : NULL;
+        const Column *c_ye = spec->yend.col ? df_col(d2, spec->yend.col) : NULL;
+        if (!c_x || !c_xe || !c_y || !c_ye
+            || c_x->type != COL_NUM || c_xe->type != COL_NUM
+            || c_y->type != COL_NUM || c_ye->type != COL_NUM) continue;
+        for (int r2 = 0; r2 < d2->nrow; r2++) {
+            if (isnan(c_x->num[r2]) || isnan(c_xe->num[r2])
+                || isnan(c_y->num[r2]) || isnan(c_ye->num[r2])) continue;
+            double ta = cp_logt(spec->log_x, c_x->num[r2]);
+            double tb = cp_logt(spec->log_x, c_xe->num[r2]);
+            if (fmin(ta, tb) < lxmin) lxmin = fmin(ta, tb);
+            if (fmax(ta, tb) > lxmax) lxmax = fmax(ta, tb);
+            double ua = TY(c_y->num[r2]), ub = TY(c_ye->num[r2]);
+            if (fmin(ua, ub) < lymin) lymin = fmin(ua, ub);
+            if (fmax(ua, ub) > lymax) lymax = fmax(ua, ub);
+        }
+    }
+
     /* ---- x scale training (transformed space) ---- */
     double txmin, txmax;
     if (disc_x) {                          /* categories at 1..k */
@@ -877,6 +913,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 if (te > txmax) txmax = te;
             }
         }
+        if (lxmin < txmin) txmin = lxmin;       /* 4-corner rect layer files */
+        if (lxmax > txmax) txmax = lxmax;
         if (txmax == txmin) { txmin -= 0.5; txmax += 0.5; }
     }
 
@@ -1019,6 +1057,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 if (te > tymax) tymax = te;
             }
         }
+        if (lymin < tymin) tymin = lymin;       /* 4-corner rect layer files */
+        if (lymax > tymax) tymax = lymax;
         if (hascol && !spec->log_y) {           /* bars are anchored at 0 */
             if (tymin > 0) tymin = 0;
             if (tymax < 0) tymax = 0;
@@ -1816,10 +1856,6 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         panelh_pt = nh > 0 ? fmax(0, h_pt - fh) / nh : 0;
     }
 
-    /* A per-layer data= file is the same file in every panel, so read it once
-     * and keep it. It used to be opened, parsed and typed once per panel. */
-    DataFrame *layer_df[MAX_LAYERS] = {0};
-
     /* ---- panels ---- */
     for (int p = 0; p < npan; p++) {
         int pr = p / ncolp, pc = p % ncolp;
@@ -2224,9 +2260,13 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     g->y0 = NPCY(cy - wy / 2); g->y1 = NPCY(cy + wy / 2);
                 }
             } else if (gt == GEOM_RECT && spec->layers[li].data) {
-                /* region-highlight bands: own file, full panel height,
-                 * genome-offset x. Drawn in layer order (put before the
-                 * points to shade behind them) */
+                /* A rect layer with its own file is one of two figures. With y
+                 * and yend resolvable in that file it is a 4-corner rect per
+                 * row, exactly as for the main data; without them it is a
+                 * region-highlight band spanning the panel height (the genome
+                 * shading this branch was built for). The band reading used
+                 * to be the ONLY one, so a 4-corner layer file silently drew
+                 * grey full-height bands and any fill mapping vanished. */
                 const Layer *L = &spec->layers[li];
                 if (!layer_df[li] && !(layer_df[li] = df_read_csv(L->data, err)))
                     return -1;
@@ -2238,14 +2278,76 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     snprintf(err, CP_ERRLEN, "geom_rect(data=%s): needs chrom/xmin/xmax columns", L->data);
                     return -1;
                 }
-                Col fixed = L->has_color ? L->color : (Col){0.85, 0.85, 0.85};
+                const Column *c_y = spec->y.col ? df_col(d2, spec->y.col) : NULL;
+                const Column *c_ye = spec->yend.col ? df_col(d2, spec->yend.col) : NULL;
+                if (c_y && c_y->type != COL_NUM) c_y = NULL;
+                if (c_ye && c_ye->type != COL_NUM) c_ye = NULL;
+                int corner4 = c_y && c_ye;
+                /* colour: the layer's own colour= wins; else a mapped
+                 * colour/fill aes reads THIS file's column through the same
+                 * scale and domain as the main data, so the one legend stays
+                 * truthful for both layers. A mapped aes whose column is
+                 * missing here is an error, not a silent grey. */
+                const Column *c_col = NULL;
+                if (!L->has_color && spec->colour.col && (cf || cont_col)) {
+                    c_col = df_col(d2, spec->colour.col);
+                    if (!c_col) {
+                        snprintf(err, CP_ERRLEN, "geom_rect(data=%s): colour/fill "
+                                 "column `%s` not in this file", L->data, spec->colour.col);
+                        return -1;
+                    }
+                    if (cont_col && c_col->type != COL_NUM) {
+                        snprintf(err, CP_ERRLEN, "geom_rect(data=%s): colour/fill "
+                                 "column `%s` must be numeric to share the "
+                                 "continuous scale", L->data, spec->colour.col);
+                        return -1;
+                    }
+                    if (cf && c_col->type != COL_STR) {
+                        snprintf(err, CP_ERRLEN, "geom_rect(data=%s): colour/fill "
+                                 "column `%s` must be text to match the discrete "
+                                 "levels of the main data", L->data, spec->colour.col);
+                        return -1;
+                    }
+                }
+                Col fixed = L->has_color ? L->color
+                          : corner4 ? C_BAR : (Col){0.85, 0.85, 0.85};
                 for (int r2 = 0; r2 < d2->nrow; r2++) {
                     double off = genome_x ? genome_off(gs, c_chr->str[r2]) : 0;
                     if ((genome_x && off < 0) || isnan(c_x->num[r2]) || isnan(c_xe->num[r2])) continue;
+                    Col col = fixed;
+                    if (c_col) {
+                        if (cont_col) {
+                            col = isnan(c_col->num[r2]) ? C_NA
+                                : fill_map_value(&cscale, c_col->num[r2], cdmin, cdmax);
+                        } else {
+                            int lev = -1;
+                            for (int k = 0; k < cf->nlev; k++)
+                                if (!strcmp(c_col->str[r2], cf->levels[k])) { lev = k; break; }
+                            if (lev < 0) {
+                                snprintf(err, CP_ERRLEN, "geom_rect(data=%s): value "
+                                         "\"%s\" in `%s` is not a level of the main "
+                                         "data's `%s`", L->data, c_col->str[r2],
+                                         spec->colour.col, spec->colour.col);
+                                return -1;
+                            }
+                            col = pal[lev];
+                        }
+                    }
+                    if (corner4 && (isnan(c_y->num[r2]) || isnan(c_ye->num[r2])))
+                        continue;
                     g = gt_add(T, G_RECT, R, C, R, C);
-                    g->col = fixed; g->sub = 1; g->clip = 1;
-                    g->x0 = NPCX(off + c_x->num[r2]); g->x1 = NPCX(off + c_xe->num[r2]);
-                    g->y0 = 0; g->y1 = 1;         /* full panel height */
+                    g->col = col; g->sub = 1; g->clip = 1;
+                    double ax = genome_x ? off + c_x->num[r2]
+                              : cp_logt(spec->log_x, c_x->num[r2]);
+                    double bx = genome_x ? off + c_xe->num[r2]
+                              : cp_logt(spec->log_x, c_xe->num[r2]);
+                    g->x0 = NPCX(fmin(ax, bx)); g->x1 = NPCX(fmax(ax, bx));
+                    if (corner4) {
+                        double ay = NPCY(TY(c_y->num[r2])), by = NPCY(TY(c_ye->num[r2]));
+                        g->y0 = fmin(ay, by); g->y1 = fmax(ay, by);
+                    } else {
+                        g->y0 = 0; g->y1 = 1;    /* full panel height */
+                    }
                 }
             } else if (gt == GEOM_RECT) {
                 /* filled rectangle per row: (xmin,ymin) .. (xmax,ymax) */
