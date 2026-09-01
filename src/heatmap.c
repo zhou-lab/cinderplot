@@ -734,6 +734,12 @@ int render_heatmap(const PlotSpec *spec, const char *out,
         return -1;
     }
     if (dmin > dmax) { snprintf(err, CP_ERRLEN, "no finite values in matrix"); return -1; }
+    /* scale_fill_*(limits=) pins the fill domain, so several figures (a
+     * multi-page grid, say) share one ramp; out-of-range values squish to
+     * the ends exactly as in grammar mode. The data scan above still runs,
+     * so an all-NA matrix errors the same way, and the colourbar legend
+     * reads dmin/dmax so it follows the pinned domain for free. */
+    if (spec->fill.has_limits) { dmin = spec->fill.lim_lo; dmax = spec->fill.lim_hi; }
 
     /* ---- outer gtable: MEASURED chrome, canvas as the null cell ----
      * wheatmap's auto_margin: measure every outward-facing label and

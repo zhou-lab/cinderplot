@@ -523,6 +523,8 @@ static int parse_grad_scale(P *p, FillScale *fs, const char *k, const char *fn) 
             skip_ws(p); if (*p->s == ',') p->s++;
             fs->lim_hi = strtod(p->s, (char **)&p->s);
             skip_ws(p); if (*p->s == ')') p->s++;
+            if (!(fs->lim_lo < fs->lim_hi))
+                return fail(p, "limits= expects lo < hi", "");
             fs->has_limits = 1;
         } else {
             char *v = string_lit(p); Col c;
