@@ -638,14 +638,14 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     const Column *colc = NULL;          /* continuous colour column */
     int cont_col = 0;
     FillScale cscale = spec->colour_scale;
-    /* Bars carry a colour/fill only when it is constant within each panel --
-     * the common faceted case, where every bar in a facet takes the same hue
-     * and no position adjustment is involved. Mixed fills within one panel
-     * would need stacking or dodging, which is still unimplemented; that is
-     * checked once the facet factor exists (search bars_const_fill). */
+    /* Histogram bars carry a colour/fill only when it is constant within each
+     * panel -- the common faceted case. geom_col() instead STACKS a varying
+     * discrete fill (ggplot's default position); dodging stays unimplemented.
+     * The constant-per-panel rule is checked once the facet factor exists
+     * (search bars_const_fill). */
     int bars_const_fill = 0;
     if (spec->colour.col) {
-        if (hascol || nhist) bars_const_fill = 1;
+        if (nhist) bars_const_fill = 1;
         const Column *cc = df_col(df, spec->colour.col);
         if (!cc) { snprintf(err, CP_ERRLEN, "column `%s` not found", spec->colour.col); return -1; }
         if (!spec->colour.is_factor && cc->type == COL_NUM) {
@@ -671,9 +671,19 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             }
         }
     }
-    if (hasbar && cont_col) {
-        snprintf(err, CP_ERRLEN, "a continuous colour/fill on geom_bar() is not "
-                 "implemented; map a discrete column instead");
+    if ((hasbar || hascol) && cont_col) {
+        snprintf(err, CP_ERRLEN, "a continuous colour/fill on %s is not "
+                 "implemented; map a discrete column instead",
+                 hasbar ? "geom_bar()" : "geom_col()");
+        return -1;
+    }
+    if (hascol && cf && !disc_x) {
+        /* stacking accumulates per x category; on a continuous x there is no
+         * category to stack within, and drawing overlapping bars would look
+         * plausible and be wrong. */
+        snprintf(err, CP_ERRLEN, "stacked geom_col() (a varying colour/fill) "
+                 "needs a discrete x; wrap it as aes(x=factor(%s), ...)",
+                 spec->x.col ? spec->x.col : "x");
         return -1;
     }
     /* aes(shape=): a discrete column mapped to point glyphs. Six levels, as in
@@ -966,6 +976,37 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             }
     }
 
+    /* ---- stacked geom_col: value sums per (panel, x-category, fill group).
+     * ggplot's default position for geom_col is stack, so a varying discrete
+     * fill stacks; duplicated (category, group) rows add, as they do there.
+     * Negative values would need ggplot's two-sided stacking; refuse rather
+     * than draw overlapping segments that look plausible and are wrong. */
+    double *colsum = NULL, *colstack_max = NULL;   /* per-panel max total */
+    if (hascol && cf) {
+        int ng = cf->nlev;
+        colsum = cp_xcalloc((size_t)npan * xf->nlev * ng, sizeof(double));
+        colstack_max = cp_xcalloc(npan, sizeof(double));
+        for (int r = 0; r < df->nrow; r++) {
+            if (!use[r]) continue;
+            if (yc->num[r] < 0) {
+                snprintf(err, CP_ERRLEN, "stacked geom_col() with negative "
+                         "values is not implemented (row with %s = %g)",
+                         spec->y.col, yc->num[r]);
+                free(colsum); free(colstack_max);
+                return -1;
+            }
+            int p = ff ? ff->idx[r] : 0;
+            colsum[((size_t)(p * xf->nlev + xf->idx[r])) * ng + cf->idx[r]] += yc->num[r];
+        }
+        for (int p = 0; p < npan; p++)
+            for (int cat = 0; cat < xf->nlev; cat++) {
+                double total = 0;
+                for (int g = 0; g < ng; g++)
+                    total += colsum[((size_t)(p * xf->nlev + cat)) * ng + g];
+                if (total > colstack_max[p]) colstack_max[p] = total;
+            }
+    }
+
     /* ---- stat_density: Gaussian KDE per (panel, colour group), bandwidth
      * nrd0 (Silverman), evaluated at DENS_N points over [min-3bw, max+3bw]
      * (ggplot's cut=3). The x-scale stays on the data range (ggplot-style). --- */
@@ -1059,6 +1100,13 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         }
         if (lymin < tymin) tymin = lymin;       /* 4-corner rect layer files */
         if (lymax > tymax) tymax = lymax;
+        if (colsum) {                           /* stacked totals set the top */
+            double mx = 0;
+            for (int p = 0; p < npan; p++)
+                if (colstack_max[p] > mx) mx = colstack_max[p];
+            double t = TY(mx);
+            if (t > tymax) tymax = t;
+        }
         if (hascol && !spec->log_y) {           /* bars are anchored at 0 */
             if (tymin > 0) tymin = 0;
             if (tymax < 0) tymax = 0;
@@ -1197,8 +1245,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             for (int i = 0; i < nb; i++)
                 xbr[i] = cp_logt(spec->log_x, spec->x_breaks[i]);
         } else nb = extended_breaks(x0, x1, 5, xbr, 16);
-        int n = 0;
-        for (int i = 0; i < nb; i++) if (xbr[i] >= x0 && xbr[i] <= x1) xbr[n++] = xbr[i];
+        int n = 0, keep[40];             /* original index, so labels= stays paired */
+        for (int i = 0; i < nb; i++)
+            if (xbr[i] >= x0 && xbr[i] <= x1) { keep[n] = i; xbr[n++] = xbr[i]; }
         /* An explicit break outside the range is dropped, as in ggplot2 -- but
          * dropping every one leaves the axis silently unlabelled, which reads
          * as a bug in the figure rather than in the call. */
@@ -1230,8 +1279,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             for (int i = 0; i < nb; i++)
                 ybr[i] = cp_logt(spec->log_y, spec->y_breaks[i]);
         } else nb = extended_breaks(y0, y1, 5, ybr, 16);
-        int n = 0;
-        for (int i = 0; i < nb; i++) if (ybr[i] >= y0 && ybr[i] <= y1) ybr[n++] = ybr[i];
+        int n = 0, keep[40];             /* original index, so labels= stays paired */
+        for (int i = 0; i < nb; i++)
+            if (ybr[i] >= y0 && ybr[i] <= y1) { keep[n] = i; ybr[n++] = ybr[i]; }
         /* An explicit break outside the range is dropped, as in ggplot2 -- but
          * dropping every one leaves the axis silently unlabelled, which reads
          * as a bug in the figure rather than in the call. */
@@ -1412,6 +1462,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                                 if (te > hi) hi = te;
                             }
                         }
+                        if (colsum && TY(colstack_max[p]) > hi)
+                            hi = TY(colstack_max[p]);   /* stacked totals */
                         if (hascol && !spec->log_y) {   /* bars anchor at 0 */
                             if (lo > 0) lo = 0;
                             if (hi < 0) hi = 0;
@@ -1682,8 +1734,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
          * and bars are coloured from it; only the guide is dropped. */
         if (!spec->no_legend)
             guides[nguide++] = build_legend(cr, th, col_title, cf, pal, haspoint,
-                               hasline || hasseg || hasdens, hasbox || hasbar || hasrect || hastile, hastext,
-                               NULL);   /* tiles key as filled boxes */
+                               hasline || hasseg || hasdens,
+                               hasbox || hasbar || hascol || hasrect || hastile,
+                               hastext, NULL);   /* bars/tiles key as filled boxes */
     } else if (cont_col && !spec->no_legend) {
         guides[nguide++] = build_colorbar_legend(cr, th, col_title, &cscale, cdmin, cdmax);
     }
@@ -2003,6 +2056,27 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     g->col = spec->layers[li].has_color ? spec->layers[li].color
                            : cf ? pal[gg] : C_BLACK;
                     g->lw = lw_pt(0.5); g->clip = 1;
+                }
+            } else if (gt == GEOM_COL && colsum) {
+                /* stacked by fill group, as geom_bar: values summed per
+                 * (category, group), last factor level at the bottom
+                 * (ggplot position_stack) */
+                double base = spec->log_y ? 0.0 : NPCY(0.0);
+                int ng = cf->nlev;
+                for (int cat = 0; cat < xf->nlev; cat++) {
+                    double xi = cat + 1, cum = 0;
+                    for (int grp = ng - 1; grp >= 0; grp--) {
+                        double v = colsum[((size_t)(p * xf->nlev + cat)) * ng + grp];
+                        if (v <= 0) continue;
+                        double top = cum + v;
+                        g = gt_add(T, G_RECT, R, C, R, C);
+                        g->col = pal[grp];
+                        g->sub = 1; g->clip = 1;
+                        g->x0 = NPCX(xi - colw / 2); g->x1 = NPCX(xi + colw / 2);
+                        g->y0 = cum <= 0 ? base : NPCY(cp_logt(spec->log_y, cum));
+                        g->y1 = NPCY(cp_logt(spec->log_y, top));
+                        cum = top;
+                    }
                 }
             } else if (gt == GEOM_COL) {
                 double base = spec->log_y ? 0.0 : NPCY(0.0);
