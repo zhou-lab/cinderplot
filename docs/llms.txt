@@ -114,7 +114,10 @@ for.
   was *sampled* at powers of two — a coverage or subsampling ladder: log10 spaces
   those points correctly but its 10^k ticks land between the rungs you measured.)
   `scale_*_continuous(labels=percent,
-  limits=, breaks=c(...))` `xlim()` `ylim()` `scale_*_manual(values=c(...))`
+  labels=c("..."), limits=, breaks=c(...))` — `labels=c(...)` is explicit tick
+  text paired 1:1 with `breaks=c(...)` (mismatched lengths error), so a
+  category label row can BE a numeric axis. `xlim()` `ylim()`
+  `scale_*_manual(values=c(...))`
   `scale_(fill|colour)_*()` continuous palettes: `viridis magma inferno plasma
   cividis rocket mako` (perceptually uniform; `cividis` is also colour-blind and
   greyscale safe), `parula` (the lab default for methylation beta), `turbo` (a
@@ -307,8 +310,8 @@ Every unimplemented verb, aesthetic or option fails with a message that
 returns a menu rather than a syntax error.
 
 Known absent: `facet_grid()`, the `geom_smooth()` confidence ribbon (`se=TRUE`),
-an arbitrary `theme()` (presets only), stacked/dodged bars, and statistical
-transformations beyond binning, density and loess.
+an arbitrary `theme()` (presets only), dodged bars (stacking exists), and
+statistical transformations beyond binning, density and loess.
 
 ## Traps
 
@@ -317,10 +320,12 @@ transformations beyond binning, density and loess.
    `aes(x=value, y=cat)`.
 2. **`geom_boxplot()` and `geom_bar()` need a discrete x** — wrap it:
    `aes(x=factor(g), ...)`. A text column is discrete already.
-3. **Colour on bars must be constant per panel.** `geom_col()`/`geom_histogram()`
-   accept `fill=` only when every bar in a panel shares a value — the common
-   faceted case. Genuinely mixed fills need stacking or dodging, which is not
-   implemented.
+3. **`geom_col()` stacks a varying discrete fill** (ggplot's default
+   position): `aes(x=donor, y=pct, fill=class) + geom_col()` sums duplicated
+   (category, group) rows and stacks with the last factor level at the bottom.
+   It needs a discrete x, refuses negative values, and a continuous fill
+   errors. `geom_histogram()` still requires its fill constant per panel;
+   dodging is not implemented.
 4. **`geom_histogram()`/`geom_bar()`/`geom_density()` compute y themselves** —
    do not map `y`, and do not combine them with other data geoms.
 5. **Factor level order is sorted, R-style.** Impose an order with `levels=`:
