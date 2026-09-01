@@ -1300,6 +1300,62 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             }
     }
 
+    /* highlight(): a bounding box on one named cell — the reader-visible
+     * "this is the picked cell". Cells are addressed by row/column NAME (not
+     * display position) so clustering cannot silently move the box off the
+     * intended cell; an unknown name errors rather than drawing nothing. */
+    for (int k2 = 0; k2 < spec->nhls; k2++) {
+        const CellHighlight *hl = &spec->hls[k2];
+        int ti = -1;
+        if (hl->target) {
+            ti = find_obj(ro, n, hl->target);
+            if (ti < 0 || ro[ti].o->type != HM_HEATMAP) {
+                snprintf(err, CP_ERRLEN, "highlight(name=\"%s\"): no heatmap "
+                         "of that name", hl->target);
+                return -1;
+            }
+        } else {
+            int cnt = 0;
+            for (int i = 0; i < n; i++)
+                if (ro[i].o->type == HM_HEATMAP) { ti = i; cnt++; }
+            if (cnt != 1) {
+                snprintf(err, CP_ERRLEN, "highlight(): %d heatmaps in the "
+                         "figure; say which with name=", cnt);
+                return -1;
+            }
+        }
+        RObj *r = &ro[ti];
+        Matrix *m = r->m;
+        if (!m->rn || !m->cn) {
+            snprintf(err, CP_ERRLEN, "highlight(): the matrix has no "
+                     "row/column names to address a cell by");
+            return -1;
+        }
+        int kr = -1, kc = -1;
+        for (int k = 0; k < m->nr; k++)
+            if (!strcmp(m->rn[k], hl->row)) { kr = k; break; }
+        if (kr < 0) {
+            snprintf(err, CP_ERRLEN, "highlight(): `%s` is not a row name "
+                     "of the heatmap", hl->row);
+            return -1;
+        }
+        for (int k = 0; k < m->nc; k++)
+            if (!strcmp(m->cn[k], hl->col)) { kc = k; break; }
+        if (kc < 0) {
+            snprintf(err, CP_ERRLEN, "highlight(): `%s` is not a column name "
+                     "of the heatmap", hl->col);
+            return -1;
+        }
+        int rr = -1, cc = -1;               /* display slot of the named cell */
+        for (int k = 0; k < m->nr; k++) if (r->roword[k] == kr) { rr = k; break; }
+        for (int k = 0; k < m->nc; k++) if (r->coword[k] == kc) { cc = k; break; }
+        g = gt_add(T, G_RECT, CR, CC, CR, CC);
+        g->sub = 1; g->stroke = 1; g->lw = lw_pt(1); g->clip = 1;
+        g->col = hl->color;
+        g->x0 = r->l + cc * (r->w / m->nc); g->x1 = g->x0 + r->w / m->nc;
+        g->y1 = r->b + r->h - rr * (r->h / m->nr); g->y0 = g->y1 - r->h / m->nr;
+    }
+
     /* ---- rigid legends: vertical legends STACK in their side margin,
      * centred as a group on the canvas; horizontal legends centre on
      * the target (ComplexHeatmap-style legend packing) ---- */

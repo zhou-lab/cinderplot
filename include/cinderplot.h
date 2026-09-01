@@ -335,6 +335,16 @@ typedef struct {
 } HMObj;
 #define MAX_HMOBJS 16
 
+/* highlight("row","col"): a bounding box on one heatmap cell — the reader-
+ * visible "this is the picked cell" for a parameter grid (ggplot2's
+ * geom_tile(subset, colour=, fill=NA) idiom). */
+typedef struct {
+    char *row, *col;               /* the cell's row/column name */
+    char *target;                  /* name= of the heatmap (NULL = the sole one) */
+    Col color;                     /* box colour, default red */
+} CellHighlight;
+#define MAX_HIGHLIGHTS 16
+
 /* track (locus-browser) mode: stacked tracks over one genomic region */
 typedef enum { TRK_COVERAGE, TRK_INTERVAL, TRK_GENES, TRK_ARCS,
                TRK_MATRIX, TRK_CYTOBAND } TrackType;
@@ -400,6 +410,8 @@ typedef struct {
     /* matrix mode */
     HMObj hobjs[MAX_HMOBJS];
     int nhobjs;
+    CellHighlight hls[MAX_HIGHLIGHTS];
+    int nhls;
     FillScale fill;
     int has_fill;                   /* a scale_fill_*() was given (else default) */
     /* grammar mode: continuous colour scale (scale_colour_gradient*) */

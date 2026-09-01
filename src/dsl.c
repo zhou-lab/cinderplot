@@ -922,6 +922,46 @@ static int parse_term(P *p, PlotSpec *spec) {
         o->place.kind = PL_LEFT_OF;              /* default: row tree left */
         return parse_hm_args(p, o, 0);
     }
+    if (!strcmp(name, "highlight")) {
+        /* highlight("row","col"[, color="red"][, name="m"]): a bounding box
+         * on one heatmap cell, addressed by its row and column names. */
+        if (spec->nhls >= MAX_HIGHLIGHTS)
+            return fail(p, "too many highlight() calls (max 16)", "");
+        CellHighlight *h = &spec->hls[spec->nhls];
+        Col red = {1, 0, 0};
+        h->color = red;
+        skip_ws(p);
+        h->row = string_lit(p);
+        skip_ws(p);
+        if (!h->row || *p->s != ',')
+            return fail(p, "highlight() expects (\"row\", \"col\", ...)", "");
+        p->s++;
+        h->col = string_lit(p);
+        if (!h->col)
+            return fail(p, "highlight() expects (\"row\", \"col\", ...)", "");
+        skip_ws(p);
+        while (*p->s == ',') {
+            p->s++;
+            char *key = ident(p);
+            if (!key || expect(p, '='))
+                return fail(p, "bad highlight() argument", "");
+            if (!strcmp(key, "color") || !strcmp(key, "colour")) {
+                char *v = string_lit(p);
+                if (!v || parse_color(v, &h->color))
+                    return fail(p, "highlight() colour invalid "
+                                "(use names or #RRGGBB)", "");
+            } else if (!strcmp(key, "name")) {
+                char *v = string_lit(p);
+                if (!v) return fail(p, "name= expects a quoted string", "");
+                h->target = v;
+            } else return fail(p, "option `%s` not implemented on highlight(); "
+                               "supported: color=, name=", key);
+            skip_ws(p);
+        }
+        if (expect(p, ')')) return -1;
+        spec->nhls++;
+        return 0;
+    }
     if (!strcmp(name, "scale_fill_manual") || !strcmp(name, "scale_colour_manual")
         || !strcmp(name, "scale_color_manual"))
         return parse_manual_scale(p, spec, name);
@@ -1160,7 +1200,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                    "labs()/xlab()/ylab()/ggtitle(), "
                    "facet_wrap(~var[, levels=c(...)]), coord_flip(), scale_x_log10()/scale_x_log2(), scale_y_log10()/scale_y_log2(), scale_*_continuous(), xlim(), ylim(), "
                    "scale_*_manual(), theme_bw()/theme_minimal()/theme_classic()/..., guides(colour=\"none\"), "
-                   "heatmap(), annotation(), legend(), scale_fill_*(), "
+                   "heatmap(), annotation(), legend(), highlight(), scale_fill_*(), "
                    "region()/regions(), coverage(), interval(), genes(), arcs(), matrix(), cytoband()", name);
 }
 
@@ -1212,6 +1252,9 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
     if (spec->nhobjs == 0 && spec->ntracks == 0
         && spec->lab_fill && !spec->lab_colour)
         spec->lab_colour = spec->lab_fill;
+
+    if (spec->nhls > 0 && spec->nhobjs == 0)
+        return fail(&p, "highlight() marks a heatmap() cell and needs heatmap mode", "");
 
     if (spec->ntracks > 0) {           /* track (locus-browser) mode */
         if (spec->nlayers || spec->nhobjs || spec->x.col)
