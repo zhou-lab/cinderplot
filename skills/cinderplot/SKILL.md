@@ -195,6 +195,15 @@ staple (`geom_tile() + geom_text(aes(label=))`). One font size is fitted to the
 cells, and each number switches black/white against its fill's luminance; under
 4pt of text the labels drop with a warning.
 
+`highlight("row","col"[, color="red"][, name="m"])` draws a bounding box on one
+cell, addressed by its row and column names (so clustering cannot move the box
+off the intended cell); an unknown name errors. Repeat the verb for several
+cells; `name=` picks the heatmap when the figure has more than one.
+
+`scale_fill_*(limits=c(lo,hi))` pins the fill domain, so several figures (a
+multi-page grid, say) share one ramp; out-of-range values squish to the ends
+and the colourbar shows the pinned range.
+
 `cluster=` takes `rows cols both none diagonal symmetric` (`off` = `none`). The
 last two are for a **confusion matrix**, where the axes share a vocabulary and
 the diagonal is the point: `cluster=both` orders the axes independently and
