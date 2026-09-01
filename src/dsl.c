@@ -819,11 +819,39 @@ static int parse_term(P *p, PlotSpec *spec) {
             if (!key || expect(p, '=')) return fail(p, "bad scale_*_continuous argument", "");
             skip_ws(p);
             if (!strcmp(key, "labels")) {
-                char *v = ident(p);
-                if (!v) return fail(p, "labels= expects percent", "");
-                if (!strcmp(v, "percent") || !strcmp(v, "scales_percent")) {
-                    if (isx) spec->x_pct = 1; else spec->y_pct = 1;
-                } else return fail(p, "labels=%s not implemented; supported: percent", v);
+                skip_ws(p);
+                if (p->s[0] == 'c' && p->s[1] == '(') {
+                    /* labels=c("B01", ...): explicit tick text, paired 1:1
+                     * with breaks= — so a category label row can BE the axis
+                     * instead of duplicating a meaningless numeric one. The
+                     * pairing is checked once the whole scale is parsed,
+                     * since the two keys may come in either order. */
+                    p->s += 2;
+                    char **la = isx ? spec->x_break_labs : spec->y_break_labs;
+                    int *nla = isx ? &spec->n_x_break_labs : &spec->n_y_break_labs;
+                    *nla = 0;
+                    for (;;) {
+                        skip_ws(p);
+                        if (*p->s == ')') { p->s++; break; }
+                        char *v = string_lit(p);
+                        if (!v) return fail(p, "labels=c(...) expects quoted strings", "");
+                        if (*nla >= 40)
+                            return fail(p, "labels=c(...) holds at most 40 values", "");
+                        la[(*nla)++] = v;
+                        skip_ws(p);
+                        if (*p->s == ',') { p->s++; continue; }
+                        if (*p->s == ')') { p->s++; break; }
+                        return fail(p, "expected , or ) in labels=c(...)", "");
+                    }
+                    if (*nla == 0) return fail(p, "labels=c() is empty", "");
+                } else {
+                    char *v = ident(p);
+                    if (!v) return fail(p, "labels= expects percent or c(...)", "");
+                    if (!strcmp(v, "percent") || !strcmp(v, "scales_percent")) {
+                        if (isx) spec->x_pct = 1; else spec->y_pct = 1;
+                    } else return fail(p, "labels=%s not implemented; supported: "
+                                       "percent, c(\"...\", ...)", v);
+                }
             } else if (!strcmp(key, "limits")) {
                 if (p->s[0] == 'c' && p->s[1] == '(') p->s += 2;
                 else return fail(p, "limits= expects c(lo, hi)", "");
@@ -860,9 +888,19 @@ static int parse_term(P *p, PlotSpec *spec) {
                 }
                 if (*nbr == 0) return fail(p, "breaks=c() is empty", "");
             } else return fail(p, "scale_*_continuous option `%s` not implemented "
-                               "(labels=percent, limits=, breaks=)", key);
+                               "(labels=percent, labels=c(...), limits=, breaks=)", key);
             skip_ws(p);
             if (*p->s == ',') { p->s++; skip_ws(p); }
+        }
+        /* labels=c(...) is text FOR the breaks; without a matching breaks=
+         * there is nothing to pin each label to. Silently recycling or
+         * truncating would mislabel ticks, which reads as wrong data. */
+        {
+            int nbr = isx ? spec->n_x_breaks : spec->n_y_breaks;
+            int nla = isx ? spec->n_x_break_labs : spec->n_y_break_labs;
+            if (nla && nla != nbr)
+                return fail(p, "labels=c(...) needs a breaks=c(...) of the same "
+                            "length in the same scale_*_continuous()", "");
         }
         return expect(p, ')');
     }

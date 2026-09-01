@@ -385,6 +385,9 @@ typedef struct {
     int x_pct, y_pct;                             /* scale_*_continuous(labels=percent) */
     double x_breaks[40], y_breaks[40];            /* scale_*_continuous(breaks=c(...)) */
     int n_x_breaks, n_y_breaks;                   /* 0 = choose them automatically */
+    char *x_break_labs[40], *y_break_labs[40];    /* labels=c(...): tick text, paired
+                                                   * 1:1 with breaks= (checked at parse) */
+    int n_x_break_labs, n_y_break_labs;           /* 0 = format the break numbers */
     ThemeType theme;                              /* theme_*(); THEME_GRAY = 0 = default */
     int no_legend;                  /* guides(colour="none"|fill="none") or --no-legend */
     char *facet_var;

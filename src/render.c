@@ -1209,6 +1209,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         nxbr = n;
         int dec = axis_decimals(xbr, nxbr), pdec = dec - 2 < 0 ? 0 : dec - 2;
         for (int i = 0; i < nxbr; i++) {
+            if (spec->n_x_break_labs) {  /* labels=c(...): the given text */
+                xlabs[i] = cp_xstrdup(spec->x_break_labs[keep[i]]);
+                continue;
+            }
             xlabs[i] = cp_xmalloc(32);
             if (spec->x_pct) snprintf(xlabs[i], 32, "%.*f%%", pdec, xbr[i] * 100);
             else fmt_break(xbr[i], dec, xlabs[i], 32);
@@ -1238,6 +1242,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         nybr = n;
         int dec = axis_decimals(ybr, nybr), pdec = dec - 2 < 0 ? 0 : dec - 2;
         for (int i = 0; i < nybr; i++) {
+            if (spec->n_y_break_labs) {  /* labels=c(...): the given text */
+                ylabs[i] = cp_xstrdup(spec->y_break_labs[keep[i]]);
+                continue;
+            }
             ylabs[i] = cp_xmalloc(32);
             if (spec->y_pct) snprintf(ylabs[i], 32, "%.*f%%", pdec, ybr[i] * 100);
             else fmt_break(ybr[i], dec, ylabs[i], 32);
@@ -1441,14 +1449,29 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     S->xlabs = cp_xmalloc(16 * sizeof(char *));
                     S->nxbr = log_breaks(spec->log_x, S->x0, S->x1, S->xbr, S->xlabs, 16);
                 } else {
-                    S->xbr = cp_xmalloc(16 * sizeof(double));
-                    S->xlabs = cp_xmalloc(16 * sizeof(char *));
-                    int nb = extended_breaks(S->x0, S->x1, 5, S->xbr, 16), k = 0;
+                    /* breaks=/labels= apply per panel: each freed panel keeps
+                     * the given breaks that land inside ITS range (they used
+                     * to be silently ignored on a freed axis). */
+                    S->xbr = cp_xmalloc(40 * sizeof(double));
+                    S->xlabs = cp_xmalloc(40 * sizeof(char *));
+                    int nb, keep[40];
+                    if (spec->n_x_breaks) {
+                        nb = spec->n_x_breaks;
+                        for (int i = 0; i < nb; i++)
+                            S->xbr[i] = cp_logt(spec->log_x, spec->x_breaks[i]);
+                    } else nb = extended_breaks(S->x0, S->x1, 5, S->xbr, 16);
+                    int k = 0;
                     for (int i = 0; i < nb; i++)
-                        if (S->xbr[i] >= S->x0 && S->xbr[i] <= S->x1) S->xbr[k++] = S->xbr[i];
+                        if (S->xbr[i] >= S->x0 && S->xbr[i] <= S->x1) {
+                            keep[k] = i; S->xbr[k++] = S->xbr[i];
+                        }
                     S->nxbr = k;
                     int dec = axis_decimals(S->xbr, S->nxbr), pdec = dec - 2 < 0 ? 0 : dec - 2;
                     for (int i = 0; i < S->nxbr; i++) {
+                        if (spec->n_x_break_labs) {
+                            S->xlabs[i] = cp_xstrdup(spec->x_break_labs[keep[i]]);
+                            continue;
+                        }
                         S->xlabs[i] = cp_xmalloc(32);
                         if (spec->x_pct) snprintf(S->xlabs[i], 32, "%.*f%%", pdec, S->xbr[i] * 100);
                         else fmt_break(S->xbr[i], dec, S->xlabs[i], 32);
@@ -1486,14 +1509,27 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     S->ylabs = cp_xmalloc(16 * sizeof(char *));
                     S->nybr = log_breaks(spec->log_y, S->y0, S->y1, S->ybr, S->ylabs, 16);
                 } else {
-                    S->ybr = cp_xmalloc(16 * sizeof(double));
-                    S->ylabs = cp_xmalloc(16 * sizeof(char *));
-                    int nb = extended_breaks(S->y0, S->y1, 5, S->ybr, 16), k = 0;
+                    /* as for x: breaks=/labels= apply per freed panel */
+                    S->ybr = cp_xmalloc(40 * sizeof(double));
+                    S->ylabs = cp_xmalloc(40 * sizeof(char *));
+                    int nb, keep[40];
+                    if (spec->n_y_breaks) {
+                        nb = spec->n_y_breaks;
+                        for (int i = 0; i < nb; i++)
+                            S->ybr[i] = cp_logt(spec->log_y, spec->y_breaks[i]);
+                    } else nb = extended_breaks(S->y0, S->y1, 5, S->ybr, 16);
+                    int k = 0;
                     for (int i = 0; i < nb; i++)
-                        if (S->ybr[i] >= S->y0 && S->ybr[i] <= S->y1) S->ybr[k++] = S->ybr[i];
+                        if (S->ybr[i] >= S->y0 && S->ybr[i] <= S->y1) {
+                            keep[k] = i; S->ybr[k++] = S->ybr[i];
+                        }
                     S->nybr = k;
                     int dec = axis_decimals(S->ybr, S->nybr), pdec = dec - 2 < 0 ? 0 : dec - 2;
                     for (int i = 0; i < S->nybr; i++) {
+                        if (spec->n_y_break_labs) {
+                            S->ylabs[i] = cp_xstrdup(spec->y_break_labs[keep[i]]);
+                            continue;
+                        }
                         S->ylabs[i] = cp_xmalloc(32);
                         if (spec->y_pct) snprintf(S->ylabs[i], 32, "%.*f%%", pdec, S->ybr[i] * 100);
                         else fmt_break(S->ybr[i], dec, S->ylabs[i], 32);
