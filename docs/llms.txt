@@ -92,6 +92,15 @@ and ignored (the output path is a command-line argument here).
 - `geom_boxplot()` renders `fill=` and `colour=` differently, as ggplot2
   does: `fill=` colours the box body under dark chrome (outline, whiskers,
   median, outliers); `colour=` colours the chrome over a white body.
+- `annotate("text", x=, y=, label=[, colour=][, size=][, hjust=][, vjust=])`
+  places one literal mark, ggplot2's verb — also `"segment"` (x/y/xend/yend)
+  and `"rect"` (xmin/xmax/ymin/ymax; colour= sets the fill, default grey85).
+  `hjust`/`vjust` anchor the text as in ggplot (0.5 default = centred on the
+  point; `hjust=0, vjust=0` starts the text at x and rests it above y — the
+  reference-line-label placement); vjust takes 0/0.5/1. Marks take
+  part in scale training, work on log axes and under coord_flip, repeat the
+  verb for several, and draw OVER the geoms (a shading rect behind points is
+  not expressible yet). The usual use: labelling a geom_hline() reference.
 - **`geom_smooth(se=FALSE, span=)`** fits a LOESS (local quadratic, tricube
 weights) per colour group per panel — the points-plus-trend idiom for a noisy
 signal. `span=` is the fraction of the data in each local fit, default `0.75` as
@@ -132,6 +141,9 @@ for.
   has more levels than the set has colours. Each errors if handed the other
   kind of palette, because a sequential palette's n-class subsets are not its
   first n colours.
+  `scale_(fill|colour)_identity()` — the mapped column's values ARE the
+  colours (names or #RRGGBB); no legend, and a non-colour value errors. The
+  stopgap when one figure needs several colour meanings across facets.
   `scale_(fill|colour)_*()` continuous palettes: `viridis magma inferno plasma
   cividis rocket mako` (perceptually uniform; `cividis` is also colour-blind and
   greyscale safe), `parula` (the lab default for methylation beta), `turbo` (a
@@ -159,7 +171,18 @@ the automatic shape wraps 8 panels 3-per-row, which puts the pairs you meant to
 compare in different rows, and `levels=` cannot fix that because it controls
 order and not wrap width.
 
-`facet_wrap(scales=)` takes `fixed` (default), `free_x`, `free_y`, `free`. A
+`facet_wrap(scales=)` takes `fixed` (default), `free_x`, `free_y`, `free`,
+or `free_colour` — the last frees the COLOUR scale per facet (no ggplot2
+equivalent; patchwork territory): each facet builds its own discrete palette
+from its own rows and gets its own legend block titled by the facet name,
+placed directly under its panel when the facets sit in one row (multi-row
+grids stack the blocks in the right margin). Needs a discrete colour/fill;
+named `scale_*_manual(values=)` maps per level, positional lists and brewer
+sets apply per facet. The use: one figure, same points, three colour
+meanings. `guides(colour=guide_legend(ncol=N))` folds a long discrete legend
+over N columns, column-major; `nrow=N` caps the rows instead, and under
+free_colour each block then derives its own column count (a 4/6/10-level trio
+with nrow=6 folds only the 10). A
 freed axis is trained per panel; the axis you did not free stays shared. On a
 discrete axis a panel drops the categories it has no rows for and renumbers the
 rest, so column 3 means a different thing in each panel — that is ggplot2's
@@ -359,10 +382,7 @@ statistical transformations beyond binning, density and loess.
    an error, not a silent drop to NA that would delete rows from the figure.
 6. **A long default axis or legend title can squeeze the panel.** The default
    title is the verbatim `aes()` text; set it with `labs()` if it is long.
-7. **Silent and hard caps.** `scale_*_manual(values=)` keeps the first 16
-   colours. Hard errors above 40 discrete x categories, 15 legend levels,
-   8 layers, 12 tracks, 16 heatmap objects.
-8. **`coord_flip()` is grammar-mode only** — it errors with `scale_x_genome()`
+NOMATCH2
    and `ideogram()`, and is ignored in heatmap and track modes.
 9. **A dense scatter is the one slow case — use `geom_point(raster=TRUE)`.**
    A vector PDF spends ~136 bytes and one fill per point, so 10^6 points takes
