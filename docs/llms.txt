@@ -89,6 +89,9 @@ and ignored (the output path is a command-line argument here).
   `geom_point(raster=TRUE)` — see trap 9 — and
   `geom_boxplot(outlier.shape=NA)` to hide the outlier marks when a jitter
   layer already draws those points.
+- `geom_boxplot()` renders `fill=` and `colour=` differently, as ggplot2
+  does: `fill=` colours the box body under dark chrome (outline, whiskers,
+  median, outliers); `colour=` colours the chrome over a white body.
 - **`geom_smooth(se=FALSE, span=)`** fits a LOESS (local quadratic, tricube
 weights) per colour group per panel — the points-plus-trend idiom for a noisy
 signal. `span=` is the fraction of the data in each local fit, default `0.75` as
