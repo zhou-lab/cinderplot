@@ -2138,7 +2138,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 double base = spec->log_y ? 0.0 : NPCY(0.0);
                 int ng = cf->nlev;
                 for (int cat = 0; cat < xf->nlev; cat++) {
-                    double xi = cat + 1, cum = 0;
+                    int slot = xmap ? xmap[cat] : cat;   /* freed x renumbers */
+                    if (slot < 0) continue;
+                    double xi = slot + 1, cum = 0;
                     for (int grp = ng - 1; grp >= 0; grp--) {
                         double v = colsum[((size_t)(p * xf->nlev + cat)) * ng + grp];
                         if (v <= 0) continue;
@@ -2170,7 +2172,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                  * the last factor level at the bottom (ggplot position_stack) */
                 double base = spec->log_y ? 0.0 : NPCY(0.0);
                 for (int cat = 0; cat < xf->nlev; cat++) {
-                    double xi = cat + 1, cum = 0;
+                    int slot = xmap ? xmap[cat] : cat;   /* freed x renumbers */
+                    if (slot < 0) continue;
+                    double xi = slot + 1, cum = 0;
                     for (int grp = barng - 1; grp >= 0; grp--) {
                         int cnt = barcount[((size_t)(p * xf->nlev + cat)) * barng + grp];
                         if (!cnt) continue;
