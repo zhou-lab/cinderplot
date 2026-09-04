@@ -1057,6 +1057,72 @@ static int parse_term(P *p, PlotSpec *spec) {
         o->place.kind = PL_LEFT_OF;              /* default: row tree left */
         return parse_hm_args(p, o, 0);
     }
+    if (!strcmp(name, "annotate")) {
+        /* annotate("text", x=0.78, y=0.925, label="0.9"[, colour=][, size=])
+         * / annotate("segment", x=, y=, xend=, yend=) / annotate("rect",
+         * xmin=, xmax=, ymin=, ymax=): one literal mark, ggplot2's verb. */
+        if (spec->nannos >= MAX_ANNOTATES)
+            return fail(p, "too many annotate() calls (max 16)", "");
+        Annotate *a = &spec->annos[spec->nannos];
+        skip_ws(p);
+        char *k = string_lit(p);
+        if (!k || (strcmp(k, "text") && strcmp(k, "segment") && strcmp(k, "rect")))
+            return fail(p, "annotate() expects (\"text\"|\"segment\"|\"rect\", ...)", "");
+        a->kind = k[0] == 't' ? ANNO_TEXT : k[0] == 's' ? ANNO_SEGMENT : ANNO_RECT;
+        skip_ws(p);
+        while (*p->s == ',') {
+            p->s++;
+            char *key = ident(p);
+            if (!key || expect(p, '=')) return fail(p, "bad annotate() argument", "");
+            skip_ws(p);
+            if (!strcmp(key, "label")) {
+                a->label = string_lit(p);
+                if (!a->label) return fail(p, "label= expects a quoted string", "");
+            } else if (!strcmp(key, "colour") || !strcmp(key, "color")) {
+                char *v = string_lit(p);
+                if (!v || parse_color(v, &a->color))
+                    return fail(p, "annotate() colour invalid (use names or #RRGGBB)", "");
+                a->has_color = 1;
+            } else {
+                char *end;
+                double v = strtod(p->s, &end);
+                if (end == p->s) return fail(p, "annotate() %s= expects a number", key);
+                p->s = end;
+                if (!strcmp(key, "x") || !strcmp(key, "xmin")) { a->x = v; a->has_x = 1; }
+                else if (!strcmp(key, "y") || !strcmp(key, "ymin")) { a->y = v; a->has_y = 1; }
+                else if (!strcmp(key, "xend") || !strcmp(key, "xmax")) { a->xend = v; a->has_xend = 1; }
+                else if (!strcmp(key, "yend") || !strcmp(key, "ymax")) { a->yend = v; a->has_yend = 1; }
+                else if (!strcmp(key, "size")) a->size = v;
+                else if (!strcmp(key, "hjust")) {
+                    if (v < 0 || v > 1) return fail(p, "hjust= takes 0..1", "");
+                    a->hjust = v; a->has_hjust = 1;
+                } else if (!strcmp(key, "vjust")) {
+                    /* the text grob's vertical anchor is three-valued */
+                    if (v != 0 && v != 0.5 && v != 1)
+                        return fail(p, "vjust= takes 0, 0.5 or 1", "");
+                    a->vjust = v; a->has_vjust = 1;
+                }
+                else return fail(p, "annotate() option `%s` not implemented; supported: "
+                                 "x=, y=, xend=/xmax=, yend=/ymax=, label=, colour=, "
+                                 "size=, hjust=, vjust=", key);
+            }
+            skip_ws(p);
+        }
+        if (expect(p, ')')) return -1;
+        if (a->kind == ANNO_TEXT && (!a->has_x || !a->has_y || !a->label))
+            return fail(p, "annotate(\"text\") needs x=, y= and label=", "");
+        if (a->kind != ANNO_TEXT
+            && (!a->has_x || !a->has_y || !a->has_xend || !a->has_yend))
+            return fail(p, a->kind == ANNO_SEGMENT
+                        ? "annotate(\"segment\") needs x=, y=, xend= and yend="
+                        : "annotate(\"rect\") needs xmin=, xmax=, ymin= and ymax=", "");
+        if (a->kind != ANNO_TEXT && a->label)
+            return fail(p, "label= belongs on annotate(\"text\")", "");
+        if (a->kind != ANNO_TEXT && (a->has_hjust || a->has_vjust))
+            return fail(p, "hjust=/vjust= belong on annotate(\"text\")", "");
+        spec->nannos++;
+        return 0;
+    }
     if (!strcmp(name, "highlight")) {
         /* highlight("row","col"[, color="red"][, name="m"]): a bounding box
          * on one heatmap cell, addressed by its row and column names. */
@@ -1399,6 +1465,9 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
 
     if (spec->nhls > 0 && spec->nhobjs == 0)
         return fail(&p, "highlight() marks a heatmap() cell and needs heatmap mode", "");
+    if (spec->nannos > 0 && spec->nlayers == 0 && !spec->x.col)
+        return fail(&p, "annotate() places a mark on a grammar panel and needs "
+                    "aes()/geom_*", "");
 
     if (spec->ntracks > 0) {           /* track (locus-browser) mode */
         if (spec->nlayers || spec->nhobjs || spec->x.col)

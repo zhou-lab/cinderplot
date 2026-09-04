@@ -355,6 +355,24 @@ typedef struct {
 } CellHighlight;
 #define MAX_HIGHLIGHTS 16
 
+/* annotate("text"|"segment"|"rect", x=, y=, ...): a one-off mark at literal
+ * data coordinates, grammar mode only — ggplot2's annotate(). */
+typedef enum { ANNO_TEXT, ANNO_SEGMENT, ANNO_RECT } AnnoKind;
+typedef struct {
+    AnnoKind kind;
+    double x, y, xend, yend;       /* rect also spells these xmin/xmax/ymin/ymax */
+    int has_x, has_y, has_xend, has_yend;
+    char *label;                   /* text */
+    Col color; int has_color;      /* text/segment default black; rect grey85 */
+    double size;                   /* text size in pt (0 = axis-text default) */
+    double hjust, vjust;           /* text anchoring, ggplot semantics:
+                                    * hjust 0 = text starts at x, 1 = ends at x;
+                                    * vjust 0 = text sits above y, 1 = below.
+                                    * Default 0.5/0.5 = centred on the point. */
+    int has_hjust, has_vjust;
+} Annotate;
+#define MAX_ANNOTATES 16
+
 /* track (locus-browser) mode: stacked tracks over one genomic region */
 typedef enum { TRK_COVERAGE, TRK_INTERVAL, TRK_GENES, TRK_ARCS,
                TRK_MATRIX, TRK_CYTOBAND } TrackType;
@@ -420,16 +438,26 @@ typedef struct {
     char *tree_tl_data, *tree_tl_col;             /* tip LABEL colour */
     char *lab_title, *lab_x, *lab_y, *lab_colour, *lab_fill;
     char *lab_subtitle, *lab_caption;             /* labs(subtitle=, caption=) */
-    /* scale_colour/fill_manual(values=): discrete palette override */
-    Col manual_cols[16]; char *manual_names[16];  /* names NULL = positional */
+    /* scale_colour/fill_manual(values=): discrete palette override. 64 slots:
+     * 16 silently dropped the rest, and a 20-level figure painted its tail
+     * levels grey with no warning. */
+    Col manual_cols[64]; char *manual_names[64];  /* names NULL = positional */
     int n_manual, has_manual;
     char *brewer_disc;              /* scale_*_brewer(palette=): the set's name,
                                      * for a level-count-vs-palette-size check */
+    int identity_scale;             /* scale_*_identity(): the mapped column's
+                                     * values ARE the colours; no legend */
+    int legend_ncol, legend_nrow;   /* guides(colour=guide_legend(ncol=/nrow=)):
+                                     * fold a discrete legend over columns; nrow
+                                     * caps rows (each free_colour block derives
+                                     * its own column count). 0 = one column. */
     /* matrix mode */
     HMObj hobjs[MAX_HMOBJS];
     int nhobjs;
     CellHighlight hls[MAX_HIGHLIGHTS];
     int nhls;
+    Annotate annos[MAX_ANNOTATES];
+    int nannos;
     FillScale fill;
     int has_fill;                   /* a scale_fill_*() was given (else default) */
     /* grammar mode: continuous colour scale (scale_colour_gradient*) */

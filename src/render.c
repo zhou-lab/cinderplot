@@ -906,6 +906,26 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         }
     }
 
+    /* annotate() marks participate in scale training too (as in ggplot2) —
+     * a label placed just past the data would otherwise silently clip. Rides
+     * the same accumulators as the 4-corner rect layers, which only merge
+     * into continuous axes. */
+    for (int a2 = 0; a2 < spec->nannos; a2++) {
+        const Annotate *an = &spec->annos[a2];
+        double xs[2] = { an->x, an->has_xend ? an->xend : an->x };
+        double ys2[2] = { an->y, an->has_yend ? an->yend : an->y };
+        for (int k = 0; k < 2; k++) {
+            if (!genome_x) {
+                double t = cp_logt(spec->log_x, xs[k]);
+                if (t < lxmin) lxmin = t;
+                if (t > lxmax) lxmax = t;
+            }
+            double u = TY(ys2[k]);
+            if (u < lymin) lymin = u;
+            if (u > lymax) lymax = u;
+        }
+    }
+
     /* ---- x scale training (transformed space) ---- */
     double txmin, txmax;
     if (disc_x) {                          /* categories at 1..k */
@@ -2793,6 +2813,44 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             g->axis_styled = 1; g->tick_col = th->tick; g->hide_ticks = !th->tick_on;
             g->text_col = th->axis_text; g->hide_text = !th->axis_text_on;
         }
+        /* annotate(): one-off marks at literal data coords, drawn over the
+         * geoms in every panel. Coordinates go through the panel's own
+         * scales, and the coord_flip transpose below catches these grobs
+         * like any other panel content. */
+        for (int a2 = 0; a2 < spec->nannos; a2++) {
+            const Annotate *an = &spec->annos[a2];
+            double ax = NPCX(genome_x ? an->x : cp_logt(spec->log_x, an->x));
+            double ay = NPCY(TY(an->y));
+            if (an->kind == ANNO_TEXT) {
+                g = gt_add(T, G_TEXT, R, C, R, C);
+                g->str = an->label;
+                g->size = an->size > 0 ? an->size : SZ_AXIS_TEXT;
+                g->col = an->has_color ? an->color : C_BLACK;
+                g->tx = ax; g->ty = ay;
+                g->hj = an->has_hjust ? an->hjust : 0.5;
+                g->va = !an->has_vjust ? V_INKCENTER
+                      : an->vjust == 0 ? V_BOTTOM     /* text sits above y */
+                      : an->vjust == 1 ? V_TOP        /* text hangs below y */
+                      : V_INKCENTER;
+            } else if (an->kind == ANNO_SEGMENT) {
+                g = gt_add(T, G_LINE, R, C, R, C);
+                g->col = an->has_color ? an->color : C_BLACK;
+                g->lw = lw_pt(0.5); g->clip = 1;
+                g->x0 = ax; g->y0 = ay;
+                g->x1 = NPCX(genome_x ? an->xend : cp_logt(spec->log_x, an->xend));
+                g->y1 = NPCY(TY(an->yend));
+            } else {                       /* ANNO_RECT */
+                Col grey = {0.85, 0.85, 0.85};
+                g = gt_add(T, G_RECT, R, C, R, C);
+                g->col = an->has_color ? an->color : grey;
+                g->sub = 1; g->clip = 1;
+                double bx = NPCX(genome_x ? an->xend : cp_logt(spec->log_x, an->xend));
+                double by = NPCY(TY(an->yend));
+                g->x0 = fmin(ax, bx); g->x1 = fmax(ax, bx);
+                g->y0 = fmin(ay, by); g->y1 = fmax(ay, by);
+            }
+        }
+
         /* annotation() bands under this panel: one strip per call, stacked
          * top-to-bottom, each cell a category-wide chip (bar width 0.9, so
          * chips align under stacked geom_col bars). x positions go through
