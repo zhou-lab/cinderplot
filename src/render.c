@@ -1788,6 +1788,15 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     GTable *guides[3 + MAX_HMOBJS]; int nguide = 0;
     if (cf) {
         pal = cp_xmalloc(cf->nlev * sizeof(Col));
+        if (spec->brewer_disc && cf->nlev > spec->n_manual) {
+            /* scale_*_manual tolerates a short positional list (grey fill),
+             * but a named Brewer set running out would silently grey the tail
+             * levels -- say it instead. */
+            snprintf(err, CP_ERRLEN, "palette `%s` has %d colours; `%s` has %d "
+                     "levels", spec->brewer_disc, spec->n_manual,
+                     spec->colour.col, cf->nlev);
+            return -1;
+        }
         if (spec->has_manual) {                 /* scale_*_manual(values=) */
             int named = spec->n_manual > 0 && spec->manual_names[0] != NULL;
             for (int i = 0; i < cf->nlev; i++) {

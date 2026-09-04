@@ -546,6 +546,100 @@ static int parse_grad_scale(P *p, FillScale *fs, const char *k, const char *fn) 
  * Elements are quoted colours, optionally named:  c("red","blue") or
  * c(setosa="red", virginica="#1b9e77"). Names map to factor levels; an
  * unnamed list maps by level order. */
+/* scale_*_distiller(palette="YlOrBr"[, direction=-1][, limits=c(lo,hi)]):
+ * a named ColorBrewer ramp as the continuous scale. direction follows
+ * ggplot2: the DEFAULT -1 reverses the printed palette order so high values
+ * take the light end; direction=1 reads the palette as printed (light low,
+ * dark high) — usually what a light-to-dark manuscript figure wants. */
+static int parse_distiller(P *p, FillScale *fs) {
+    char *pname = NULL;
+    int dir = -1;
+    skip_ws(p);
+    while (*p->s != ')') {
+        char *key = ident(p);
+        if (!key || expect(p, '=')) return fail(p, "bad scale_*_distiller argument", "");
+        skip_ws(p);
+        if (!strcmp(key, "palette")) {
+            pname = string_lit(p);
+            if (!pname) return fail(p, "palette= expects a quoted ColorBrewer name", "");
+        } else if (!strcmp(key, "direction")) {
+            char *end;
+            double v = strtod(p->s, &end);
+            if (end == p->s || (v != 1 && v != -1))
+                return fail(p, "direction= expects 1 or -1", "");
+            p->s = end; dir = (int)v;
+        } else if (!strcmp(key, "limits")) {
+            if (p->s[0] == 'c' && p->s[1] == '(') p->s += 2;
+            else return fail(p, "limits= expects c(lo, hi)", "");
+            fs->lim_lo = strtod(p->s, (char **)&p->s);
+            skip_ws(p); if (*p->s == ',') p->s++;
+            fs->lim_hi = strtod(p->s, (char **)&p->s);
+            skip_ws(p); if (*p->s == ')') p->s++;
+            if (!(fs->lim_lo < fs->lim_hi))
+                return fail(p, "limits= expects lo < hi", "");
+            fs->has_limits = 1;
+        } else return fail(p, "scale_*_distiller option `%s` not implemented "
+                           "(palette=, direction=, limits=)", key);
+        skip_ws(p);
+        if (*p->s == ',') { p->s++; skip_ws(p); }
+    }
+    if (!pname) return fail(p, "scale_*_distiller needs palette=\"...\"", "");
+    int nst, qual;
+    if (brewer_lookup(pname, fs->stops, &nst, &qual))
+        return fail(p, "unknown ColorBrewer palette `%s` (e.g. YlOrBr, YlGnBu, "
+                    "Blues, Greys; RdBu, Spectral)", pname);
+    if (qual)
+        return fail(p, "`%s` is a qualitative set, not a ramp; use "
+                    "scale_*_brewer(palette=) on a discrete aesthetic", pname);
+    if (dir == -1)                       /* ggplot2's default orientation */
+        for (int i = 0; i < nst / 2; i++) {
+            Col t = fs->stops[i];
+            fs->stops[i] = fs->stops[nst - 1 - i];
+            fs->stops[nst - 1 - i] = t;
+        }
+    fs->nstops = nst;
+    fs->kind = FILL_BREWER;
+    return expect(p, ')');
+}
+
+/* scale_*_brewer(palette="Set2"): a qualitative ColorBrewer set for a
+ * discrete colour/fill, routed through the manual-palette machinery so the
+ * legend and level mapping come for free. Qualitative only: a sequential
+ * palette's n-class sets are NOT its first n colours, so first-n would be a
+ * silently different palette than R would draw. */
+static int parse_brewer_discrete(P *p, PlotSpec *spec) {
+    char *pname = NULL;
+    skip_ws(p);
+    while (*p->s != ')') {
+        char *key = ident(p);
+        if (!key || expect(p, '=')) return fail(p, "bad scale_*_brewer argument", "");
+        skip_ws(p);
+        if (!strcmp(key, "palette")) {
+            pname = string_lit(p);
+            if (!pname) return fail(p, "palette= expects a quoted ColorBrewer name", "");
+        } else return fail(p, "scale_*_brewer option `%s` not implemented "
+                           "(palette=)", key);
+        skip_ws(p);
+        if (*p->s == ',') { p->s++; skip_ws(p); }
+    }
+    if (!pname) return fail(p, "scale_*_brewer needs palette=\"...\"", "");
+    Col stops[11]; int nst, qual;
+    if (brewer_lookup(pname, stops, &nst, &qual))
+        return fail(p, "unknown ColorBrewer palette `%s` (e.g. Set1, Set2, "
+                    "Dark2, Paired)", pname);
+    if (!qual)
+        return fail(p, "`%s` is a continuous ramp; use "
+                    "scale_*_distiller(palette=) instead", pname);
+    for (int i = 0; i < nst; i++) {
+        spec->manual_cols[i] = stops[i];
+        spec->manual_names[i] = NULL;    /* positional, in factor level order */
+    }
+    spec->n_manual = nst;
+    spec->has_manual = 1;
+    spec->brewer_disc = pname;
+    return expect(p, ')');
+}
+
 static int parse_manual_scale(P *p, PlotSpec *spec, const char *fn) {
     spec->n_manual = 0; spec->has_manual = 1;
     skip_ws(p);
@@ -1003,6 +1097,15 @@ static int parse_term(P *p, PlotSpec *spec) {
     if (!strcmp(name, "scale_fill_manual") || !strcmp(name, "scale_colour_manual")
         || !strcmp(name, "scale_color_manual"))
         return parse_manual_scale(p, spec, name);
+    if (!strcmp(name, "scale_fill_distiller") || !strcmp(name, "scale_colour_distiller")
+        || !strcmp(name, "scale_color_distiller")) {
+        FillScale *fs = name[6] == 'f' ? &spec->fill : &spec->colour_scale;
+        if (name[6] == 'f') spec->has_fill = 1; else spec->has_colour_scale = 1;
+        return parse_distiller(p, fs);
+    }
+    if (!strcmp(name, "scale_fill_brewer") || !strcmp(name, "scale_colour_brewer")
+        || !strcmp(name, "scale_color_brewer"))
+        return parse_brewer_discrete(p, spec);
     if (!strncmp(name, "scale_fill_", 11)) {
         spec->has_fill = 1;
         return parse_grad_scale(p, &spec->fill, name + 11, "scale_fill_");

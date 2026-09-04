@@ -141,15 +141,21 @@ void hue_palette(int n, Col *out);
 /* continuous fill scales */
 typedef enum { FILL_VIRIDIS, FILL_JET, FILL_BWR, FILL_GRADIENT, FILL_GRADIENT2,
                FILL_PARULA, FILL_TURBO, FILL_COOLWARM, FILL_MAGMA, FILL_INFERNO,
-               FILL_PLASMA, FILL_CIVIDIS, FILL_ROCKET, FILL_MAKO } FillKind;
+               FILL_PLASMA, FILL_CIVIDIS, FILL_ROCKET, FILL_MAKO,
+               FILL_BREWER } FillKind;
 typedef struct {
     FillKind kind;
     Col low, mid, high;      /* gradient / gradient2 */
     double midpoint;         /* gradient2, default 0 */
     double lim_lo, lim_hi;   /* limits: domain + out-of-range squish */
     int has_limits;
+    Col stops[11]; int nstops;   /* FILL_BREWER: the ramp's interpolation stops
+                                  * (direction= reversal applied at parse) */
 } FillScale;
 Col fill_map(const FillScale *fs, double t01);   /* t in [0,1] */
+/* named ColorBrewer palette -> its max-class stops (from RColorBrewer).
+ * is_qual: qualitative (Set/Paired/...) vs a seq/div ramp. 0 = found. */
+int brewer_lookup(const char *name, Col *stops, int *nstops, int *is_qual);
 /* map v in [dmin,dmax] -> colour, honouring gradient2's midpoint */
 Col fill_map_value(const FillScale *fs, double v, double dmin, double dmax);
 int parse_color(const char *s, Col *out);        /* names + #RRGGBB; 0 = ok */
@@ -413,6 +419,8 @@ typedef struct {
     /* scale_colour/fill_manual(values=): discrete palette override */
     Col manual_cols[16]; char *manual_names[16];  /* names NULL = positional */
     int n_manual, has_manual;
+    char *brewer_disc;              /* scale_*_brewer(palette=): the set's name,
+                                     * for a level-count-vs-palette-size check */
     /* matrix mode */
     HMObj hobjs[MAX_HMOBJS];
     int nhobjs;
