@@ -671,10 +671,12 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             }
         }
     }
-    if ((hasbar || hascol) && cont_col) {
-        snprintf(err, CP_ERRLEN, "a continuous colour/fill on %s is not "
-                 "implemented; map a discrete column instead",
-                 hasbar ? "geom_bar()" : "geom_col()");
+    if (hasbar && cont_col) {
+        /* geom_col() takes a continuous fill (each bar mapped through the
+         * gradient, as geom_rect() long has); geom_bar() counts rows itself,
+         * so a per-row continuous fill has no single value per bar. */
+        snprintf(err, CP_ERRLEN, "a continuous colour/fill on geom_bar() is not "
+                 "implemented; map a discrete column instead");
         return -1;
     }
     if (hascol && cf && !disc_x) {
@@ -2161,6 +2163,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     double tx = TXR(r), ty = TY(yc->num[r]);
                     g = gt_add(T, G_RECT, R, C, R, C);
                     g->col = spec->layers[li].has_color ? spec->layers[li].color
+                           : cont_col ? CCOL(r)
                            : panelfill && panelfill[p] >= 0 ? pal[panelfill[p]]
                            : C_BAR;
                     g->sub = 1; g->clip = 1;
