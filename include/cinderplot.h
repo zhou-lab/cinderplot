@@ -383,10 +383,13 @@ typedef struct {
     double xlim_lo, xlim_hi, ylim_lo, ylim_hi;   /* user axis limits (data space) */
     int has_xlim, has_ylim;                       /* xlim()/ylim() or scale_*_log10(limits=) */
     int x_pct, y_pct;                             /* scale_*_continuous(labels=percent) */
-    double x_breaks[40], y_breaks[40];            /* scale_*_continuous(breaks=c(...)) */
+    /* Sized for a labelled category axis built by hand (a 63-class panel is
+     * an ordinary figure); a few KB in the one PlotSpec, nothing walks it. */
+#define MAX_BREAKS 256
+    double x_breaks[MAX_BREAKS], y_breaks[MAX_BREAKS];   /* scale_*_continuous(breaks=c(...)) */
     int n_x_breaks, n_y_breaks;                   /* 0 = choose them automatically */
-    char *x_break_labs[40], *y_break_labs[40];    /* labels=c(...): tick text, paired
-                                                   * 1:1 with breaks= (checked at parse) */
+    char *x_break_labs[MAX_BREAKS], *y_break_labs[MAX_BREAKS];   /* labels=c(...): tick
+                                                   * text, paired 1:1 with breaks= */
     int n_x_break_labs, n_y_break_labs;           /* 0 = format the break numbers */
     ThemeType theme;                              /* theme_*(); THEME_GRAY = 0 = default */
     int no_legend;                  /* guides(colour="none"|fill="none") or --no-legend */

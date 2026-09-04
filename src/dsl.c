@@ -835,8 +835,8 @@ static int parse_term(P *p, PlotSpec *spec) {
                         if (*p->s == ')') { p->s++; break; }
                         char *v = string_lit(p);
                         if (!v) return fail(p, "labels=c(...) expects quoted strings", "");
-                        if (*nla >= 40)
-                            return fail(p, "labels=c(...) holds at most 40 values", "");
+                        if (*nla >= MAX_BREAKS)
+                            return fail(p, "labels=c(...) holds at most 256 values", "");
                         la[(*nla)++] = v;
                         skip_ws(p);
                         if (*p->s == ',') { p->s++; continue; }
@@ -878,8 +878,8 @@ static int parse_term(P *p, PlotSpec *spec) {
                     double v = strtod(p->s, &end);
                     if (end == p->s) return fail(p, "bad number in breaks=c(...)", "");
                     p->s = end;
-                    if (*nbr >= 40)
-                        return fail(p, "breaks=c(...) holds at most 40 values", "");
+                    if (*nbr >= MAX_BREAKS)
+                        return fail(p, "breaks=c(...) holds at most 256 values", "");
                     br[(*nbr)++] = v;
                     skip_ws(p);
                     if (*p->s == ',') { p->s++; continue; }

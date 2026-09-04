@@ -1211,8 +1211,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     /* Sized to the axis: a discrete axis draws one break per category, and
      * capping these at a fixed 40 was the only reason a discrete axis could not
      * carry more. Continuous axes never ask for more than 16. */
-    int xbrcap = disc_x ? xf->nlev + 1 : 40;
-    int ybrcap = disc_y ? yf->nlev + 1 : 40;
+    int xbrcap = disc_x ? xf->nlev + 1 : MAX_BREAKS;
+    int ybrcap = disc_y ? yf->nlev + 1 : MAX_BREAKS;
     double *xbr = cp_xmalloc(xbrcap * sizeof(double));
     double *ybr = cp_xmalloc(ybrcap * sizeof(double));
     char **xlabs = cp_xmalloc(xbrcap * sizeof(char *));
@@ -1245,7 +1245,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             for (int i = 0; i < nb; i++)
                 xbr[i] = cp_logt(spec->log_x, spec->x_breaks[i]);
         } else nb = extended_breaks(x0, x1, 5, xbr, 16);
-        int n = 0, keep[40];             /* original index, so labels= stays paired */
+        int n = 0, keep[MAX_BREAKS];             /* original index, so labels= stays paired */
         for (int i = 0; i < nb; i++)
             if (xbr[i] >= x0 && xbr[i] <= x1) { keep[n] = i; xbr[n++] = xbr[i]; }
         /* An explicit break outside the range is dropped, as in ggplot2 -- but
@@ -1279,7 +1279,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             for (int i = 0; i < nb; i++)
                 ybr[i] = cp_logt(spec->log_y, spec->y_breaks[i]);
         } else nb = extended_breaks(y0, y1, 5, ybr, 16);
-        int n = 0, keep[40];             /* original index, so labels= stays paired */
+        int n = 0, keep[MAX_BREAKS];             /* original index, so labels= stays paired */
         for (int i = 0; i < nb; i++)
             if (ybr[i] >= y0 && ybr[i] <= y1) { keep[n] = i; ybr[n++] = ybr[i]; }
         /* An explicit break outside the range is dropped, as in ggplot2 -- but
@@ -1504,9 +1504,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     /* breaks=/labels= apply per panel: each freed panel keeps
                      * the given breaks that land inside ITS range (they used
                      * to be silently ignored on a freed axis). */
-                    S->xbr = cp_xmalloc(40 * sizeof(double));
-                    S->xlabs = cp_xmalloc(40 * sizeof(char *));
-                    int nb, keep[40];
+                    S->xbr = cp_xmalloc(MAX_BREAKS * sizeof(double));
+                    S->xlabs = cp_xmalloc(MAX_BREAKS * sizeof(char *));
+                    int nb, keep[MAX_BREAKS];
                     if (spec->n_x_breaks) {
                         nb = spec->n_x_breaks;
                         for (int i = 0; i < nb; i++)
@@ -1562,9 +1562,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     S->nybr = log_breaks(spec->log_y, S->y0, S->y1, S->ybr, S->ylabs, 16);
                 } else {
                     /* as for x: breaks=/labels= apply per freed panel */
-                    S->ybr = cp_xmalloc(40 * sizeof(double));
-                    S->ylabs = cp_xmalloc(40 * sizeof(char *));
-                    int nb, keep[40];
+                    S->ybr = cp_xmalloc(MAX_BREAKS * sizeof(double));
+                    S->ylabs = cp_xmalloc(MAX_BREAKS * sizeof(char *));
+                    int nb, keep[MAX_BREAKS];
                     if (spec->n_y_breaks) {
                         nb = spec->n_y_breaks;
                         for (int i = 0; i < nb; i++)
