@@ -128,6 +128,15 @@ for.
 - **also**: `facet_wrap(~v[, levels=][, scales=][, ncol=][, nrow=])`, `coord_flip()`, `guides(colour="none")`
   (or `--no-legend`), `labs()`/`xlab()`/`ylab()`/`ggtitle()`, and
   `theme_{gray,bw,minimal,classic,void,linedraw,light,dark,few}()`.
+- `annotation("meta.tsv"[, column="ighv"])` draws a categorical metadata band
+  under the panel — one chip per x category (bar-width, so chips align under
+  stacked `geom_col()` bars), with its own palette and its own legend block,
+  so cohort metadata stops riding the fill scale and polluting its legend.
+  The file's first column names the x categories; `column=` picks the value
+  column (default: the last). Needs a discrete x; a category with no row
+  warns and draws in the missing-value grey; repeat the verb to stack
+  several bands. Placements (`left_of()` etc.) are heatmap-mode and error
+  here.
 
 `ncol=`/`nrow=` fix the grid shape; give both and a grid too small for the
 panels is an error. Worth reaching for whenever the panels cross two factors —
@@ -322,9 +331,11 @@ statistical transformations beyond binning, density and loess.
 3. **`geom_col()` stacks a varying discrete fill** (ggplot's default
    position): `aes(x=donor, y=pct, fill=class) + geom_col()` sums duplicated
    (category, group) rows and stacks with the last factor level at the bottom.
-   It needs a discrete x, refuses negative values, and a continuous fill
-   errors. `geom_histogram()` still requires its fill constant per panel;
-   dodging is not implemented.
+   Stacking needs a discrete x and refuses negative values. A *continuous*
+   `fill=` maps each bar through the gradient scale instead (a colourbar
+   legend, as `geom_rect()` has). `geom_histogram()` still requires its fill
+   constant per panel; `geom_bar()` refuses a continuous fill (it counts rows
+   itself); dodging is not implemented.
 4. **`geom_histogram()`/`geom_bar()`/`geom_density()` compute y themselves** —
    do not map `y`, and do not combine them with other data geoms.
 5. **Factor level order is sorted, R-style.** Impose an order with `levels=`:
