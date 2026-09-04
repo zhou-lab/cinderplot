@@ -1638,8 +1638,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     }
     int box_slots = box_dodge ? cf->nlev : 1;
 
-#define SR(r) (3 + 3 * (r))
-#define PR(r) (4 + 3 * (r))
+/* Four grid rows per panel row: facet strip, panel, annotation band (zero-
+ * height when no annotation() is given), then the inter-row gap / freed axis. */
+#define SR(r) (3 + 4 * (r))
+#define PR(r) (4 + 4 * (r))
 #define PC(c) (4 + 2 * (c))
 
     /* ---- measurement, then the real surface ----
@@ -1710,12 +1712,78 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     const char *left_title   = flip ? xtitle : ytitle;
     const char *bottom_title = flip ? ytitle : xtitle;
 
+    /* ---- grammar-mode annotation(): a categorical metadata band under each
+     * panel, keyed by x category name — the wheatmap idea brought over, so a
+     * cohort strip (IGHV status, batch) stops riding the fill scale and
+     * polluting its legend. Each band carries its own palette and legend.
+     * File shape: first column = x category names (text), column= picks the
+     * value column (default: the last). ---- */
+    struct GrAnn { Factor *f; Col *apal; int *catlev; const char *title; };
+    struct GrAnn anns[MAX_HMOBJS]; int nann = 0;
+    const double ANN_STRIP = 9.0, ANN_GAP = 2.0, ANN_PAD = 3.0;   /* pt */
+    if (spec->nhobjs) {
+        if (!disc_x || flip || genome_x) {
+            snprintf(err, CP_ERRLEN, "annotation() under a grammar panel keys "
+                     "on x categories, so it needs a discrete x%s",
+                     flip ? " and no coord_flip()" : "");
+            return -1;
+        }
+        for (int i = 0; i < spec->nhobjs; i++) {
+            const HMObj *o = &spec->hobjs[i];
+            DataFrame *ad = df_read_csv(o->data, err);
+            if (!ad) return -1;
+            if (ad->ncol < 2) {
+                snprintf(err, CP_ERRLEN, "annotation(%s): needs a key column "
+                         "(x category names) and a value column", o->data);
+                return -1;
+            }
+            const Column *key = &ad->cols[0];
+            if (key->type != COL_STR) {
+                snprintf(err, CP_ERRLEN, "annotation(%s): the first column must "
+                         "be text naming the x categories", o->data);
+                return -1;
+            }
+            const Column *val;
+            if (o->column) {
+                val = df_col(ad, o->column);
+                if (!val) {
+                    snprintf(err, CP_ERRLEN, "annotation(%s): column `%s` not "
+                             "found", o->data, o->column);
+                    return -1;
+                }
+            } else val = &ad->cols[ad->ncol - 1];
+            Factor *af = factor_make(ad, val);
+            int *catlev = cp_xmalloc(xf->nlev * sizeof(int));
+            int miss = 0;
+            for (int l = 0; l < xf->nlev; l++) {
+                catlev[l] = -1;
+                for (int r2 = 0; r2 < ad->nrow; r2++)
+                    if (!strcmp(key->str[r2], xf->levels[l])) {
+                        catlev[l] = af->idx[r2];
+                        break;
+                    }
+                if (catlev[l] < 0) miss++;
+            }
+            if (miss)
+                fprintf(stderr, "cinderplot: warning: annotation(%s): %d of %d "
+                        "x categories have no row; drawn in the missing-value "
+                        "grey\n", o->data, miss, xf->nlev);
+            Col *apal = cp_xmalloc(af->nlev * sizeof(Col));
+            hue_palette(af->nlev, apal);
+            anns[nann].f = af; anns[nann].apal = apal; anns[nann].catlev = catlev;
+            anns[nann].title = o->column ? o->column : val->name;
+            nann++;
+        }
+    }
+    double band_h = nann ? ANN_PAD + nann * ANN_STRIP + (nann - 1) * ANN_GAP : 0;
+
     Col *pal = NULL;
     GTable *leg = NULL;
     const char *col_title = spec->lab_colour ? spec->lab_colour : spec->colour.expr;
     /* Guides stack top-to-bottom: colour (or fill) first, then size — the
-     * order ggplot uses for a point layer mapping both. */
-    GTable *guides[3]; int nguide = 0;
+     * order ggplot uses for a point layer mapping both; annotation() bands
+     * append one legend block each, titled by their value column. */
+    GTable *guides[3 + MAX_HMOBJS]; int nguide = 0;
     if (cf) {
         pal = cp_xmalloc(cf->nlev * sizeof(Col));
         if (spec->has_manual) {                 /* scale_*_manual(values=) */
@@ -1759,6 +1827,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         const char *sh_title = spec->shape.expr;
         guides[nguide++] = build_legend(cr, th, sh_title, shf, spal, 1, 0, 0, 0, sidx);
     }
+    for (int a = 0; a < nann; a++)               /* annotation band keys */
+        if (!spec->no_legend)
+            guides[nguide++] = build_legend(cr, th, anns[a].title, anns[a].f,
+                                            anns[a].apal, 0, 0, 1, 0, NULL);
     if (nguide) leg = stack_guides(guides, nguide);
 
     /* ---- outer table ---- */
@@ -1797,7 +1869,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     T->colw[T->ncol - 2] = upt(leg ? gt_fixed_w(leg) : 0);
     T->colw[T->ncol - 1] = upt(MARGIN);
 
-    T->nrow = 3 * nrowp + 6;
+    T->nrow = 4 * nrowp + 6;
     T->rowh[0] = upt(MARGIN);
     T->rowh[1] = upt(spec->lab_title ? font_h(cr, SZ_TITLE) : 0);
     T->rowh[2] = upt(spec->lab_subtitle ? font_h(cr, SZ_BASE)
@@ -1826,7 +1898,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             double panelh = disc_y && maxy ? maxy * catpitch : 2.6 * 72;
             double chrome = MARGIN * 2 + labh + TICK_LEN + TXT_GAP + baseh
                           + (spec->lab_title ? font_h(cr, SZ_TITLE) : 0);
-            h_pt = chrome + nrowp * (panelh + striph) + (nrowp - 1) * PANEL_SPACE;
+            h_pt = chrome + nrowp * (panelh + striph + band_h)
+                 + (nrowp - 1) * PANEL_SPACE;
             h_pt = fmin(30.0 * 72, fmax(4.0 * 72, h_pt));
         }
     }
@@ -1892,11 +1965,12 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     for (int r = 0; r < nrowp; r++) {
         T->rowh[SR(r)] = upt(striph);
         T->rowh[PR(r)] = unull(1);
+        T->rowh[PR(r) + 1] = upt(band_h);        /* annotation bands (0 = none) */
         if (r < nrowp - 1)
-            T->rowh[PR(r) + 1] = upt(bfree_l ? TICK_LEN + TXT_GAP + blab_h + PANEL_SPACE
+            T->rowh[PR(r) + 2] = upt(bfree_l ? TICK_LEN + TXT_GAP + blab_h + PANEL_SPACE
                                              : PANEL_SPACE);
     }
-    int r_axis = 3 * nrowp + 2;
+    int r_axis = 4 * nrowp + 2;
     T->rowh[r_axis]     = upt(TICK_LEN + TXT_GAP + blab_h);
     T->rowh[r_axis + 1] = upt(HALF_LINE / 2);
     T->rowh[r_axis + 2] = upt(baseh);
@@ -2694,12 +2768,32 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             g->axis_styled = 1; g->tick_col = th->tick; g->hide_ticks = !th->tick_on;
             g->text_col = th->axis_text; g->hide_text = !th->axis_text_on;
         }
+        /* annotation() bands under this panel: one strip per call, stacked
+         * top-to-bottom, each cell a category-wide chip (bar width 0.9, so
+         * chips align under stacked geom_col bars). x positions go through
+         * the panel's own scale, so bands stay aligned under free_x too. */
+        for (int a = 0; a < nann; a++) {
+            double ytop = 1 - (ANN_PAD + a * (ANN_STRIP + ANN_GAP)) / band_h;
+            double ybot = ytop - ANN_STRIP / band_h;
+            for (int l = 0; l < xf->nlev; l++) {
+                int slot = spec->free_x ? S->xmap[l] : l;
+                if (slot < 0) continue;          /* level absent from this panel */
+                double xi = slot + 1;
+                int lev = anns[a].catlev[l];
+                g = gt_add(T, G_RECT, R + 1, C, R + 1, C);
+                g->sub = 1; g->clip = 1;
+                g->col = lev >= 0 ? anns[a].apal[lev] : C_NA;
+                g->x0 = NPCX(xi - 0.45); g->x1 = NPCX(xi + 0.45);
+                g->y0 = ybot; g->y1 = ytop;
+            }
+        }
+
         /* Bottom axis. Shared scales draw one per column, under the lowest panel
          * of that column (below); a freed axis is per panel. */
         int bfree = flip ? spec->free_y : spec->free_x;
         if (bfree) {
             int rb = (npan - 1 - pc) / ncolp;
-            int arow = (pr == rb && rb == nrowp - 1) ? r_axis : PR(pr) + 1;
+            int arow = (pr == rb && rb == nrowp - 1) ? r_axis : PR(pr) + 2;
             g = gt_add(T, G_AXIS_X, arow, C, arow, C);
             g->n = flip ? S->nybr : S->nxbr;
             g->px = flip ? S->ynpc : S->xnpc;
@@ -2717,7 +2811,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         if (rb == nrowp - 1)
             g = gt_add(T, G_AXIS_X, r_axis, PC(c), r_axis, PC(c));
         else
-            g = gt_add(T, G_AXIS_X, PR(rb) + 1, PC(c), PR(rb + 1), PC(c));
+            g = gt_add(T, G_AXIS_X, PR(rb) + 2, PC(c), PR(rb + 1), PC(c));
         if (genome_x) { g->n = gax_n; g->px = gax_pos; g->labels = gax_lab; }
         else {
             g->n = bax_n; g->px = bax_pos; g->labels = bax_lab;   /* log ticks drawn inside the panel */

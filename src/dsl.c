@@ -1300,29 +1300,46 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
         return 0;
     }
 
-    if (spec->nhobjs > 0 && spec->has_manual) {
-        /* heatmap.c maps cell values through a continuous FillScale and never
-         * consults manual_cols, so this used to parse, run, exit 0 and render
-         * the default ramp -- the caller only found out by noticing the output
-         * never changed. Every other unsupported thing here errors with a menu,
-         * which is what makes a wrong guess cheap; silent acceptance breaks that
-         * contract, so refuse until a discrete heatmap fill exists. */
-        return fail(&p, "scale_*_manual() is not supported in heatmap mode: the "
-                        "heatmap fill is a continuous scale. Use "
-                        "scale_fill_gradient()/gradient2()/viridis()/jet(), or "
-                        "encode the categories as an annotation(), which does "
-                        "take a discrete palette and legend", "");
-    }
-    if (spec->nhobjs > 0) {                      /* matrix mode */
-        if (spec->nlayers || spec->x.col || spec->facet_var)
-            /* legend() is a heatmap-mode primitive, but the supported-verbs list
-             * advertises it, so someone reaching for it to control a grammar
-             * legend lands here. Say so, and point at what they actually want. */
-            return fail(&p, spec->nhobjs == 1 && spec->hobjs[0].type == HM_LEGEND
-                        ? "legend() places a legend beside a heatmap() and cannot be "
-                          "used with aes()/geom_*; in grammar mode the legend is "
-                          "automatic — suppress it with guides(colour=\"none\")"
-                        : "heatmap() cannot be mixed with aes()/geom_*/facet_wrap()", "");
+    if (spec->nhobjs > 0 && (spec->nlayers || spec->x.col || spec->facet_var)) {
+        /* Grammar mode + annotation(): a categorical metadata band under the
+         * panel, keyed by x category, with its own palette and legend. Only
+         * annotation() crosses this line — heatmap()/legend()/dendrogram()
+         * stay heatmap-mode verbs. */
+        for (int i = 0; i < spec->nhobjs; i++) {
+            const HMObj *o = &spec->hobjs[i];
+            if (o->type != HM_ANNOTATION)
+                /* legend() is a heatmap-mode primitive, but the supported-verbs
+                 * list advertises it, so someone reaching for it to control a
+                 * grammar legend lands here. Say so, and point at what they
+                 * actually want. */
+                return fail(&p, o->type == HM_LEGEND
+                            ? "legend() places a legend beside a heatmap() and cannot be "
+                              "used with aes()/geom_*; in grammar mode the legend is "
+                              "automatic — suppress it with guides(colour=\"none\")"
+                            : "heatmap() cannot be mixed with aes()/geom_*/facet_wrap()", "");
+            if (o->place.kind != PL_FULL)
+                return fail(&p, "annotation() under a grammar panel always draws "
+                            "beneath it; placements (left_of/right_of/...) are "
+                            "heatmap-mode", "");
+            if (!o->data)
+                return fail(&p, "annotation() needs a data file: "
+                            "annotation(\"meta.tsv\"[, column=\"...\"])", "");
+        }
+        /* falls through to the grammar-mode checks below */
+    } else if (spec->nhobjs > 0) {               /* matrix mode */
+        if (spec->has_manual) {
+            /* heatmap.c maps cell values through a continuous FillScale and never
+             * consults manual_cols, so this used to parse, run, exit 0 and render
+             * the default ramp -- the caller only found out by noticing the output
+             * never changed. Every other unsupported thing here errors with a menu,
+             * which is what makes a wrong guess cheap; silent acceptance breaks that
+             * contract, so refuse until a discrete heatmap fill exists. */
+            return fail(&p, "scale_*_manual() is not supported in heatmap mode: the "
+                            "heatmap fill is a continuous scale. Use "
+                            "scale_fill_gradient()/gradient2()/viridis()/jet(), or "
+                            "encode the categories as an annotation(), which does "
+                            "take a discrete palette and legend", "");
+        }
         if (spec->hobjs[0].type != HM_HEATMAP)
             return fail(&p, "the first placed object must be a heatmap()", "");
         return 0;

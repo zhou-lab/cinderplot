@@ -307,7 +307,9 @@ int main(int argc, char **argv) {
         fprintf(stderr, "wrote %s\n", out);
         return 0;
     }
-    if (spec.nhobjs > 0) {                       /* matrix (wheatmap) mode */
+    /* annotation() beside aes()/geom_* is a grammar-mode band (dsl_parse has
+     * already vetted the combination), so only a pure heatmap spec comes here */
+    if (spec.nhobjs > 0 && spec.nlayers == 0 && !spec.x.col) {   /* matrix (wheatmap) mode */
         if (render_heatmap(&spec, out, w_pt, h_pt, err)) {
             fprintf(stderr, "cinderplot: %s\n", err);
             return 1;
