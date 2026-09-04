@@ -64,7 +64,7 @@ static void ramp(const Col *stops, int n, double t, Col *out) {
  * because their n-class subsets are simply the first n colours, where a
  * sequential palette's n-class sets differ per n and first-n would be a
  * silently different palette. */
-static const struct { const char *name; int n; int qual; Col stops[11]; }
+static const struct { const char *name; int n; int qual; Col stops[BREWER_MAX_STOPS]; }
 BREWER[] = {
 {"Blues", 9, 0, {{0.9686,0.9843,1.0000},{0.8706,0.9216,0.9686},{0.7765,0.8588,0.9373},{0.6196,0.7922,0.8824},{0.4196,0.6824,0.8392},{0.2588,0.5725,0.7765},{0.1294,0.4431,0.7098},{0.0314,0.3176,0.6118},{0.0314,0.1882,0.4196}}},
 {"BuGn", 9, 0, {{0.9686,0.9882,0.9922},{0.8980,0.9608,0.9765},{0.8000,0.9255,0.9020},{0.6000,0.8471,0.7882},{0.4000,0.7608,0.6431},{0.2549,0.6824,0.4627},{0.1373,0.5451,0.2706},{0.0000,0.4275,0.1725},{0.0000,0.2667,0.1059}}},

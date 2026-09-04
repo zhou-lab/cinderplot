@@ -149,8 +149,12 @@ typedef struct {
     double midpoint;         /* gradient2, default 0 */
     double lim_lo, lim_hi;   /* limits: domain + out-of-range squish */
     int has_limits;
-    Col stops[11]; int nstops;   /* FILL_BREWER: the ramp's interpolation stops
-                                  * (direction= reversal applied at parse) */
+    /* FILL_BREWER interpolation stops (direction= reversal applied at parse).
+     * 12 = the largest ColorBrewer class count (Paired/Set3); sizing this 11
+     * dropped their 12th stop at compile (a warning) and made brewer_lookup's
+     * memcpy a buffer overflow — the 0.13.0 scale_colour_brewer segfault. */
+#define BREWER_MAX_STOPS 12
+    Col stops[BREWER_MAX_STOPS]; int nstops;
 } FillScale;
 Col fill_map(const FillScale *fs, double t01);   /* t in [0,1] */
 /* named ColorBrewer palette -> its max-class stops (from RColorBrewer).
@@ -424,6 +428,8 @@ typedef struct {
     char *facet_var;
     char **facet_levels; int n_facet_levels;      /* facet_wrap(~v, levels=c(...)) */
     int free_x, free_y;                           /* facet_wrap(scales=): per-panel ranges */
+    int free_colour;                              /* scales="free_colour": each facet builds
+                                                   * its own colour scale + legend block */
     int facet_ncol, facet_nrow;                   /* facet_wrap(ncol=/nrow=); 0 = auto */
     double x_angle, y_angle;                      /* scale_*_discrete(angle=); <0 = auto */
     int tree_layout;                              /* 0 rectangular, 1 slanted, 2 circular */

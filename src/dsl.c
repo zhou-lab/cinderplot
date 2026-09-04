@@ -626,7 +626,7 @@ static int parse_brewer_discrete(P *p, PlotSpec *spec) {
         if (*p->s == ',') { p->s++; skip_ws(p); }
     }
     if (!pname) return fail(p, "scale_*_brewer needs palette=\"...\"", "");
-    Col stops[11]; int nst, qual;
+    Col stops[BREWER_MAX_STOPS]; int nst, qual;
     if (brewer_lookup(pname, stops, &nst, &qual))
         return fail(p, "unknown ColorBrewer palette `%s` (e.g. Set1, Set2, "
                     "Dark2, Paired)", pname);
@@ -669,11 +669,16 @@ static int parse_manual_scale(P *p, PlotSpec *spec, const char *fn) {
             char *cv = string_lit(p); Col c;
             if (!cv || parse_color(cv, &c)) { free(nm); return fail(p, "bad colour in values=c(...)", ""); }
             free(cv);
-            if (spec->n_manual < 16) {
-                spec->manual_cols[spec->n_manual] = c;
-                spec->manual_names[spec->n_manual] = nm;
-                spec->n_manual++;
-            } else free(nm);
+            if (spec->n_manual >= 64) {
+                free(nm);
+                /* dropping the excess silently painted level 17 grey (or,
+                 * before the positional-shortfall check, in another level's
+                 * colour) with no warning -- the wrong-figure class. */
+                return fail(p, "values=c(...) holds at most 64 colours", "");
+            }
+            spec->manual_cols[spec->n_manual] = c;
+            spec->manual_names[spec->n_manual] = nm;
+            spec->n_manual++;
             skip_ws(p);
             if (*p->s == ',') { p->s++; continue; }
             if (*p->s == ')') { p->s++; break; }
@@ -1175,6 +1180,14 @@ static int parse_term(P *p, PlotSpec *spec) {
     if (!strcmp(name, "scale_fill_brewer") || !strcmp(name, "scale_colour_brewer")
         || !strcmp(name, "scale_color_brewer"))
         return parse_brewer_discrete(p, spec);
+    if (!strcmp(name, "scale_fill_identity") || !strcmp(name, "scale_colour_identity")
+        || !strcmp(name, "scale_color_identity")) {
+        /* the mapped column's values are the colours themselves — the
+         * stopgap for one figure wanting several colour meanings until real
+         * plot composition exists */
+        spec->identity_scale = 1;
+        return expect(p, ')');
+    }
     if (!strncmp(name, "scale_fill_", 11)) {
         spec->has_fill = 1;
         return parse_grad_scale(p, &spec->fill, name + 11, "scale_fill_");
@@ -1294,7 +1307,14 @@ static int parse_term(P *p, PlotSpec *spec) {
                 else if (!strcmp(v, "free_x")) { spec->free_x = 1; spec->free_y = 0; }
                 else if (!strcmp(v, "free_y")) { spec->free_x = 0; spec->free_y = 1; }
                 else if (!strcmp(v, "free"))   { spec->free_x = 1; spec->free_y = 1; }
-                else return fail(p, "scales=%s invalid; use fixed, free_x, free_y, or free", v);
+                else if (!strcmp(v, "free_colour") || !strcmp(v, "free_color")) {
+                    /* each facet builds its own colour scale and legend block
+                     * — one figure, several colour meanings (no ggplot2
+                     * equivalent; patchwork territory) */
+                    spec->free_x = 0; spec->free_y = 0; spec->free_colour = 1;
+                }
+                else return fail(p, "scales=%s invalid; use fixed, free_x, "
+                                 "free_y, free, or free_colour", v);
             } else return fail(p, "facet_wrap() option `%s` not implemented; "
                                "supported: levels=c(...), scales=, ncol=, nrow=", key);
             free(key);
@@ -1392,11 +1412,44 @@ static int parse_term(P *p, PlotSpec *spec) {
             if (!ok) { fail(p, "guides() supports colour=, color=, fill=, size=", ""); free(key); return -1; }
             free(key);
             skip_ws(p);
-            char *v = *p->s == '"' ? string_lit(p) : ident(p);  /* "none" or bare none */
-            if (!v) return fail(p, "guides() values must be \"none\"", "");
-            if (strcmp(v, "none")) { free(v); return fail(p, "guides() supports only \"none\"", ""); }
-            free(v);
-            spec->no_legend = 1;
+            char *v = *p->s == '"' ? string_lit(p) : ident(p);  /* "none" / guide_legend */
+            if (!v) return fail(p, "guides() values must be \"none\" or guide_legend(...)", "");
+            if (!strcmp(v, "guide_legend")) {
+                /* guide_legend(ncol=N) / (nrow=N): fold a long discrete
+                 * legend over columns, column-major as in ggplot2. nrow=
+                 * caps the rows instead — under scales="free_colour" each
+                 * block then derives its own column count, which is what a
+                 * 4/6/10-level trio wants. */
+                free(v);
+                skip_ws(p);
+                if (*p->s != '(') return fail(p, "guide_legend expects (ncol=N) or (nrow=N)", "");
+                p->s++;
+                skip_ws(p);
+                while (*p->s != ')') {
+                    char *gk = ident(p);
+                    if (!gk || expect(p, '=')) return fail(p, "bad guide_legend() argument", "");
+                    char *end;
+                    double n2 = strtod(p->s, &end);
+                    if (end == p->s || n2 < 1 || n2 != (int)n2)
+                        return fail(p, "guide_legend %s= expects a positive integer", gk);
+                    p->s = end;
+                    if (!strcmp(gk, "ncol")) spec->legend_ncol = (int)n2;
+                    else if (!strcmp(gk, "nrow")) spec->legend_nrow = (int)n2;
+                    else return fail(p, "guide_legend option `%s` not implemented "
+                                     "(ncol=, nrow=)", gk);
+                    skip_ws(p);
+                    if (*p->s == ',') { p->s++; skip_ws(p); }
+                }
+                p->s++;
+                if (spec->legend_ncol && spec->legend_nrow)
+                    return fail(p, "guide_legend: give ncol= or nrow=, not both", "");
+            } else if (!strcmp(v, "none")) {
+                free(v);
+                spec->no_legend = 1;
+            } else {
+                free(v);
+                return fail(p, "guides() supports \"none\" or guide_legend(ncol=/nrow=)", "");
+            }
             skip_ws(p);
             if (*p->s == ',') { p->s++; skip_ws(p); }
         }

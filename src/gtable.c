@@ -520,8 +520,12 @@ void gt_render(GTable *t, cairo_t *cr) {
             break;
         }
         case G_TABLE: {
+            /* sub=1 top-aligns the child in its cell (a row of per-panel
+             * legend blocks reads ragged when each centres on its own
+             * height); default stays centred, as the margin legends want. */
             double cw = gt_fixed_w(g->child), ch = gt_fixed_h(g->child);
-            gt_resolve(g->child, rx + (rw - cw) / 2, ry + (rh - ch) / 2, cw, ch);
+            gt_resolve(g->child, rx + (rw - cw) / 2,
+                       g->sub ? ry : ry + (rh - ch) / 2, cw, ch);
             gt_render(g->child, cr);
             break;
         }

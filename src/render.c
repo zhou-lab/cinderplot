@@ -30,58 +30,72 @@ static double font_h(cairo_t *cr, double size) {
 
 static GTable *build_legend(cairo_t *cr, const Theme *th, const char *title, const Factor *f,
                             const Col *pal, int haspoint, int hasline, int hasbox, int hastext,
-                            const int *shapes) {
+                            const int *shapes, int ncol) {
     GTable *t = cp_xcalloc(1, sizeof(GTable));
-    double label_w = 0;
-    for (int i = 0; i < f->nlev; i++) {
-        double w = text_w(cr, SZ_AXIS_TEXT, f->levels[i]);
-        if (w > label_w) label_w = w;
+    if (ncol < 1) ncol = 1;
+    if (ncol > f->nlev) ncol = f->nlev;
+    int rows = (f->nlev + ncol - 1) / ncol;
+    /* column-major fill (ggplot guide_legend byrow=FALSE): entry i sits in
+     * column i/rows, row i%rows. Each column is [key][gap][labels-of-that-
+     * column's-width], with a gutter between columns. */
+    double *lw = cp_xmalloc(ncol * sizeof(double));
+    double total = 0;
+    for (int c = 0; c < ncol; c++) {
+        lw[c] = 0;
+        for (int i = c * rows; i < (c + 1) * rows && i < f->nlev; i++) {
+            double w = text_w(cr, SZ_AXIS_TEXT, f->levels[i]);
+            if (w > lw[c]) lw[c] = w;
+        }
+        total += KEY_SIZE + TXT_GAP + lw[c] + (c < ncol - 1 ? HALF_LINE : 0);
     }
     double title_w = text_w(cr, SZ_BASE, title);
-    if (title_w > KEY_SIZE + TXT_GAP + label_w)
-        label_w = title_w - KEY_SIZE - TXT_GAP;
+    if (title_w > total) lw[ncol - 1] += title_w - total;
 
-    t->ncol = 3;
-    t->colw[0] = upt(KEY_SIZE);
-    t->colw[1] = upt(TXT_GAP);
-    t->colw[2] = upt(label_w);
-    t->nrow = 2 + 2 * f->nlev - 1;
+    t->ncol = 4 * ncol - 1;
+    for (int c = 0; c < ncol; c++) {
+        t->colw[4 * c]     = upt(KEY_SIZE);
+        t->colw[4 * c + 1] = upt(TXT_GAP);
+        t->colw[4 * c + 2] = upt(lw[c]);
+        if (c < ncol - 1) t->colw[4 * c + 3] = upt(HALF_LINE);
+    }
+    free(lw);
+    t->nrow = 2 + 2 * rows - 1;
     t->rowh[0] = upt(font_h(cr, SZ_BASE));
     t->rowh[1] = upt(HALF_LINE);
-    for (int i = 0; i < f->nlev; i++) {
+    for (int i = 0; i < rows; i++) {
         t->rowh[2 + 2 * i] = upt(KEY_SIZE);
-        if (i < f->nlev - 1) t->rowh[3 + 2 * i] = upt(HALF_LINE * 0.4);
+        if (i < rows - 1) t->rowh[3 + 2 * i] = upt(HALF_LINE * 0.4);
     }
 
-    Grob *g = gt_add(t, G_TEXT, 0, 0, 0, 2);
+    Grob *g = gt_add(t, G_TEXT, 0, 0, 0, t->ncol - 1);
     g->str = title; g->size = SZ_BASE; g->col = th->title;
     g->tx = 0; g->ty = 1; g->hj = 0; g->va = V_TOP;
     static const double half = 0.5;
     for (int i = 0; i < f->nlev; i++) {
-        int r = 2 + 2 * i;
-        if (th->key_bg_on) { g = gt_add(t, G_RECT, r, 0, r, 0); g->col = th->key_bg; }
+        int r = 2 + 2 * (i % rows), kc = 4 * (i / rows);
+        if (th->key_bg_on) { g = gt_add(t, G_RECT, r, kc, r, kc); g->col = th->key_bg; }
         if (hasbox) {
-            g = gt_add(t, G_RECT, r, 0, r, 0);
+            g = gt_add(t, G_RECT, r, kc, r, kc);
             g->col = pal[i]; g->sub = 1;
             g->x0 = 0.15; g->x1 = 0.85; g->y0 = 0.15; g->y1 = 0.85;
         }
         if (hasline) {
-            g = gt_add(t, G_LINE, r, 0, r, 0);
+            g = gt_add(t, G_LINE, r, kc, r, kc);
             g->col = pal[i]; g->lw = lw_pt(0.5);
             g->x0 = 0.1; g->x1 = 0.9; g->y0 = g->y1 = 0.5;
         }
         if (haspoint) {
-            g = gt_add(t, G_POINTS, r, 0, r, 0);
+            g = gt_add(t, G_POINTS, r, kc, r, kc);
             g->n = 1; g->px = &half; g->py = &half;
             g->pcol = &pal[i]; g->radius = PT_RADIUS;
             if (shapes) g->shape = shapes[i];   /* the key IS the glyph here */
         }
         if (hastext) {                       /* geom_text/geom_label key: a letter */
-            g = gt_add(t, G_TEXT, r, 0, r, 0);
+            g = gt_add(t, G_TEXT, r, kc, r, kc);
             g->str = "a"; g->size = SZ_AXIS_TEXT; g->col = pal[i];
             g->tx = 0.5; g->ty = 0.5; g->hj = 0.5; g->va = V_INKCENTER;
         }
-        g = gt_add(t, G_TEXT, r, 2, r, 2);
+        g = gt_add(t, G_TEXT, r, kc + 2, r, kc + 2);
         g->str = f->levels[i]; g->size = SZ_AXIS_TEXT; g->col = th->title;
         g->tx = 0; g->ty = 0.5; g->hj = 0; g->va = V_INKCENTER;
     }
@@ -670,6 +684,11 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 return -1;
             }
         }
+    }
+    if (spec->identity_scale && cont_col) {
+        snprintf(err, CP_ERRLEN, "scale_*_identity needs a text column of "
+                 "colour names/#RRGGBB values mapped to colour/fill");
+        return -1;
     }
     if (hasbar && cont_col) {
         /* geom_col() takes a continuous fill (each bar mapped through the
@@ -1799,6 +1818,78 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     }
     double band_h = nann ? ANN_PAD + nann * ANN_STRIP + (nann - 1) * ANN_GAP : 0;
 
+    /* ---- facet_wrap(scales="free_colour"): each facet owns its colour
+     * scale. One figure, several colour meanings — the same cells coloured
+     * by origin in one panel and by patient in the next — with one legend
+     * block per panel, titled by the panel's name. Per-panel palettes live
+     * in fc_pal[p * cf->nlev + level]; levels absent from a panel stay NA
+     * (never drawn). ---- */
+    Col *fc_pal = NULL;
+    GTable *fc_leg[12] = {0};        /* free_colour, single facet row: the
+                                      * per-panel legend blocks */
+    if (spec->free_colour) {
+        if (!ff) {
+            snprintf(err, CP_ERRLEN, "scales=\"free_colour\" frees the colour "
+                     "scale per facet and needs facet_wrap()");
+            return -1;
+        }
+        if (!cf) {
+            snprintf(err, CP_ERRLEN, "scales=\"free_colour\" needs a discrete "
+                     "colour/fill aesthetic (a continuous one has a single "
+                     "shared ramp)");
+            return -1;
+        }
+        if (spec->identity_scale) {
+            snprintf(err, CP_ERRLEN, "scales=\"free_colour\" does nothing "
+                     "under scale_*_identity(); drop one of them");
+            return -1;
+        }
+        if (npan > 12) {
+            snprintf(err, CP_ERRLEN, "scales=\"free_colour\" draws one legend "
+                     "per facet and supports at most 12 facets (%d given)", npan);
+            return -1;
+        }
+        int named = spec->has_manual && spec->n_manual > 0
+                  && spec->manual_names[0] != NULL;
+        fc_pal = cp_xmalloc((size_t)npan * cf->nlev * sizeof(Col));
+        for (int i = 0; i < npan * cf->nlev; i++) fc_pal[i] = C_NA;
+        int *present = cp_xmalloc(cf->nlev * sizeof(int));
+        Col *tmp = cp_xmalloc(cf->nlev * sizeof(Col));
+        for (int p = 0; p < npan; p++) {
+            int k = 0;
+            for (int l = 0; l < cf->nlev; l++) {
+                int seen = 0;
+                for (int rr = 0; rr < df->nrow; rr++)
+                    if (use[rr] && ff->idx[rr] == p && cf->idx[rr] == l)
+                        { seen = 1; break; }
+                if (seen) present[k++] = l;
+            }
+            if (!named && (spec->has_manual || spec->brewer_disc)
+                && k > spec->n_manual) {
+                snprintf(err, CP_ERRLEN, "facet `%s` has %d colour levels but "
+                         "the %s gives %d", ff->levels[p], k,
+                         spec->brewer_disc ? "palette" : "values= list",
+                         spec->n_manual);
+                return -1;
+            }
+            if (!spec->has_manual && !spec->brewer_disc) hue_palette(k, tmp);
+            for (int j = 0; j < k; j++) {
+                int l = present[j];
+                Col c2 = C_NA;
+                if (named) {
+                    for (int m2 = 0; m2 < spec->n_manual; m2++)
+                        if (spec->manual_names[m2]
+                            && !strcmp(spec->manual_names[m2], cf->levels[l]))
+                            { c2 = spec->manual_cols[m2]; break; }
+                } else if (spec->has_manual || spec->brewer_disc) {
+                    c2 = spec->manual_cols[j];   /* positional, per panel */
+                } else c2 = tmp[j];
+                fc_pal[(size_t)p * cf->nlev + l] = c2;
+            }
+        }
+        free(present); free(tmp);
+    }
+
     Col *pal = NULL;
     GTable *leg = NULL;
     const char *col_title = spec->lab_colour ? spec->lab_colour : spec->colour.expr;
@@ -1808,7 +1899,29 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     GTable *guides[3 + MAX_HMOBJS]; int nguide = 0;
     if (cf) {
         pal = cp_xmalloc(cf->nlev * sizeof(Col));
-        if (spec->brewer_disc && cf->nlev > spec->n_manual) {
+        if (spec->identity_scale) {
+            /* the level string is the colour (ggplot's scale_*_identity):
+             * a hex/name column paints itself, and there is no legend --
+             * the colours state nothing beyond themselves. */
+            for (int i = 0; i < cf->nlev; i++)
+                if (parse_color(cf->levels[i], &pal[i])) {
+                    snprintf(err, CP_ERRLEN, "scale_*_identity: level `%s` of "
+                             "`%s` is not a colour (use names or #RRGGBB)",
+                             cf->levels[i], spec->colour.col);
+                    return -1;
+                }
+        } else if (spec->has_manual && !spec->brewer_disc
+            && spec->n_manual > 0 && spec->manual_names[0] == NULL
+            && cf->nlev > spec->n_manual) {
+            /* a positional list shorter than the factor painted the tail
+             * levels NA-grey with no warning; like the brewer sets, say it. */
+            snprintf(err, CP_ERRLEN, "scale_*_manual gives %d colours; `%s` "
+                     "has %d levels", spec->n_manual, spec->colour.col,
+                     cf->nlev);
+            return -1;
+        }
+        if (spec->brewer_disc && !spec->free_colour
+            && cf->nlev > spec->n_manual) {
             /* scale_*_manual tolerates a short positional list (grey fill),
              * but a named Brewer set running out would silently grey the tail
              * levels -- say it instead. */
@@ -1828,14 +1941,48 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 } else if (i < spec->n_manual) c = spec->manual_cols[i];
                 pal[i] = c;
             }
-        } else hue_palette(cf->nlev, pal);
+        } else if (!spec->identity_scale) hue_palette(cf->nlev, pal);
         /* The palette is still built when the legend is suppressed -- the marks
-         * and bars are coloured from it; only the guide is dropped. */
-        if (!spec->no_legend)
+         * and bars are coloured from it; only the guide is dropped. An
+         * identity scale never draws one: the colours state nothing beyond
+         * themselves (ggplot's guide = "none" default for identity). */
+        if (spec->free_colour && !spec->no_legend) {
+            /* one legend block per facet, titled by the facet's name, keyed
+             * to that facet's own palette and level subset. With the facets
+             * in ONE ROW, each block goes in a legend row directly under its
+             * own panel (the patchwork look); multi-row facet grids fall
+             * back to the shared right-margin stack. */
+            for (int p = 0; p < npan; p++) {
+                int k = 0;
+                char **lv = cp_xmalloc(cf->nlev * sizeof(char *));
+                Col *pc2 = cp_xmalloc(cf->nlev * sizeof(Col));
+                for (int l = 0; l < cf->nlev; l++) {
+                    Col c2 = fc_pal[(size_t)p * cf->nlev + l];
+                    if (c2.r == C_NA.r && c2.g == C_NA.g && c2.b == C_NA.b)
+                        continue;                /* level absent from panel */
+                    lv[k] = cf->levels[l]; pc2[k] = c2; k++;
+                }
+                if (!k) { free(lv); free(pc2); continue; }
+                Factor pf = { k, lv, NULL };
+                int nc2 = spec->legend_ncol ? spec->legend_ncol
+                        : spec->legend_nrow
+                        ? (k + spec->legend_nrow - 1) / spec->legend_nrow : 1;
+                GTable *lg = build_legend(cr, th, ff->levels[p], &pf, pc2,
+                                   haspoint, hasline || hasseg || hasdens,
+                                   hasbox || hasbar || hascol || hasrect || hastile,
+                                   hastext, NULL, nc2);
+                if (nrowp == 1) fc_leg[p] = lg;
+                else guides[nguide++] = lg;
+            }
+        } else if (!spec->no_legend && !spec->identity_scale) {
+            int nc2 = spec->legend_ncol ? spec->legend_ncol
+                    : spec->legend_nrow
+                    ? (cf->nlev + spec->legend_nrow - 1) / spec->legend_nrow : 1;
             guides[nguide++] = build_legend(cr, th, col_title, cf, pal, haspoint,
                                hasline || hasseg || hasdens,
                                hasbox || hasbar || hascol || hasrect || hastile,
-                               hastext, NULL);   /* bars/tiles key as filled boxes */
+                               hastext, NULL, nc2);   /* bars/tiles key as filled boxes */
+        }
     } else if (cont_col && !spec->no_legend) {
         guides[nguide++] = build_colorbar_legend(cr, th, col_title, &cscale, cdmin, cdmax);
     }
@@ -1856,13 +2003,18 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         int *sidx = cp_xmalloc(shf->nlev * sizeof(int));
         for (int i = 0; i < shf->nlev; i++) { spal[i] = C_BLACK; sidx[i] = i; }
         const char *sh_title = spec->shape.expr;
-        guides[nguide++] = build_legend(cr, th, sh_title, shf, spal, 1, 0, 0, 0, sidx);
+        guides[nguide++] = build_legend(cr, th, sh_title, shf, spal, 1, 0, 0, 0, sidx, 1);
     }
     for (int a = 0; a < nann; a++)               /* annotation band keys */
         if (!spec->no_legend)
             guides[nguide++] = build_legend(cr, th, anns[a].title, anns[a].f,
-                                            anns[a].apal, 0, 0, 1, 0, NULL);
+                                            anns[a].apal, 0, 0, 1, 0, NULL, 1);
     if (nguide) leg = stack_guides(guides, nguide);
+    double fc_leg_h = 0;             /* per-panel legend row height (free_colour) */
+    for (int p = 0; p < npan && p < 12; p++)
+        if (fc_leg[p] && gt_fixed_h(fc_leg[p]) > fc_leg_h)
+            fc_leg_h = gt_fixed_h(fc_leg[p]);
+    if (fc_leg_h > 0) fc_leg_h += HALF_LINE;
 
     /* ---- outer table ---- */
     GTable *T = cp_xcalloc(1, sizeof(GTable));
@@ -1900,7 +2052,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     T->colw[T->ncol - 2] = upt(leg ? gt_fixed_w(leg) : 0);
     T->colw[T->ncol - 1] = upt(MARGIN);
 
-    T->nrow = 4 * nrowp + 6;
+    T->nrow = 4 * nrowp + 6 + (fc_leg_h > 0 ? 1 : 0);
     T->rowh[0] = upt(MARGIN);
     T->rowh[1] = upt(spec->lab_title ? font_h(cr, SZ_TITLE) : 0);
     T->rowh[2] = upt(spec->lab_subtitle ? font_h(cr, SZ_BASE)
@@ -1931,9 +2083,18 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                           + (spec->lab_title ? font_h(cr, SZ_TITLE) : 0);
             h_pt = chrome + nrowp * (panelh + striph + band_h)
                  + (nrowp - 1) * PANEL_SPACE;
+            /* a tall legend stack (many discrete levels) sizes the canvas
+             * too — it used to overflow the top and clip its first entries */
+            if (leg) h_pt = fmax(h_pt, gt_fixed_h(leg) + 4 * MARGIN);
+            h_pt += fc_leg_h;        /* per-panel legend row (free_colour) */
             h_pt = fmin(30.0 * 72, fmax(4.0 * 72, h_pt));
         }
     }
+    if (leg && gt_fixed_h(leg) > h_pt)
+        fprintf(stderr, "cinderplot: warning: the legend stack needs %.1fin of "
+                "a %.1fin figure and will clip; give a taller --size, drop it "
+                "with guides(colour=\"none\"), or reduce the levels\n",
+                gt_fixed_h(leg) / 72, h_pt / 72);
 
     if (autosize) {          /* size settled: open the real surface */
         cairo_destroy(cr); cairo_surface_destroy(msurf);
@@ -2002,10 +2163,12 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                                              : PANEL_SPACE);
     }
     int r_axis = 4 * nrowp + 2;
+    int r_last = r_axis + 3 + (fc_leg_h > 0 ? 1 : 0);   /* caption/margin row */
     T->rowh[r_axis]     = upt(TICK_LEN + TXT_GAP + blab_h);
     T->rowh[r_axis + 1] = upt(HALF_LINE / 2);
     T->rowh[r_axis + 2] = upt(baseh);
-    T->rowh[r_axis + 3] = upt(spec->lab_caption ? fmax(MARGIN, font_h(cr, SZ_AXIS_TEXT)) : MARGIN);
+    if (fc_leg_h > 0) T->rowh[r_axis + 3] = upt(fc_leg_h);
+    T->rowh[r_last] = upt(spec->lab_caption ? fmax(MARGIN, font_h(cr, SZ_AXIS_TEXT)) : MARGIN);
 
     /* ---- static text & legend ---- */
     Grob *g;
@@ -2020,7 +2183,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         g->tx = 0; g->ty = 1; g->hj = 0; g->va = V_TOP;
     }
     if (spec->lab_caption) {
-        g = gt_add(T, G_TEXT, r_axis + 3, PC(0), r_axis + 3, PC(ncolp - 1));
+        g = gt_add(T, G_TEXT, r_last, PC(0), r_last, PC(ncolp - 1));
         g->str = spec->lab_caption; g->size = SZ_AXIS_TEXT; g->col = th->title;
         g->tx = 1; g->ty = 1; g->hj = 1; g->va = V_TOP;
     }
@@ -2036,6 +2199,11 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         g = gt_add(T, G_TABLE, SR(0), T->ncol - 2, PR(nrowp - 1), T->ncol - 2);
         g->child = leg;
     }
+    for (int p = 0; p < npan && p < 12; p++)
+        if (fc_leg[p]) {
+            g = gt_add(T, G_TABLE, r_axis + 3, PC(p % ncolp), r_axis + 3, PC(p % ncolp));
+            g->child = fc_leg[p]; g->sub = 1;   /* top-align the row */
+        }
 
     /* panel cell size in points (all panels share it — every panel row/col has
      * null weight 1), for label repel which works in physical units */
@@ -2060,6 +2228,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         const PanelScale *S = &ps[p];
         x0 = S->x0; x1 = S->x1; y0 = S->y0; y1 = S->y1;
         xmap = S->xmap; ymap = S->ymap;
+        /* free_colour: shadow the palette with this panel's own, so every
+         * colour lookup below (points, lines, bars, boxes) follows the
+         * panel without being told — the same trick the ranges use above. */
+        if (fc_pal) pal = fc_pal + (size_t)p * cf->nlev;
 
         if (ff) {
             if (th->strip_bg_on) { g = gt_add(T, G_RECT, SR(pr), C, SR(pr), C); g->col = th->strip_bg; }
