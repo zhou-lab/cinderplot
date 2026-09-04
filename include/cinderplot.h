@@ -273,6 +273,10 @@ void cp_point_path(cairo_t *cr, int shape, double cx, double cy, double r);
 typedef struct {
     char *col; int is_factor; char *expr;
     char **levels; int nlevels;
+    int is_fill;         /* the colour aes only: written as fill= (not colour=).
+                          * geom_boxplot() renders the two differently, as
+                          * ggplot2 does: fill= colours the box body, colour=
+                          * the outline. */
 } AesEntry;
 
 typedef enum { GEOM_POINT, GEOM_JITTER, GEOM_LINE, GEOM_COL, GEOM_HISTOGRAM, GEOM_BOXPLOT, GEOM_BAR,

@@ -154,7 +154,10 @@ static int parse_aes(P *p, PlotSpec *spec) {
             else if (!strcmp(key, "size")) e = &spec->size;
             else if (!strcmp(key, "shape")) e = &spec->shape;
             else if (!strcmp(key, "colour") || !strcmp(key, "color")
-                  || !strcmp(key, "fill")) e = &spec->colour;
+                  || !strcmp(key, "fill")) {
+                e = &spec->colour;
+                spec->colour.is_fill = key[0] == 'f';
+            }
             else return fail(p, "aes(%s=...) is not implemented; supported: x, y, xend, yend, label, size, shape, chrom, colour, fill", key);
             free(key);
         } else {

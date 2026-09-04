@@ -2591,7 +2591,16 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         double center = (cat + 1) - WFULL / 2 + slotw * (s + 0.5);
                         double xl = NPCX(center - boxw / 2), xr = NPCX(center + boxw / 2);
                         double xm = NPCX(center);
-                        Col lc = cf ? pal[box_slots > 1 ? s : anyg] : C_TICK;
+                        /* aes(fill=) colours the box BODY and keeps ggplot's
+                         * dark chrome (outline, whiskers, median, outliers);
+                         * aes(colour=) colours the chrome over a white body.
+                         * One shared aes carries both spellings, so the
+                         * recorded spelling decides — writing fill= used to
+                         * silently render the colour= look. */
+                        Col grpc = cf ? pal[box_slots > 1 ? s : anyg] : C_TICK;
+                        int fillbox = cf && spec->colour.is_fill;
+                        Col lc = fillbox ? C_TICK : grpc;
+                        Col body = fillbox ? grpc : C_WHITE;
 
                         for (int w = 0; w < 2; w++) {    /* whiskers */
                             g = gt_add(T, G_LINE, R, C, R, C);
@@ -2599,8 +2608,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                             g->x0 = g->x1 = xm;
                             g->y0 = NPCY(w ? b.q1 : b.q3); g->y1 = NPCY(w ? b.wlo : b.whi);
                         }
-                        g = gt_add(T, G_RECT, R, C, R, C);   /* white fill */
-                        g->col = C_WHITE; g->sub = 1; g->clip = 1;
+                        g = gt_add(T, G_RECT, R, C, R, C);   /* box body */
+                        g->col = body; g->sub = 1; g->clip = 1;
                         g->x0 = xl; g->x1 = xr; g->y0 = NPCY(b.q1); g->y1 = NPCY(b.q3);
                         g = gt_add(T, G_RECT, R, C, R, C);   /* box outline */
                         g->col = lc; g->sub = 1; g->stroke = 1; g->lw = lw_pt(0.5); g->clip = 1;
