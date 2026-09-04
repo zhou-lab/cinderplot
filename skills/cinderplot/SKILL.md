@@ -117,6 +117,17 @@ for.
   text paired 1:1 with `breaks=c(...)` (mismatched lengths error), so a
   category label row can BE a numeric axis. `xlim()` `ylim()`
   `scale_*_manual(values=c(...))`
+  `scale_(fill|colour)_distiller(palette="YlOrBr"[, direction=][, limits=])` —
+  any named ColorBrewer sequential/diverging ramp (YlOrBr, YlGnBu, Blues,
+  Greys, RdBu, Spectral, ...), stops taken verbatim from RColorBrewer.
+  `direction` follows ggplot2: the default -1 puts the LIGHT end at high
+  values; `direction=1` reads the palette as printed (light low, dark high),
+  which is usually what a light-to-dark manuscript figure wants.
+  `scale_(fill|colour)_brewer(palette="Set2")` — a qualitative Brewer set for
+  a discrete aesthetic (Set1/2/3, Dark2, Paired, ...); errors when the factor
+  has more levels than the set has colours. Each errors if handed the other
+  kind of palette, because a sequential palette's n-class subsets are not its
+  first n colours.
   `scale_(fill|colour)_*()` continuous palettes: `viridis magma inferno plasma
   cividis rocket mako` (perceptually uniform; `cividis` is also colour-blind and
   greyscale safe), `parula` (the lab default for methylation beta), `turbo` (a
