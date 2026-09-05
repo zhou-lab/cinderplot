@@ -220,7 +220,14 @@ sets apply per facet. The use: one figure, same points, three colour
 meanings. `guides(colour=guide_legend(ncol=N))` folds a long discrete legend
 over N columns, column-major; `nrow=N` caps the rows instead, and under
 free_colour each block then derives its own column count (a 4/6/10-level trio
-with nrow=6 folds only the 10). A
+with nrow=6 folds only the 10). Without either, blocks now AUTO-fold to as
+many columns as fit their panel's width. `labs(colour="")` drops the block
+titles when they would duplicate the strips, and
+`theme(legend.position="inside", legend.position.inside=c(x, y))` anchors
+each block inside its own panel at those npc coordinates (default lower
+right) — no legend row at all, the manuscript ladder-panel look. The same
+theme() pair places a single unfaceted legend inside its panel; every other
+theme() key still errors (presets only). A
 freed axis is trained per panel; the axis you did not free stays shared. On a
 discrete axis a panel drops the categories it has no rows for and renumbers the
 rest, so column 3 means a different thing in each panel — that is ggplot2's
