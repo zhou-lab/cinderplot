@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <strings.h>   /* strcasecmp */
 
 /* The figure font, read by every cairo_select_font_face() site across the
  * four modes; --font FAMILY overrides it below. */
@@ -71,6 +72,8 @@ static void print_help(void) {
     printf("    %s--size%s WxH     inches; a partial %sWx%s or %sxH%s auto-fits the other axis %s(omit = auto)%s\n", G, R, K, R, K, R, D, R);
     printf("    %s--dpi%s N        raster density for %s.png%s %s(default 96)%s\n", G, R, K, R, D, R);
     printf("    %s--font%s FAMILY  figure font, all modes %s(default Arial; warns if not found)%s\n", G, R, D, R);
+    printf("    %s--editable-svg%s labels as %s<text>%s elements (svglite-style, retypable in Inkscape;\n", G, R, K, R);
+    printf("                   %sCINDERPLOT_EDITABLE_SVG=1 makes it your default; --outline-svg overrides)%s\n", D, R);
     printf("    %s--no-header%s    headerless input — columns become %sV1, V2, …%s %s(R style)%s\n", G, R, K, R, D, R);
     printf("    %s--no-legend%s    drop the colour/fill/size guide %s(same as guides(colour=\"none\"))%s\n", G, R, D, R);
     printf("    %s-x -y -c -f -t -m --log%s   shortcut flags that desugar to the grammar\n", G, R);
@@ -165,7 +168,7 @@ int main(int argc, char **argv) {
     const char *fm = "point", *flog = NULL, *fregion = NULL;
     const char *pos[8]; int npos = 0;                     /* bare positionals */
     double w_in = 0, h_in = 0, dpi = 96;   /* 0 = auto-fit that axis */
-    int dump = 0, no_legend = 0;
+    int dump = 0, no_legend = 0, editable_svg = 0, outline_svg = 0;
 
     if (argc == 1) { print_help(); return 0; }   /* bare invocation -> full help */
 
@@ -206,6 +209,8 @@ int main(int argc, char **argv) {
             }
         }
         else if (!strcmp(a, "--font") && i + 1 < argc) cp_font_family = argv[++i];
+        else if (!strcmp(a, "--editable-svg")) editable_svg = 1;
+        else if (!strcmp(a, "--outline-svg")) outline_svg = 1;
         else if (!strcmp(a, "--dump-spec")) dump = 1;
         else if (!strcmp(a, "--no-header") || !strcmp(a, "-H")) cp_set_no_header(1);
         else if (!strcmp(a, "--no-legend")) no_legend = 1;
@@ -226,13 +231,6 @@ int main(int argc, char **argv) {
         else if (npos < 8) pos[npos++] = a;
     }
 
-    /* Warn — once, up front — when --font names a family the backend cannot
-     * find, because Cairo will substitute its default without a word. */
-    if (strcmp(cp_font_family, FONT_FAMILY_DEFAULT) && !font_resolves(cp_font_family))
-        fprintf(stderr, "cinderplot: warning: font family \"%s\" not found; "
-                "the font backend substituted its default (fc-list shows the "
-                "families it knows)\n", cp_font_family);
-
     /* Resolve output + primary data from bare positionals. Output is required:
      * -o wins, else the LAST positional. A remaining leading positional is the
      * (flag-mode) data file. In DSL mode the data lives in the expression, so
@@ -243,6 +241,42 @@ int main(int argc, char **argv) {
         fprintf(stderr, "cinderplot: no output file — give -o FILE or a trailing FILENAME\n%s", USAGE);
         return 1;
     }
+
+    /* Editable SVG text is chosen three ways: --editable-svg for one run,
+     * CINDERPLOT_EDITABLE_SVG=1 in the environment as a personal default
+     * (set once in ~/.bashrc by the Inkscape-bound), or --outline-svg to
+     * override that env var for a single render. The TOOL default stays
+     * Cairo's glyph outlines: an embedded or published SVG must render
+     * identically without the font installed, and a default that depends on
+     * who is logged in would make two machines disagree about the same
+     * command. The env var is ambient, so it is silently inert on non-svg
+     * outputs; the explicit flags on a non-svg output error. */
+    {
+        const char *dot = out ? strrchr(out, '.') : NULL;
+        int is_svg = dot && !strcasecmp(dot, ".svg");
+        const char *ev = getenv("CINDERPLOT_EDITABLE_SVG");
+        int env_on = ev && *ev && strcmp(ev, "0");
+        if (editable_svg && outline_svg) {
+            fprintf(stderr, "cinderplot: --editable-svg and --outline-svg "
+                    "contradict each other\n");
+            return 1;
+        }
+        if ((editable_svg || outline_svg) && !is_svg) {
+            fprintf(stderr, "cinderplot: %s needs an .svg output\n",
+                    editable_svg ? "--editable-svg" : "--outline-svg");
+            return 1;
+        }
+        if (is_svg && !outline_svg && (editable_svg || env_on))
+            cp_set_svg_text(1);
+    }
+
+    /* Warn — once, up front — when --font names a family the backend cannot
+     * find, because Cairo will substitute its default without a word. */
+    if (strcmp(cp_font_family, FONT_FAMILY_DEFAULT) && !font_resolves(cp_font_family))
+        fprintf(stderr, "cinderplot: warning: font family \"%s\" not found; "
+                "the font backend substituted its default (fc-list shows the "
+                "families it knows)\n", cp_font_family);
+
 
     char buf[4096];
     if (!expr) {

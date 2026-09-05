@@ -38,7 +38,7 @@ static GTable *build_legend(cairo_t *cr, const Theme *th, const char *title, con
     /* column-major fill (ggplot guide_legend byrow=FALSE): entry i sits in
      * column i/rows, row i%rows. Each column is [key][gap][labels-of-that-
      * column's-width], with a gutter between columns. */
-    double *lw = cp_xmalloc(ncol * sizeof(double));
+    double *lw = cp_xcalloc(ncol, sizeof(double));
     double total = 0;
     for (int c = 0; c < ncol; c++) {
         lw[c] = 0;

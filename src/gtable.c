@@ -11,6 +11,90 @@
 static double g_dpi = 96;                       /* PNG raster resolution */
 void cp_set_dpi(double dpi) { if (dpi > 0) g_dpi = dpi; }
 
+/* ---- --editable-svg: text as <text>, not glyph outlines -------------------
+ * Cairo's SVG surface always vectorises glyphs, which is portable but not
+ * editable; svglite exists for the same reason on the R side. Under the
+ * flag, every string that would be shown is RECORDED here instead — its
+ * baseline start, size, colour, and the full CTM (so rotated labels carry
+ * one matrix() transform) — and injected as <text> elements before </svg>
+ * once Cairo has written the file. One element per label, a single x/y at
+ * the baseline: the property downstream tools choke on is per-glyph dx/dy
+ * lists, and none can occur by construction. */
+static int svg_text_on = 0;
+typedef struct { double x, y, size, m[6]; int has_m; Col col; char *str; } SvgTxt;
+static SvgTxt *svgt; static int nsvgt, csvgt;
+void cp_set_svg_text(int on) { svg_text_on = on; }
+
+/* record the string if the flag is on (caller then skips cairo); the colour
+ * is read back off the current source, so no call site needs plumbing */
+static int svg_show(cairo_t *cr, double x, double y, double size, const char *s) {
+    if (!svg_text_on) return 0;
+    cairo_matrix_t m; cairo_get_matrix(cr, &m);
+    double r, gg, b, a2;
+    if (cairo_pattern_get_rgba(cairo_get_source(cr), &r, &gg, &b, &a2)
+        != CAIRO_STATUS_SUCCESS) r = gg = b = 0;
+    if (nsvgt == csvgt) {
+        csvgt = csvgt ? 2 * csvgt : 64;
+        svgt = cp_xrealloc(svgt, csvgt * sizeof *svgt);
+    }
+    SvgTxt *t = &svgt[nsvgt++];
+    t->x = x; t->y = y; t->size = size;
+    t->has_m = !(m.xx == 1 && m.yx == 0 && m.xy == 0 && m.yy == 1
+                 && m.x0 == 0 && m.y0 == 0);
+    /* cos(90 deg) arrives as 6e-17; snap it so the matrix() reads clean
+     * for anyone hand-editing the file */
+    double mm[6] = { m.xx, m.yx, m.xy, m.yy, m.x0, m.y0 };
+    for (int i = 0; i < 6; i++) t->m[i] = fabs(mm[i]) < 1e-12 ? 0 : mm[i];
+    t->col.r = r; t->col.g = gg; t->col.b = b;
+    t->str = cp_xstrdup(s);
+    return 1;
+}
+
+static void svg_xml_escape(FILE *f, const char *s) {
+    for (; *s; s++)
+        if (*s == '&') fputs("&amp;", f);
+        else if (*s == '<') fputs("&lt;", f);
+        else if (*s == '>') fputs("&gt;", f);
+        else fputc(*s, f);
+}
+
+/* rewrite the finished SVG with the recorded labels ahead of </svg> */
+static int svg_inject_text(const char *out) {
+    FILE *f = fopen(out, "rb");
+    if (!f) return -1;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    char *buf = cp_xmalloc(n + 1);
+    if (fread(buf, 1, n, f) != (size_t)n) { fclose(f); free(buf); return -1; }
+    fclose(f);
+    buf[n] = 0;
+    char *tail = strstr(buf, "</svg>");
+    if (!tail) { free(buf); return -1; }
+    f = fopen(out, "wb");
+    if (!f) { free(buf); return -1; }
+    fwrite(buf, 1, tail - buf, f);
+    extern const char *cp_font_family;
+    for (int i = 0; i < nsvgt; i++) {
+        SvgTxt *t = &svgt[i];
+        fprintf(f, "<text x=\"%.2f\" y=\"%.2f\" font-family=\"%s\" "
+                "font-size=\"%.2f\" fill=\"#%02x%02x%02x\"",
+                t->x, t->y, cp_font_family, t->size,
+                (int)(t->col.r * 255 + 0.5), (int)(t->col.g * 255 + 0.5),
+                (int)(t->col.b * 255 + 0.5));
+        if (t->has_m)
+            fprintf(f, " transform=\"matrix(%g %g %g %g %g %g)\"",
+                    t->m[0], t->m[1], t->m[2], t->m[3], t->m[4], t->m[5]);
+        fputc('>', f);
+        svg_xml_escape(f, t->str);
+        fputs("</text>\n", f);
+    }
+    fputs(tail, f);
+    fclose(f);
+    free(buf);
+    return 0;
+}
+
 cairo_surface_t *cp_surface_create(const char *out, double w_pt, double h_pt) {
     const char *dot = strrchr(out, '.');
     if (dot && strcasecmp(dot, ".svg") == 0)
@@ -33,10 +117,18 @@ cairo_status_t cp_surface_emit(cairo_surface_t *surf, const char *out) {
         return cairo_surface_write_to_png(surf, out);
     }
     cairo_surface_finish(surf);
-    return cairo_surface_status(surf);
+    cairo_status_t st = cairo_surface_status(surf);
+    if (st == CAIRO_STATUS_SUCCESS && svg_text_on && nsvgt
+        && cairo_surface_get_type(surf) == CAIRO_SURFACE_TYPE_SVG
+        && svg_inject_text(out)) {
+        fputs("cinderplot: warning: --editable-svg could not rewrite the "
+              "file; labels are missing\n", stderr);
+    }
+    return st;
 }
 
 static void set_col(cairo_t *cr, Col c) { cairo_set_source_rgb(cr, c.r, c.g, c.b); }
+
 
 /* Layer colour honouring an alpha= mapping; alpha 0 means "unset", i.e. opaque,
  * so grobs that never set it behave exactly as before. */
@@ -74,17 +166,26 @@ double cp_label_w(cairo_t *cr, double size, const char *s) {
     cairo_set_font_size(cr, size);
     return w + e.x_advance;
 }
+static int svg_show(cairo_t *cr, double x, double y, double size, const char *s);
 static void draw_label(cairo_t *cr, double bx, double by, double size, const char *s) {
     const char *car = strchr(s, '^');
     cairo_set_font_size(cr, size);
-    if (!car) { cairo_move_to(cr, bx, by); cairo_show_text(cr, s); return; }
+    if (!car) {
+        if (svg_show(cr, bx, by, size, s)) return;
+        cairo_move_to(cr, bx, by); cairo_show_text(cr, s); return;
+    }
     char base[32]; int bl = (int)(car - s); if (bl > 31) bl = 31;
     memcpy(base, s, bl); base[bl] = 0;
     cairo_text_extents_t e; cairo_text_extents(cr, base, &e);
-    cairo_move_to(cr, bx, by); cairo_show_text(cr, base);
+    if (!svg_show(cr, bx, by, size, base)) {
+        cairo_move_to(cr, bx, by); cairo_show_text(cr, base);
+    }
     cairo_set_font_size(cr, size * SUP_SCALE);
-    cairo_move_to(cr, bx + e.x_advance, by - size * SUP_RISE);
-    cairo_show_text(cr, car + 1);
+    if (!svg_show(cr, bx + e.x_advance, by - size * SUP_RISE,
+                  size * SUP_SCALE, car + 1)) {
+        cairo_move_to(cr, bx + e.x_advance, by - size * SUP_RISE);
+        cairo_show_text(cr, car + 1);
+    }
     cairo_set_font_size(cr, size);
 }
 
@@ -411,17 +512,20 @@ void gt_render(GTable *t, cairo_t *cr) {
             cairo_text_extents(cr, g->str, &e);
             cairo_font_extents(cr, &fe);
             set_col(cr, g->col);
+            double sx, sy;                 /* baseline start, current frame */
             if (g->rot != 0) {
                 /* Arbitrary rotation about the anchor: a circular tree's tip
                  * labels radiate, so each sits at its own angle. */
                 cairo_translate(cr, DX(g->tx), DY(g->ty));
                 cairo_rotate(cr, -g->rot * M_PI / 180.0);
-                cairo_move_to(cr, -g->hj * e.x_advance,
-                              -e.height / 2 - e.y_bearing);
+                sx = -g->hj * e.x_advance;
+                sy = -e.height / 2 - e.y_bearing;
+                cairo_move_to(cr, sx, sy);
             } else if (g->rot90) {
                 cairo_translate(cr, DX(g->tx) + (fe.ascent - fe.descent) / 2,
                                     DY(g->ty) + e.x_advance / 2);
                 cairo_rotate(cr, -M_PI / 2);
+                sx = 0; sy = 0;
                 cairo_move_to(cr, 0, 0);
             } else {
                 double bx = DX(g->tx) - g->hj * e.x_advance, by;
@@ -441,8 +545,10 @@ void gt_render(GTable *t, cairo_t *cr) {
                     set_col(cr, g->col);
                 }
                 cairo_move_to(cr, bx, by);
+                sx = bx; sy = by;
             }
-            cairo_show_text(cr, g->str);
+            if (!svg_show(cr, sx, sy, g->size, g->str))
+                cairo_show_text(cr, g->str);
             break;
         }
         case G_AXIS_X: {

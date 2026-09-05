@@ -264,6 +264,10 @@ double cp_label_w(cairo_t *cr, double size, const char *s);
  * Dimensions in points; PNG surfaces carry a device scale so callers keep
  * drawing in points. */
 cairo_surface_t *cp_surface_create(const char *out, double w_pt, double h_pt);
+/* --editable-svg: emit every label as its own <text> element with a single
+ * x/y (svglite-style; no per-glyph dx/dy lists), instead of Cairo's glyph
+ * outlines, so Inkscape/Illustrator can retype labels. */
+void cp_set_svg_text(int on);
 void cp_set_dpi(double dpi);                        /* PNG raster resolution (default 96) */
 /* Emit the finished surface: write_to_png for image surfaces, surface_finish
  * for vector ones. Returns the resulting cairo status. */
