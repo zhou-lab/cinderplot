@@ -99,9 +99,19 @@ and ignored (the output path is a command-line argument here).
   `geom_point(raster=TRUE)` — see trap 9 — and
   `geom_boxplot(outlier.shape=NA)` to hide the outlier marks when a jitter
   layer already draws those points.
+- `geom_tile(colour="white"[, linewidth=])` strokes each cell's border over
+  the mapped fill, as in ggplot2 — the thin white separators of a manuscript
+  heatmap; linewidth defaults to 0.1.
 - `geom_boxplot()` renders `fill=` and `colour=` differently, as ggplot2
   does: `fill=` colours the box body under dark chrome (outline, whiskers,
   median, outliers); `colour=` colours the chrome over a white body.
+- `coord_polar([start=])` draws a radar ("spider") chart: the discrete x's
+  categories become labelled spokes, y the radius, each colour series a
+  CLOSED polyline, with dashed rings at the y breaks (pin them with
+  `scale_y_continuous(breaks=c(0.5, 1))` + `ylim(0,1)`). geom_line()/
+  geom_point() only; bars under polar (pie/rose) error — general polar
+  coordinates are on the roadmap. `colour=` implies the series grouping,
+  as in ggplot2 (no `aes(group=)` needed).
 - `annotate("text", x=, y=, label=[, colour=][, size=][, hjust=][, vjust=])`
   places one literal mark, ggplot2's verb — also `"segment"` (x/y/xend/yend)
   and `"rect"` (xmin/xmax/ymin/ymax; colour= sets the fill, default grey85).
