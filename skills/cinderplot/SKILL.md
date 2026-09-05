@@ -32,6 +32,14 @@ cinderplot data.csv -x hp -y mpg -c cyl -f gear out.pdf      # shortcut flags
 - `--font FAMILY` sets the figure font in every mode (default Arial); use the
   family name `fc-list` reports. A family the backend cannot find warns on
   stderr and falls back rather than failing the render.
+- `--editable-svg` (with an `.svg` output) writes every label as its own
+  `<text>` element with a single x/y — svglite-style, retypable in Inkscape/
+  Illustrator, never a per-glyph dx/dy list. Superscript axis labels become a
+  base + raised-exponent pair; rotated labels carry one `matrix()` transform.
+  Set `CINDERPLOT_EDITABLE_SVG=1` in the environment to make it your personal
+  default; `--outline-svg` overrides the env var for one render. The tool
+  default keeps Cairo's glyph outlines, which render identically without the
+  font installed — the trade is portability vs editability.
 - `--dump-spec` prints the desugared expression without rendering.
 - The delimiter is **sniffed from the first line** — a tab anywhere means TSV,
   otherwise CSV. The extension is ignored, except that `.gz` (gzip or bgzip) is
@@ -96,7 +104,13 @@ and ignored (the output path is a command-line argument here).
   and `"rect"` (xmin/xmax/ymin/ymax; colour= sets the fill, default grey85).
   `hjust`/`vjust` anchor the text as in ggplot (0.5 default = centred on the
   point; `hjust=0, vjust=0` starts the text at x and rests it above y — the
-  reference-line-label placement); vjust takes 0/0.5/1. Marks take
+  reference-line-label placement); vjust takes 0/0.5/1. `angle=` rotates the
+  text (degrees CCW), with hjust applied in the rotated frame — the standing
+  per-bar label; vjust with angle errors. `geom_text(angle=, hjust=)` takes
+  the same; `geom_label()` and the repel geoms refuse rotation (the box does
+  not rotate; repel measures unrotated extents). Tilted axis TICK labels are
+  a different verb: `scale_x_discrete(angle=45)`, and crowded discrete labels
+  already auto-rotate. Marks take
   part in scale training, work on log axes and under coord_flip, repeat the
   verb for several, and draw OVER the geoms (a shading rect behind points is
   not expressible yet). The usual use: labelling a geom_hline() reference.
