@@ -168,7 +168,12 @@ for.
   `scale_x_genome("seqinfo.tsv.gz")`, `ideogram("cytoband.tsv.gz")`.
 - **also**: `facet_wrap(~v[, levels=][, scales=][, ncol=][, nrow=])`, `coord_flip()`, `guides(colour="none")`
   (or `--no-legend`), `labs()`/`xlab()`/`ylab()`/`ggtitle()`, and
-  `theme_{gray,bw,minimal,classic,void,linedraw,light,dark,few}()`.
+  `theme_{gray,bw,minimal,classic,void,linedraw,light,dark,few}()`. Every
+  theme selector takes `base_line_size=` (ggplot's own argument): the width
+  of the chrome lines — border, axis line, grid, ticks, heatmap/track
+  frames — where 0.5 is the ggplot2 default and 0.25 gives half-weight
+  axes; data strokes are untouched. `CINDERPLOT_BASE_LINE_SIZE=0.25` in the
+  environment makes it a personal default; the spec argument overrides it.
 - `annotation("meta.tsv"[, column="ighv"])` draws a categorical metadata band
   under the panel — one chip per x category (bar-width, so chips align under
   stacked `geom_col()` bars), with its own palette and its own legend block,
