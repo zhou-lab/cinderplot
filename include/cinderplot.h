@@ -70,6 +70,11 @@ static inline double lw_pt(double u) { return u * 2.845276 * 72.0 / 96.0; }
  * missing; main.c warns for that at startup (cp_font_resolves). */
 #define FONT_FAMILY_DEFAULT "Arial"
 extern const char *cp_font_family;
+/* Chrome line-width scale: 1.0 reproduces ggplot2's base_line_size = 0.5.
+ * theme_*(base_line_size=) sets it per figure; CINDERPLOT_BASE_LINE_SIZE in
+ * the environment sets a personal default (main.c). Applies to theme
+ * elements, axis ticks and frames — never to data strokes. */
+extern double cp_line_scale;
 
 static const Col C_PANEL  = {0.922, 0.922, 0.922};   /* grey92 */
 static const Col C_WHITE  = {1, 1, 1};
@@ -465,6 +470,8 @@ typedef struct {
                                      * for a level-count-vs-palette-size check */
     int identity_scale;             /* scale_*_identity(): the mapped column's
                                      * values ARE the colours; no legend */
+    double base_line_size;          /* theme_*(base_line_size=): chrome line
+                                     * width, 0 = unset (env var or 0.5) */
     int legend_ncol, legend_nrow;   /* guides(colour=guide_legend(ncol=/nrow=)):
                                      * fold a discrete legend over columns; nrow
                                      * caps rows (each free_colour block derives

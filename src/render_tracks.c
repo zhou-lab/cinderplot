@@ -971,16 +971,16 @@ int render_tracks(const PlotSpec *spec, const char *out,
             g->x0 = 0; g->x1 = 1; g->y0 = lblband; g->y1 = hmtop;
             g = gt_add(T, G_RECT, R, CC, R, CC);             /* heatmap bounding box */
             Col bbh = {0.4, 0.4, 0.4};
-            g->col = bbh; g->sub = 1; g->stroke = 1; g->lw = lw_pt(0.5); g->clip = 1;
+            g->col = bbh; g->sub = 1; g->stroke = 1; g->lw = lw_pt(0.5) * cp_line_scale; g->clip = 1;
             g->x0 = 0; g->x1 = 1; g->y0 = lblband; g->y1 = hmtop;
             g = gt_add(T, G_LINE, R, CC, R, CC);              /* kb axis baseline (top) */
-            g->col = C_TICK; g->lw = lw_pt(0.5); g->clip = 1;
+            g->col = C_TICK; g->lw = lw_pt(0.5) * cp_line_scale; g->clip = 1;
             g->x0 = 0; g->x1 = 1; g->y0 = g->y1 = axline;
             double tick_npc = cell_pt > 0 ? TICK_LEN / cell_pt : 0.02;   /* fixed-pt */
             double txtoff = cell_pt > 0 ? (TXT_GAP * 0.5) / cell_pt : 0.008;
             for (int b = 0; b < nx; b++) {                    /* ticks below, numbers above */
                 g = gt_add(T, G_LINE, R, CC, R, CC);
-                g->col = C_TICK; g->lw = lw_pt(0.5); g->clip = 1;
+                g->col = C_TICK; g->lw = lw_pt(0.5) * cp_line_scale; g->clip = 1;
                 g->x0 = g->x1 = xpos[b]; g->y0 = axline; g->y1 = axline - tick_npc;
                 g = gt_add(T, G_TEXT, R, CC, R, CC);
                 g->str = xlab[b]; g->size = SZ_AXIS_TEXT; g->col = C_AXTXT;

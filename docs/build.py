@@ -322,7 +322,14 @@ def render(only=None, force=False):
             cmd += ["--size", SIZES[slug]]
         if ext == "png":
             cmd += ["--dpi", "200"]
-        subprocess.run(cmd, cwd=EXAMPLES, check=True, stdout=subprocess.DEVNULL)
+        # The published gallery must not depend on who renders it: strip the
+        # personal-default env vars (CINDERPLOT_EDITABLE_SVG would swap the
+        # 32 svg figures' baked letterforms for <text>; CINDERPLOT_BASE_LINE_SIZE
+        # would thin every axis). Explicit spec arguments still apply.
+        clean = {k: v for k, v in os.environ.items()
+                 if k not in ("CINDERPLOT_EDITABLE_SVG", "CINDERPLOT_BASE_LINE_SIZE")}
+        subprocess.run(cmd, cwd=EXAMPLES, check=True, stdout=subprocess.DEVNULL,
+                       env=clean)
 
 def esc(s):
     return html.escape(s)

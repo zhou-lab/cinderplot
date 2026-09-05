@@ -560,7 +560,7 @@ void gt_render(GTable *t, cairo_t *cr) {
             cairo_font_extents(cr, &fe);
             if (!g->hide_ticks) {
                 set_col(cr, g->axis_styled ? g->tick_col : C_TICK);
-                cairo_set_line_width(cr, lw_pt(0.5));
+                cairo_set_line_width(cr, lw_pt(0.5) * cp_line_scale);
                 for (int i = 0; i < g->n; i++) {
                     cairo_move_to(cr, DX(g->px[i]), ry);
                     cairo_line_to(cr, DX(g->px[i]), ry + TICK_LEN);
@@ -600,7 +600,7 @@ void gt_render(GTable *t, cairo_t *cr) {
             double right = rx + rw;
             if (!g->hide_ticks) {
                 set_col(cr, g->axis_styled ? g->tick_col : C_TICK);
-                cairo_set_line_width(cr, lw_pt(0.5));
+                cairo_set_line_width(cr, lw_pt(0.5) * cp_line_scale);
                 for (int i = 0; i < g->n; i++) {
                     cairo_move_to(cr, right - TICK_LEN, DY(g->py[i]));
                     cairo_line_to(cr, right, DY(g->py[i]));

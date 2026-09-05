@@ -1244,7 +1244,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             return -1;
         }
         g = gt_add(T, G_RECT, CR, CC, CR, CC);
-        g->sub = 1; g->stroke = 1; g->lw = lw_pt(0.5); g->clip = 1;
+        g->sub = 1; g->stroke = 1; g->lw = lw_pt(0.5) * cp_line_scale; g->clip = 1;
         g->col = r->o->box_col;
         g->x0 = r->l; g->x1 = r->l + r->w;
         g->y0 = r->b; g->y1 = r->b + r->h;

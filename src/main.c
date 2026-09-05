@@ -20,6 +20,7 @@
 /* The figure font, read by every cairo_select_font_face() site across the
  * four modes; --font FAMILY overrides it below. */
 const char *cp_font_family = FONT_FAMILY_DEFAULT;
+double cp_line_scale = 1.0;
 
 static const char *USAGE =
     "usage: cinderplot [DSL-expr | flags] [data] out.{pdf,svg,png}\n"
@@ -163,6 +164,20 @@ static int font_resolves(const char *family) {
 
 int main(int argc, char **argv) {
     quiet_fontconfig();
+    /* personal default for the chrome line width, as an actual ggplot
+     * base_line_size value (0.5 = the ggplot2 default; 0.25 = half-weight
+     * axes). A spec-level theme_*(base_line_size=) overrides it. */
+    {
+        const char *ev = getenv("CINDERPLOT_BASE_LINE_SIZE");
+        if (ev && *ev) {
+            char *end;
+            double v = strtod(ev, &end);
+            if (*end || !(v > 0))
+                fprintf(stderr, "cinderplot: warning: ignoring "
+                        "CINDERPLOT_BASE_LINE_SIZE=\"%s\" (needs a number > 0)\n", ev);
+            else cp_line_scale = v / 0.5;
+        }
+    }
     const char *out = NULL, *expr = NULL, *data = NULL;   /* output is required */
     const char *fx = NULL, *fy = NULL, *fc = NULL, *ff = NULL, *ft = NULL;
     const char *fm = "point", *flog = NULL, *fregion = NULL;

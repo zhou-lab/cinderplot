@@ -1345,7 +1345,7 @@ static int parse_term(P *p, PlotSpec *spec) {
         }
         return expect(p, ')');
     }
-    if (!strncmp(name, "theme_", 6)) {           /* no-arg theme selector */
+    if (!strncmp(name, "theme_", 6)) {           /* preset theme selector */
         const char *t = name + 6;
         if      (!strcmp(t, "gray") || !strcmp(t, "grey")) spec->theme = THEME_GRAY;
         else if (!strcmp(t, "bw"))              spec->theme = THEME_BW;
@@ -1359,6 +1359,28 @@ static int parse_term(P *p, PlotSpec *spec) {
         else return fail(p, "theme `%s()` is not implemented; supported: theme_gray, "
                             "theme_bw, theme_minimal, theme_classic, theme_void, theme_linedraw, "
                             "theme_light, theme_dark, theme_few", name);
+        /* optional base_line_size= (ggplot's own theme argument): the width
+         * of every chrome line — border, axis line, grid, ticks — as a
+         * linewidth value where 0.5 is the ggplot2 default. Data strokes
+         * are untouched. */
+        skip_ws(p);
+        while (*p->s != ')') {
+            char *key = ident(p);
+            if (!key || expect(p, '=')) return fail(p, "bad theme argument", "");
+            if (strcmp(key, "base_line_size"))
+                return fail(p, "theme option `%s` not implemented "
+                            "(base_line_size=)", key);
+            skip_ws(p);
+            char *end;
+            double v = strtod(p->s, &end);
+            if (end == p->s || !(v > 0))
+                return fail(p, "base_line_size= expects a number > 0 "
+                            "(0.5 = the ggplot2 default)", "");
+            p->s = end;
+            spec->base_line_size = v;
+            skip_ws(p);
+            if (*p->s == ',') { p->s++; skip_ws(p); }
+        }
         return expect(p, ')');
     }
     if (!strcmp(name, "ggplot")) {

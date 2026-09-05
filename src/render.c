@@ -1706,7 +1706,15 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     }
     cairo_select_font_face(cr, cp_font_family, CAIRO_FONT_SLANT_NORMAL,
                            CAIRO_FONT_WEIGHT_NORMAL);
-    const Theme *th = &THEMES[spec->theme];   /* active theme (THEME_GRAY = default) */
+    /* the active theme, with its chrome line widths scaled by the effective
+     * base_line_size (spec beats the env var beats the 0.5 default) */
+    if (spec->base_line_size > 0) cp_line_scale = spec->base_line_size / 0.5;
+    Theme thv = THEMES[spec->theme];
+    thv.grid_major_lw *= cp_line_scale;
+    thv.grid_minor_lw *= cp_line_scale;
+    thv.border_lw     *= cp_line_scale;
+    thv.axis_line_lw  *= cp_line_scale;
+    const Theme *th = &thv;
 
     /* Under coord_flip the x aesthetic is drawn on the LEFT (vertical) axis and
      * y on the BOTTOM; otherwise the usual y-left / x-bottom. lax = left axis
