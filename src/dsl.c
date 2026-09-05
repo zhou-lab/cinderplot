@@ -1220,6 +1220,29 @@ static int parse_term(P *p, PlotSpec *spec) {
         spec->has_colour_scale = 1;
         return parse_grad_scale(p, &spec->colour_scale, k, "scale_colour_");
     }
+    if (!strcmp(name, "coord_polar")) {
+        /* radar ("spider") charts: the supported subset is a discrete x
+         * whose categories become spokes, y as radius, geom_line() series
+         * drawn CLOSED, dashed rings at the y breaks. General polar (pie /
+         * rose bars) is on the roadmap. */
+        spec->polar = 1;
+        skip_ws(p);
+        while (*p->s != ')') {
+            char *key = ident(p);
+            if (!key || expect(p, '=')) return fail(p, "bad coord_polar() argument", "");
+            if (strcmp(key, "start"))
+                return fail(p, "coord_polar option `%s` not implemented (start=)", key);
+            skip_ws(p);
+            char *end;
+            double v = strtod(p->s, &end);
+            if (end == p->s) return fail(p, "start= expects radians", "");
+            p->s = end;
+            spec->polar_start = v;
+            skip_ws(p);
+            if (*p->s == ',') { p->s++; skip_ws(p); }
+        }
+        return expect(p, ')');
+    }
     if (!strcmp(name, "coord_flip")) {          /* swap the x and y axes */
         spec->coord_flip = 1;
         return expect(p, ')');
@@ -1563,6 +1586,8 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
 
     if (spec->nhls > 0 && spec->nhobjs == 0)
         return fail(&p, "highlight() marks a heatmap() cell and needs heatmap mode", "");
+    if (spec->polar && spec->coord_flip)
+        return fail(&p, "coord_polar() and coord_flip() contradict each other", "");
     if (spec->nannos > 0 && spec->nlayers == 0 && !spec->x.col)
         return fail(&p, "annotate() places a mark on a grammar panel and needs "
                     "aes()/geom_*", "");

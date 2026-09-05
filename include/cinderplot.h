@@ -420,6 +420,10 @@ typedef struct {
     AesEntry shape;                 /* geom_point shape: discrete -> point glyph */
     AesEntry chrom;                 /* genome scale: chromosome column */
     int coord_flip;                 /* coord_flip(): swap the x and y axes */
+    int polar;                      /* coord_polar(): radar chart — discrete-x
+                                     * categories become spokes, y the radius;
+                                     * geom_line()/geom_point() only */
+    double polar_start;             /* start angle, radians CW from 12 o'clock */
     char *genome_seqinfo;           /* scale_x_genome: seqinfo TSV path */
     char *ideogram_path;            /* ideogram(): cytoband TSV path */
     Layer layers[MAX_LAYERS];

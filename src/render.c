@@ -764,6 +764,33 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         return -1;
     }
 
+    if (spec->polar) {
+        /* the supported subset is exactly the radar chart; everything else
+         * would render plausibly and be wrong */
+        if (!disc_x) {
+            snprintf(err, CP_ERRLEN, "coord_polar() draws radar charts: it "
+                     "needs a discrete x whose categories become the spokes "
+                     "(wrap it as aes(x=factor(...)))");
+            return -1;
+        }
+        if (genome_x || ff || spec->free_x || spec->free_y
+            || spec->nannos || spec->nhobjs) {
+            snprintf(err, CP_ERRLEN, "coord_polar() is not implemented with "
+                     "%s", genome_x ? "scale_x_genome()"
+                     : ff ? "facet_wrap()"
+                     : (spec->free_x || spec->free_y) ? "free scales"
+                     : spec->nannos ? "annotate()" : "annotation()");
+            return -1;
+        }
+        for (int li = 0; li < spec->nlayers; li++)
+            if (spec->layers[li].type != GEOM_LINE
+                && spec->layers[li].type != GEOM_POINT) {
+                snprintf(err, CP_ERRLEN, "coord_polar() supports geom_line() "
+                         "(drawn closed) and geom_point(); general polar "
+                         "coordinates (pie/rose bars) are not implemented");
+                return -1;
+            }
+    }
     /* ---- usable rows (NA and log-domain filtering) ---- */
     int *use = cp_xmalloc(df->nrow * sizeof(int)), nuse = 0, d_na = 0, d_log = 0;
     for (int r = 0; r < df->nrow; r++) {
@@ -2213,7 +2240,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         g->str = spec->lab_caption; g->size = SZ_AXIS_TEXT; g->col = th->title;
         g->tx = 1; g->ty = 1; g->hj = 1; g->va = V_TOP;
     }
-    if (th->axis_title_on) {
+    if (th->axis_title_on && !spec->polar) {
         g = gt_add(T, G_TEXT, r_axis + 2, PC(0), r_axis + 2, PC(ncolp - 1));
         g->str = bottom_title; g->size = SZ_BASE; g->col = th->axis_title;
         g->tx = 0.5; g->ty = 1; g->hj = 0.5; g->va = V_TOP;
@@ -2269,7 +2296,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         int gstart = T->ngrobs;   /* first panel-content grob (all in cell R,C); */
                                   /* under coord_flip these get transposed below */
         if (th->panel_bg_on) { g = gt_add(T, G_RECT, R, C, R, C); g->col = th->panel_bg; }
-        if (th->grid_minor_on) {
+        if (th->grid_minor_on && !spec->polar) {
             for (int i = 0; i < S->nxmin; i++) {
                 g = gt_add(T, G_LINE, R, C, R, C);
                 g->col = th->grid_minor; g->lw = lw_pt(th->grid_minor_lw); g->clip = 1;
@@ -2281,7 +2308,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 g->y0 = g->y1 = NPCY(S->ymin_br[i]); g->x0 = 0; g->x1 = 1;
             }
         }
-        if (th->grid_major_on) {
+        if (th->grid_major_on && !spec->polar) {
             for (int i = 0; i < S->nxbr; i++) {
                 g = gt_add(T, G_LINE, R, C, R, C);
                 g->col = th->grid_major; g->lw = lw_pt(th->grid_major_lw); g->clip = 1;
@@ -2293,11 +2320,11 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 g->y0 = g->y1 = S->ynpc[i]; g->x0 = 0; g->x1 = 1;
             }
         }
-        if (th->border_on) {                          /* bw / linedraw / light / few */
+        if (th->border_on && !spec->polar) {          /* bw / linedraw / light / few */
             g = gt_add(T, G_RECT, R, C, R, C);
             g->col = th->border; g->stroke = 1; g->lw = lw_pt(th->border_lw);
         }
-        if (th->axis_line_on) {                       /* classic / pubr */
+        if (th->axis_line_on && !spec->polar) {       /* classic / pubr */
             g = gt_add(T, G_LINE, R, C, R, C);        /* bottom */
             g->col = th->axis_line; g->lw = lw_pt(th->axis_line_lw);
             g->x0 = 0; g->x1 = 1; g->y0 = g->y1 = 0;
@@ -2320,8 +2347,109 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 g->y0 = g->y1 = S->ylt_pos[i]; g->x0 = 0; g->x1 = S->ylt_len[i] / panelw_pt;
             }
 
+        /* ---- coord_polar(): the radar chart, drawn whole ----
+         * Categories at angles clockwise from 12 o'clock; y maps to radius
+         * over the trained (padded) range; dashed rings at the y breaks with
+         * their values labelled up the vertical spoke; each colour series a
+         * CLOSED polyline. The radius lives in points and divides per axis,
+         * so the circle stays a circle whatever the panel's aspect (the
+         * circular tree's trick). */
+        if (spec->polar) {
+            int k = xf->nlev;
+            double rmax = fmin(panelw_pt, panelh_pt) / 2 - 2.6 * labh;
+            if (rmax < 30) rmax = fmin(panelw_pt, panelh_pt) / 2 * 0.72;
+            double cx = 0.5, cy = 0.5;
+            const double TAU = 2 * M_PI;
+            /* rings */
+            for (int i = 0; i < nybr; i++) {
+                double rr = (ybr[i] - y0) / (y1 - y0);
+                if (rr < 0.03) continue;
+                const int NC2 = 73;
+                double *px = cp_xmalloc(NC2 * sizeof(double));
+                double *py = cp_xmalloc(NC2 * sizeof(double));
+                for (int j = 0; j < NC2; j++) {
+                    double ang = spec->polar_start + TAU * j / (NC2 - 1);
+                    px[j] = cx + rmax * rr * sin(ang) / panelw_pt;
+                    py[j] = cy + rmax * rr * cos(ang) / panelh_pt;
+                }
+                g = gt_add(T, G_POLYLINE, R, C, R, C);
+                g->n = NC2; g->px = px; g->py = py;
+                g->col = (Col){0.6, 0.6, 0.6};
+                g->lw = lw_pt(th->grid_major_lw > 0 ? th->grid_major_lw : 0.5);
+                g->dash = 1; g->clip = 1;
+                g = gt_add(T, G_TEXT, R, C, R, C);   /* ring value */
+                g->str = ylabs[i]; g->size = SZ_AXIS_TEXT * 0.85;
+                g->col = (Col){0.45, 0.45, 0.45};
+                g->tx = cx - 3.0 / panelw_pt;
+                g->ty = cy + (rmax * rr) / panelh_pt;
+                g->hj = 1; g->va = V_INKCENTER;
+            }
+            /* spokes + category labels */
+            for (int l = 0; l < k; l++) {
+                double ang = spec->polar_start + TAU * l / k;
+                double sx2 = sin(ang), cy2 = cos(ang);
+                g = gt_add(T, G_LINE, R, C, R, C);
+                g->col = (Col){0.8, 0.8, 0.8};
+                g->lw = lw_pt(0.5) * cp_line_scale; g->clip = 1;
+                g->x0 = cx; g->y0 = cy;
+                g->x1 = cx + rmax * sx2 / panelw_pt;
+                g->y1 = cy + rmax * cy2 / panelh_pt;
+                g = gt_add(T, G_TEXT, R, C, R, C);
+                g->str = xf->levels[l]; g->size = SZ_AXIS_TEXT;
+                g->col = th->axis_text;
+                g->tx = cx + rmax * 1.06 * sx2 / panelw_pt;
+                g->ty = cy + (rmax * 1.06 * cy2 + labh * 0.55 * cy2) / panelh_pt;
+                g->hj = (1 - sx2) / 2;             /* right side left-anchors */
+                g->va = V_INKCENTER;
+            }
+            /* series, in layer order */
+            for (int li = 0; li < spec->nlayers; li++) {
+                const Layer *L = &spec->layers[li];
+                int ngrp = cf ? cf->nlev : 1;
+                for (int grp = 0; grp < ngrp; grp++) {
+                    int np = 0;
+                    for (int cat = 0; cat < k; cat++)
+                        for (int r2 = 0; r2 < df->nrow; r2++)
+                            if (use[r2] && xf->idx[r2] == cat
+                                && (!cf || cf->idx[r2] == grp)) np++;
+                    if (!np) continue;
+                    double *px = cp_xmalloc((np + 1) * sizeof(double));
+                    double *py = cp_xmalloc((np + 1) * sizeof(double));
+                    int m2 = 0;
+                    for (int cat = 0; cat < k; cat++)
+                        for (int r2 = 0; r2 < df->nrow; r2++) {
+                            if (!use[r2] || xf->idx[r2] != cat
+                                || (cf && cf->idx[r2] != grp)) continue;
+                            double ang = spec->polar_start + TAU * cat / k;
+                            double rr = (TY(yc->num[r2]) - y0) / (y1 - y0);
+                            if (rr < 0) rr = 0;
+                            px[m2] = cx + rmax * rr * sin(ang) / panelw_pt;
+                            py[m2] = cy + rmax * rr * cos(ang) / panelh_pt;
+                            m2++;
+                        }
+                    Col sc2 = L->has_color ? L->color
+                            : cf ? pal[grp] : C_BLACK;
+                    if (L->type == GEOM_LINE && m2 >= 2) {
+                        px[m2] = px[0]; py[m2] = py[0];   /* CLOSE the series */
+                        g = gt_add(T, G_POLYLINE, R, C, R, C);
+                        g->n = m2 + 1; g->px = px; g->py = py;
+                        g->col = sc2; g->lw = lw_pt(0.5); g->clip = 1;
+                        g->alpha = L->alpha; g->dash = L->dash;
+                    } else if (L->type == GEOM_POINT) {
+                        Col *pc2 = cp_xmalloc(m2 * sizeof(Col));
+                        for (int j = 0; j < m2; j++) pc2[j] = sc2;
+                        g = gt_add(T, G_POINTS, R, C, R, C);
+                        g->n = m2; g->px = px; g->py = py; g->pcol = pc2;
+                        g->radius = L->point_size > 0
+                                  ? L->point_size * 2.845276 / 2 : PT_RADIUS;
+                        g->clip = 1; g->alpha = L->alpha;
+                    } else { free(px); free(py); }
+                }
+            }
+        }
+
         /* layers, in spec order */
-        for (int li = 0; li < spec->nlayers; li++) {
+        for (int li = 0; !spec->polar && li < spec->nlayers; li++) {
             GeomType gt = spec->layers[li].type;
             /* alpha= and linetype= belong to the whole layer, and every geom
              * builds its grobs differently, so rather than threading them
@@ -3005,7 +3133,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
          * panel in a row carries the same one; a freed axis differs per panel,
          * so each gets its own, drawn in the spacer to its left. */
         int lfree = flip ? spec->free_x : spec->free_y;
-        if (pc == 0 || lfree) {
+        if (!spec->polar && (pc == 0 || lfree)) {
             g = gt_add(T, G_AXIS_Y, R, pc == 0 ? 3 : PC(pc) - 1, R, pc == 0 ? 3 : PC(pc) - 1);
             g->n = flip ? S->nxbr : S->nybr;
             g->py = flip ? S->xnpc : S->ynpc;
@@ -3075,7 +3203,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         /* Bottom axis. Shared scales draw one per column, under the lowest panel
          * of that column (below); a freed axis is per panel. */
         int bfree = flip ? spec->free_y : spec->free_x;
-        if (bfree) {
+        if (bfree && !spec->polar) {
             int rb = (npan - 1 - pc) / ncolp;
             int arow = (pr == rb && rb == nrowp - 1) ? r_axis : PR(pr) + 2;
             g = gt_add(T, G_AXIS_X, arow, C, arow, C);
@@ -3090,7 +3218,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
 
     /* x axes: under the bottom-most panel of each column (bottom axis: x, or y
      * under flip). Genome mode (never flipped) keeps its chrom-name axis. */
-    for (int c = 0; c < ncolp && c < npan && !(flip ? spec->free_y : spec->free_x); c++) {
+    for (int c = 0; c < ncolp && c < npan && !spec->polar
+             && !(flip ? spec->free_y : spec->free_x); c++) {
         int rb = (npan - 1 - c) / ncolp;
         if (rb == nrowp - 1)
             g = gt_add(T, G_AXIS_X, r_axis, PC(c), r_axis, PC(c));
