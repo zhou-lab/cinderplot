@@ -40,7 +40,10 @@ cinderplot data.csv -x hp -y mpg -c cyl -f gear out.pdf      # shortcut flags
   Set `CINDERPLOT_EDITABLE_SVG=1` in the environment to make it your personal
   default; `--outline-svg` overrides the env var for one render. The tool
   default keeps Cairo's glyph outlines, which render identically without the
-  font installed — the trade is portability vs editability.
+  font installed — the trade is portability vs editability. A rasterized
+  heatmap body in SVG carries `image-rendering:pixelated` so viewers keep
+  its cell edges crisp (cairo drops the nearest-filter hint otherwise);
+  smooth-scaled raster point layers are deliberately left interpolated.
 - `--dump-spec` prints the desugared expression without rendering.
 - The delimiter is **sniffed from the first line** — a tab anywhere means TSV,
   otherwise CSV. The extension is ignored, except that `.gz` (gzip or bgzip) is
