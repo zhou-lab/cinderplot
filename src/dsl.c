@@ -1423,6 +1423,60 @@ static int parse_term(P *p, PlotSpec *spec) {
         }
         return expect(p, ')');
     }
+    if (!strcmp(name, "theme")) {
+        /* an arbitrary theme() stays unimplemented (presets only) — except
+         * the legend-position pair, which has no preset spelling:
+         * theme(legend.position="inside", legend.position.inside=c(x, y))
+         * draws the legend block(s) inside the panel(s), where the data
+         * leave room. Under scales="free_colour" every facet's block sits
+         * at the same (x, y) of its own panel. */
+        skip_ws(p);
+        while (*p->s != ')') {
+            char key[64];
+            size_t kl = 0;
+            for (;;) {                            /* dotted key, ggplot-style */
+                char *seg = ident(p);
+                if (!seg) return fail(p, "bad theme() argument", "");
+                size_t sl = strlen(seg);
+                if (kl + sl + 2 >= sizeof key) return fail(p, "theme() key too long", "");
+                memcpy(key + kl, seg, sl); kl += sl; key[kl] = 0;
+                free(seg);
+                if (*p->s == '.') { key[kl++] = '.'; key[kl] = 0; p->s++; continue; }
+                break;
+            }
+            if (expect(p, '=')) return fail(p, "bad theme() argument", "");
+            skip_ws(p);
+            if (!strcmp(key, "legend.position")) {
+                char *v = *p->s == '"' ? string_lit(p) : ident(p);
+                if (!v || strcmp(v, "inside"))
+                    return fail(p, "theme(legend.position=) supports only "
+                                "\"inside\"; margins are the default", "");
+                free(v);
+                spec->legend_inside = 1;
+                if (spec->leg_ix == 0 && spec->leg_iy == 0) {
+                    spec->leg_ix = 0.85; spec->leg_iy = 0.15;   /* lower right */
+                }
+            } else if (!strcmp(key, "legend.position.inside")) {
+                if (p->s[0] == 'c' && p->s[1] == '(') p->s += 2;
+                else return fail(p, "legend.position.inside= expects c(x, y)", "");
+                double x2 = strtod(p->s, (char **)&p->s);
+                skip_ws(p); if (*p->s == ',') p->s++;
+                double y2 = strtod(p->s, (char **)&p->s);
+                skip_ws(p); if (*p->s == ')') p->s++;
+                if (x2 < 0 || x2 > 1 || y2 < 0 || y2 > 1)
+                    return fail(p, "legend.position.inside= wants npc "
+                                "coordinates in [0, 1]", "");
+                spec->leg_ix = x2; spec->leg_iy = y2;
+                spec->legend_inside = 1;
+            } else return fail(p, "theme(%s=) is not implemented; the presets "
+                               "(theme_bw() etc., with base_line_size=) cover "
+                               "the rest — supported here: legend.position, "
+                               "legend.position.inside", key);
+            skip_ws(p);
+            if (*p->s == ',') { p->s++; skip_ws(p); }
+        }
+        return expect(p, ')');
+    }
     if (!strncmp(name, "theme_", 6)) {           /* preset theme selector */
         const char *t = name + 6;
         if      (!strcmp(t, "gray") || !strcmp(t, "grey")) spec->theme = THEME_GRAY;

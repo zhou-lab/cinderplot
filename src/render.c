@@ -28,6 +28,21 @@ static double font_h(cairo_t *cr, double size) {
     return fe.ascent + fe.descent;
 }
 
+/* estimated multi-column legend width, for the automatic fold */
+static double leg_est_w(cairo_t *cr, char **lv, int k, int nc) {
+    int rows = (k + nc - 1) / nc;
+    double total = 0;
+    for (int c = 0; c < nc; c++) {
+        double lw = 0;
+        for (int i = c * rows; i < (c + 1) * rows && i < k; i++) {
+            double w = text_w(cr, SZ_AXIS_TEXT, lv[i]);
+            if (w > lw) lw = w;
+        }
+        total += KEY_SIZE + TXT_GAP + lw + (c < nc - 1 ? HALF_LINE : 0);
+    }
+    return total;
+}
+
 static GTable *build_legend(cairo_t *cr, const Theme *th, const char *title, const Factor *f,
                             const Col *pal, int haspoint, int hasline, int hasbox, int hastext,
                             const int *shapes, int ncol) {
@@ -59,17 +74,21 @@ static GTable *build_legend(cairo_t *cr, const Theme *th, const char *title, con
         if (c < ncol - 1) t->colw[4 * c + 3] = upt(HALF_LINE);
     }
     free(lw);
+    int has_title = title && *title;
     t->nrow = 2 + 2 * rows - 1;
-    t->rowh[0] = upt(font_h(cr, SZ_BASE));
-    t->rowh[1] = upt(HALF_LINE);
+    t->rowh[0] = upt(has_title ? font_h(cr, SZ_BASE) : 0);
+    t->rowh[1] = upt(has_title ? HALF_LINE : 0);
     for (int i = 0; i < rows; i++) {
         t->rowh[2 + 2 * i] = upt(KEY_SIZE);
         if (i < rows - 1) t->rowh[3 + 2 * i] = upt(HALF_LINE * 0.4);
     }
 
-    Grob *g = gt_add(t, G_TEXT, 0, 0, 0, t->ncol - 1);
-    g->str = title; g->size = SZ_BASE; g->col = th->title;
-    g->tx = 0; g->ty = 1; g->hj = 0; g->va = V_TOP;
+    Grob *g;
+    if (has_title) {
+        g = gt_add(t, G_TEXT, 0, 0, 0, t->ncol - 1);
+        g->str = title; g->size = SZ_BASE; g->col = th->title;
+        g->tx = 0; g->ty = 1; g->hj = 0; g->va = V_TOP;
+    }
     static const double half = 0.5;
     for (int i = 0; i < f->nlev; i++) {
         int r = 2 + 2 * (i % rows), kc = 4 * (i / rows);
@@ -2035,10 +2054,29 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 }
                 if (!k) { free(lv); free(pc2); continue; }
                 Factor pf = { k, lv, NULL };
-                int nc2 = spec->legend_ncol ? spec->legend_ncol
-                        : spec->legend_nrow
-                        ? (k + spec->legend_nrow - 1) / spec->legend_nrow : 1;
-                GTable *lg = build_legend(cr, th, ff->levels[p], &pf, pc2,
+                int nc2;
+                if (spec->legend_ncol) nc2 = spec->legend_ncol;
+                else if (spec->legend_nrow)
+                    nc2 = (k + spec->legend_nrow - 1) / spec->legend_nrow;
+                else {
+                    /* automatic fold: as many columns as fit this panel's
+                     * width (a rough chrome estimate suffices for a folding
+                     * heuristic); when the canvas is auto-sized, cap the
+                     * block at 6 rows instead */
+                    if (w_pt > 0) {
+                        double colw3 = (w_pt - 86) / ncolp - PANEL_SPACE;
+                        nc2 = 1;
+                        while (nc2 < k && leg_est_w(cr, lv, k, nc2 + 1) <= colw3
+                               && (k + nc2) / (nc2 + 1) < (k + nc2 - 1) / nc2)
+                            nc2++;
+                    } else nc2 = (k + 5) / 6;
+                }
+                /* labs(colour=) overrides the facet-name title; an empty
+                 * string drops it, since the strip right above already
+                 * names the facet */
+                const char *bt = spec->lab_colour ? spec->lab_colour
+                               : ff->levels[p];
+                GTable *lg = build_legend(cr, th, bt, &pf, pc2,
                                    haspoint, hasline || hasseg || hasdens,
                                    hasbox || hasbar || hascol || hasrect || hastile,
                                    hastext, NULL, nc2);
@@ -2081,6 +2119,18 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             guides[nguide++] = build_legend(cr, th, anns[a].title, anns[a].f,
                                             anns[a].apal, 0, 0, 1, 0, NULL, 1);
     if (nguide) leg = stack_guides(guides, nguide);
+    GTable *inside_leg = NULL;
+    if (spec->legend_inside && leg) {
+        if (npan > 1) {
+            snprintf(err, CP_ERRLEN, "theme(legend.position=\"inside\") with "
+                     "facets needs scales=\"free_colour\" (each block goes "
+                     "inside its own panel); a single shared legend has no "
+                     "one panel to sit in");
+            return -1;
+        }
+        inside_leg = leg;
+        leg = NULL;                  /* nothing reserved in the margins */
+    }
     double fc_leg_h = 0, fc_leg_w = 0;   /* per-panel legend row: max height/width */
     int fc_leg_wp = -1;                  /* which facet owns the widest block */
     for (int p = 0; p < npan && p < 12; p++)
@@ -2088,6 +2138,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             if (gt_fixed_h(fc_leg[p]) > fc_leg_h) fc_leg_h = gt_fixed_h(fc_leg[p]);
             if (gt_fixed_w(fc_leg[p]) > fc_leg_w) { fc_leg_w = gt_fixed_w(fc_leg[p]); fc_leg_wp = p; }
         }
+    if (spec->legend_inside) { fc_leg_h = 0; fc_leg_w = 0; }   /* inside the panels */
     if (fc_leg_h > 0) fc_leg_h += HALF_LINE;
 
     /* ---- outer table ---- */
@@ -2289,7 +2340,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         g->child = leg;
     }
     for (int p = 0; p < npan && p < 12; p++)
-        if (fc_leg[p]) {
+        if (fc_leg[p] && !spec->legend_inside) {
             g = gt_add(T, G_TABLE, r_axis + 3, PC(p % ncolp), r_axis + 3, PC(p % ncolp));
             g->child = fc_leg[p]; g->sub = 1;   /* top-align the row */
         }
@@ -3279,6 +3330,22 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         }
         g->axis_styled = 1; g->tick_col = th->tick; g->hide_ticks = !th->tick_on;
         g->text_col = th->axis_text; g->hide_text = !th->axis_text_on;
+    }
+
+    /* inside legends go in LAST, over the panel content they sit on */
+    if (spec->legend_inside) {
+        for (int p = 0; p < npan && p < 12; p++)
+            if (fc_leg[p]) {
+                g = gt_add(T, G_TABLE, PR(p / ncolp), PC(p % ncolp),
+                           PR(p / ncolp), PC(p % ncolp));
+                g->child = fc_leg[p]; g->n = 1;   /* anchored in the panel */
+                g->tx = spec->leg_ix; g->ty = spec->leg_iy;
+            }
+        if (inside_leg) {
+            g = gt_add(T, G_TABLE, PR(0), PC(0), PR(0), PC(0));
+            g->child = inside_leg; g->n = 1;
+            g->tx = spec->leg_ix; g->ty = spec->leg_iy;
+        }
     }
 
     /* ---- go ---- */

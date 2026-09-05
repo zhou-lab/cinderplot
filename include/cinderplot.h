@@ -484,6 +484,11 @@ typedef struct {
                                      * values ARE the colours; no legend */
     double base_line_size;          /* theme_*(base_line_size=): chrome line
                                      * width, 0 = unset (env var or 0.5) */
+    int legend_inside;              /* theme(legend.position="inside"): draw the
+                                     * legend block(s) INSIDE the panel(s) at
+                                     * (leg_ix, leg_iy) npc instead of reserving
+                                     * a margin or a row */
+    double leg_ix, leg_iy;
     int legend_ncol, legend_nrow;   /* guides(colour=guide_legend(ncol=/nrow=)):
                                      * fold a discrete legend over columns; nrow
                                      * caps rows (each free_colour block derives
