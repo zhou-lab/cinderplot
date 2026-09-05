@@ -2018,10 +2018,13 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             guides[nguide++] = build_legend(cr, th, anns[a].title, anns[a].f,
                                             anns[a].apal, 0, 0, 1, 0, NULL, 1);
     if (nguide) leg = stack_guides(guides, nguide);
-    double fc_leg_h = 0;             /* per-panel legend row height (free_colour) */
+    double fc_leg_h = 0, fc_leg_w = 0;   /* per-panel legend row: max height/width */
+    int fc_leg_wp = -1;                  /* which facet owns the widest block */
     for (int p = 0; p < npan && p < 12; p++)
-        if (fc_leg[p] && gt_fixed_h(fc_leg[p]) > fc_leg_h)
-            fc_leg_h = gt_fixed_h(fc_leg[p]);
+        if (fc_leg[p]) {
+            if (gt_fixed_h(fc_leg[p]) > fc_leg_h) fc_leg_h = gt_fixed_h(fc_leg[p]);
+            if (gt_fixed_w(fc_leg[p]) > fc_leg_w) { fc_leg_w = gt_fixed_w(fc_leg[p]); fc_leg_wp = p; }
+        }
     if (fc_leg_h > 0) fc_leg_h += HALF_LINE;
 
     /* ---- outer table ---- */
@@ -2080,6 +2083,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         }
         if (w_pt <= 0) {
             double panelw = disc_x && maxx ? maxx * catpitch : 4.0 * 72;
+            /* a per-panel legend block wider than its panel widens the
+             * column — the block is pinned under the panel and cannot
+             * borrow a neighbour's space */
+            if (fc_leg_w > panelw) panelw = fc_leg_w;
             double chrome = MARGIN + ylab_w + TICK_LEN + TXT_GAP + baseh + MARGIN
                           + (leg ? gt_fixed_w(leg) + 2 * HALF_LINE : 0);
             w_pt = chrome + ncolp * panelw + (ncolp - 1) * PANEL_SPACE;
@@ -2097,6 +2104,17 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             h_pt += fc_leg_h;        /* per-panel legend row (free_colour) */
             h_pt = fmin(30.0 * 72, fmax(4.0 * 72, h_pt));
         }
+    }
+    if (fc_leg_w > 0) {
+        double chrome = MARGIN + ylab_w + TICK_LEN + TXT_GAP + baseh + MARGIN;
+        double colw2 = (w_pt - chrome - (ncolp - 1) * PANEL_SPACE) / ncolp;
+        if (fc_leg_w > colw2)
+            fprintf(stderr, "cinderplot: warning: the `%s` legend block is "
+                    "%.1fin wide but its panel column is %.1fin; it will "
+                    "overrun or clip — give a wider --size, fold it with "
+                    "guide_legend(nrow=), or shorten the labels\n",
+                    ff && fc_leg_wp >= 0 ? ff->levels[fc_leg_wp] : "widest",
+                    fc_leg_w / 72, colw2 / 72);
     }
     if (leg && gt_fixed_h(leg) > h_pt)
         fprintf(stderr, "cinderplot: warning: the legend stack needs %.1fin of "
