@@ -21,6 +21,24 @@ void cp_set_dpi(double dpi) { if (dpi > 0) g_dpi = dpi; }
  * the baseline: the property downstream tools choke on is per-glyph dx/dy
  * lists, and none can occur by construction. */
 static int svg_text_on = 0;
+/* One entry per image PAINTED onto an SVG surface, in draw order: 1 = the
+ * image is a cell grid wanting nearest-neighbour edges, 0 = a smooth-scaled
+ * layer (rasterised points). Cairo 1.18's SVG backend drops the
+ * CAIRO_FILTER_NEAREST hint entirely — no image-rendering attribute — so
+ * viewers bilinearly smear a 25-px-wide heatmap body across its cells.
+ * cp_surface_emit stamps `image-rendering:pixelated` (with the
+ * optimizeSpeed fallback older renderers keep) onto exactly the <image>
+ * elements that asked for nearest, matching by draw order. */
+static unsigned char *svg_imgs; static int nsvg_imgs, csvg_imgs;
+static void svg_note_image(cairo_t *cr, int nearest) {
+    if (cairo_surface_get_type(cairo_get_target(cr)) != CAIRO_SURFACE_TYPE_SVG)
+        return;
+    if (nsvg_imgs == csvg_imgs) {
+        csvg_imgs = csvg_imgs ? 2 * csvg_imgs : 16;
+        svg_imgs = cp_xrealloc(svg_imgs, csvg_imgs);
+    }
+    svg_imgs[nsvg_imgs++] = (unsigned char)nearest;
+}
 typedef struct { double x, y, size, m[6]; int has_m; Col col; char *str; } SvgTxt;
 static SvgTxt *svgt; static int nsvgt, csvgt;
 void cp_set_svg_text(int on) { svg_text_on = on; }
@@ -56,6 +74,37 @@ static void svg_xml_escape(FILE *f, const char *s) {
         else if (*s == '<') fputs("&lt;", f);
         else if (*s == '>') fputs("&gt;", f);
         else fputc(*s, f);
+}
+
+/* stamp image-rendering onto the nth <image> elements that wanted nearest */
+static int svg_stamp_images(const char *out) {
+    FILE *f = fopen(out, "rb");
+    if (!f) return -1;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    char *buf = cp_xmalloc(n + 1);
+    if (fread(buf, 1, n, f) != (size_t)n) { fclose(f); free(buf); return -1; }
+    fclose(f);
+    buf[n] = 0;
+    f = fopen(out, "wb");
+    if (!f) { free(buf); return -1; }
+    const char *p = buf;
+    int idx = 0;
+    for (;;) {
+        const char *im = strstr(p, "<image ");
+        if (!im) break;
+        fwrite(p, 1, im - p + 7, f);   /* through "<image " */
+        if (idx < nsvg_imgs && svg_imgs[idx])
+            fputs("style=\"image-rendering:optimizeSpeed;"
+                  "image-rendering:pixelated\" ", f);
+        idx++;
+        p = im + 7;
+    }
+    fputs(p, f);
+    fclose(f);
+    free(buf);
+    return 0;
 }
 
 /* rewrite the finished SVG with the recorded labels ahead of </svg> */
@@ -118,6 +167,11 @@ cairo_status_t cp_surface_emit(cairo_surface_t *surf, const char *out) {
     }
     cairo_surface_finish(surf);
     cairo_status_t st = cairo_surface_status(surf);
+    if (st == CAIRO_STATUS_SUCCESS && nsvg_imgs
+        && cairo_surface_get_type(surf) == CAIRO_SURFACE_TYPE_SVG
+        && svg_stamp_images(out))
+        fputs("cinderplot: warning: could not stamp image-rendering on the "
+              "svg; the heatmap body may look blurry in viewers\n", stderr);
     if (st == CAIRO_STATUS_SUCCESS && svg_text_on && nsvgt
         && cairo_surface_get_type(surf) == CAIRO_SURFACE_TYPE_SVG
         && svg_inject_text(out)) {
@@ -334,6 +388,7 @@ void gt_render(GTable *t, cairo_t *cr) {
             cairo_scale(cr, tw / iw, th / ih);
             cairo_set_source_surface(cr, img, 0, 0);
             cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_NEAREST);
+            svg_note_image(cr, 1);
             cairo_paint(cr);
             cairo_restore(cr);
             cairo_surface_destroy(img);
@@ -469,6 +524,7 @@ void gt_render(GTable *t, cairo_t *cr) {
                     cairo_scale(cr, 1.0 / sc, 1.0 / sc);
                     cairo_set_source_surface(cr, im, 0, 0);
                     cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_GOOD);
+                    svg_note_image(cr, 0);
                     cairo_paint(cr);
                     cairo_restore(cr);
                     cairo_surface_destroy(im);
