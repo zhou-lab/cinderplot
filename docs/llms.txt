@@ -102,7 +102,13 @@ and ignored (the output path is a command-line argument here).
   layer already draws those points.
 - `geom_tile(colour="white"[, linewidth=])` strokes each cell's border over
   the mapped fill, as in ggplot2 — the thin white separators of a manuscript
-  heatmap; linewidth defaults to 0.1.
+  heatmap; linewidth defaults to 0.1. Pair with
+  `scale_x_discrete(expand=c(0,0)) + scale_y_discrete(expand=c(0,0))` — or
+  the shorthand `coord_cartesian(expand=FALSE)` — to make the panel frame
+  hug the tile grid. Discrete expansion measures from the TILE EDGE
+  (category ± 0.5), so `c(0,0)` leaves the outer cells full-sized and
+  flush, never cut in half; `expand=c(mult, add)` on any scale overrides
+  the defaults (continuous 5%%, discrete 0.6 from the centre) generally.
 - `geom_boxplot()` renders `fill=` and `colour=` differently, as ggplot2
   does: `fill=` colours the box body under dark chrome (outline, whiskers,
   median, outliers); `colour=` colours the chrome over a white body.
