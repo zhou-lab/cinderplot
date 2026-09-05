@@ -1260,13 +1260,39 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
 
     /* ---- expansion + breaks. Discrete x uses ggplot's additive 0.6 on
      * each side; continuous uses 5% of the range. ---- */
+    double xm2 = spec->has_x_expand ? spec->x_exp_mult : -1;   /* -1 = default */
+    double xa2 = spec->has_x_expand ? spec->x_exp_add : -1;
+    double ym2 = spec->has_y_expand ? spec->y_exp_mult : -1;
+    double ya2 = spec->has_y_expand ? spec->y_exp_add : -1;
     double x0, x1;
-    if (disc_x) { x0 = 1 - 0.6; x1 = xf->nlev + 0.6; }
+    if (disc_x) {
+        /* the expansion is measured from the TILE EDGE (category ± 0.5),
+         * as ggplot trains it — so expand=c(0,0) leaves the outer cells
+         * flush with the frame instead of cut in half. The default 0.5 +
+         * 0.1 reproduces the previous [1-0.6, k+0.6] exactly. */
+        double e = xm2 < 0 ? 0.1 : xm2 * (xf->nlev - 1) + xa2;
+        x0 = 0.5 - e; x1 = xf->nlev + 0.5 + e;
+    }
     else if (genome_x) { x0 = 0; x1 = gs->total; }     /* no expansion */
-    else { x0 = txmin - 0.05 * (txmax - txmin); x1 = txmax + 0.05 * (txmax - txmin); }
+    else {
+        double e = xm2 < 0 ? 0.05 * (txmax - txmin)
+                 : xm2 * (txmax - txmin) + xa2;
+        x0 = txmin - e; x1 = txmax + e;
+    }
     double y0, y1;
-    if (disc_y) { y0 = 1 - 0.6; y1 = yf->nlev + 0.6; }   /* additive, like disc_x */
-    else { y0 = tymin - 0.05 * (tymax - tymin); y1 = tymax + 0.05 * (tymax - tymin); }
+    if (disc_y) {
+        double e = ym2 < 0 ? 0.1 : ym2 * (yf->nlev - 1) + ya2;
+        y0 = 0.5 - e; y1 = yf->nlev + 0.5 + e;   /* from the tile edge, as x */
+    }
+    else {
+        double e = ym2 < 0 ? 0.05 * (tymax - tymin)
+                 : ym2 * (tymax - tymin) + ya2;
+        y0 = tymin - e; y1 = tymax + e;
+    }
+    if (x1 <= x0 || y1 <= y0) {
+        snprintf(err, CP_ERRLEN, "expand= collapsed an axis to nothing");
+        return -1;
+    }
     /* reserve the bottom `ideo_npc` of the panel for the ideogram track */
     double ideo_npc = (spec->ideogram_path && genome_x) ? 0.06 : 0;
     if (flip && ideo_npc > 0) {
@@ -1436,7 +1462,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                                 map[l] = k++; break;
                             }
                     S->xmap = map; S->nxlev = k;
-                    S->x0 = 1 - 0.6; S->x1 = (k ? k : 1) + 0.6;
+                    double e = spec->has_x_expand
+                             ? spec->x_exp_mult * ((k ? k : 1) - 1) + spec->x_exp_add
+                             : 0.1;
+                    S->x0 = 0.5 - e; S->x1 = (k ? k : 1) + 0.5 + e;
                 } else if (genome_x) {
                     snprintf(err, CP_ERRLEN, "facet_wrap(scales=) cannot free a "
                              "scale_x_genome() axis; the genome axis is shared by "
@@ -1467,8 +1496,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     }
                     if (lo > hi) { lo = 0; hi = 0; }
                     if (hi == lo) { lo -= 0.5; hi += 0.5; }
-                    S->x0 = lo - 0.05 * (hi - lo);
-                    S->x1 = hi + 0.05 * (hi - lo);
+                    double e = spec->has_x_expand
+                             ? spec->x_exp_mult * (hi - lo) + spec->x_exp_add
+                             : 0.05 * (hi - lo);
+                    S->x0 = lo - e; S->x1 = hi + e;
                 }
             }
             if (spec->free_y) {
@@ -1482,7 +1513,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                                 map[l] = k++; break;
                             }
                     S->ymap = map; S->nylev = k;
-                    S->y0 = 1 - 0.6; S->y1 = (k ? k : 1) + 0.6;
+                    double e = spec->has_y_expand
+                             ? spec->y_exp_mult * ((k ? k : 1) - 1) + spec->y_exp_add
+                             : 0.1;
+                    S->y0 = 0.5 - e; S->y1 = (k ? k : 1) + 0.5 + e;
                 } else {
                     double lo = 1e300, hi = -1e300;
                     /* The stat geoms take their height from a computed maximum
@@ -1543,8 +1577,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     }
                     if (lo > hi) { lo = 0; hi = 0; }
                     if (hi == lo) { lo -= 0.5; hi += 0.5; }
-                    S->y0 = lo - 0.05 * (hi - lo);
-                    S->y1 = hi + 0.05 * (hi - lo);
+                    double e = spec->has_y_expand
+                             ? spec->y_exp_mult * (hi - lo) + spec->y_exp_add
+                             : 0.05 * (hi - lo);
+                    S->y0 = lo - e; S->y1 = hi + e;
                 }
             }
         }

@@ -1015,8 +1015,20 @@ static int parse_term(P *p, PlotSpec *spec) {
                     return fail(p, "expected , or ) in breaks=c(...)", "");
                 }
                 if (*nbr == 0) return fail(p, "breaks=c() is empty", "");
+            } else if (!strcmp(key, "expand")) {
+                skip_ws(p);
+                if (p->s[0] == 'c' && p->s[1] == '(') p->s += 2;
+                else return fail(p, "expand= expects c(mult, add)", "");
+                double m2 = strtod(p->s, (char **)&p->s);
+                skip_ws(p); if (*p->s == ',') p->s++;
+                double a2 = strtod(p->s, (char **)&p->s);
+                skip_ws(p); if (*p->s == ')') p->s++;
+                if (m2 < 0 || a2 < 0)
+                    return fail(p, "expand= values must be >= 0", "");
+                if (isx) { spec->x_exp_mult = m2; spec->x_exp_add = a2; spec->has_x_expand = 1; }
+                else     { spec->y_exp_mult = m2; spec->y_exp_add = a2; spec->has_y_expand = 1; }
             } else return fail(p, "scale_*_continuous option `%s` not implemented "
-                               "(labels=percent, labels=c(...), limits=, breaks=)", key);
+                               "(labels=percent, labels=c(...), limits=, breaks=, expand=)", key);
             skip_ws(p);
             if (*p->s == ',') { p->s++; skip_ws(p); }
         }
@@ -1228,6 +1240,27 @@ static int parse_term(P *p, PlotSpec *spec) {
         spec->has_colour_scale = 1;
         return parse_grad_scale(p, &spec->colour_scale, k, "scale_colour_");
     }
+    if (!strcmp(name, "coord_cartesian")) {
+        /* only the expansion control is meaningful here (there is no zoom
+         * yet): expand=FALSE zeroes both axes' expansion at once, the
+         * frame-hugs-the-tiles spelling. */
+        skip_ws(p);
+        while (*p->s != ')') {
+            char *key = ident(p);
+            if (!key || expect(p, '=')) return fail(p, "bad coord_cartesian() argument", "");
+            if (strcmp(key, "expand"))
+                return fail(p, "coord_cartesian option `%s` not implemented "
+                            "(expand=FALSE)", key);
+            char *v = ident(p);
+            if (!v || (strcmp(v, "FALSE") && strcmp(v, "false")))
+                return fail(p, "coord_cartesian supports only expand=FALSE", "");
+            spec->x_exp_mult = spec->x_exp_add = 0; spec->has_x_expand = 1;
+            spec->y_exp_mult = spec->y_exp_add = 0; spec->has_y_expand = 1;
+            skip_ws(p);
+            if (*p->s == ',') { p->s++; skip_ws(p); }
+        }
+        return expect(p, ')');
+    }
     if (!strcmp(name, "coord_polar")) {
         /* radar ("spider") charts: the supported subset is a discrete x
          * whose categories become spokes, y as radius, geom_line() series
@@ -1316,15 +1349,29 @@ static int parse_term(P *p, PlotSpec *spec) {
             char *key = ident(p);
             if (!key || expect(p, '='))
                 return fail(p, "%s() supports angle=", name);
-            if (strcmp(key, "angle"))
+            if (!strcmp(key, "expand")) {
+                free(key);
+                skip_ws(p);
+                if (p->s[0] == 'c' && p->s[1] == '(') p->s += 2;
+                else return fail(p, "expand= expects c(mult, add)", "");
+                double m2 = strtod(p->s, (char **)&p->s);
+                skip_ws(p); if (*p->s == ',') p->s++;
+                double a2 = strtod(p->s, (char **)&p->s);
+                skip_ws(p); if (*p->s == ')') p->s++;
+                if (m2 < 0 || a2 < 0)
+                    return fail(p, "expand= values must be >= 0", "");
+                if (isx) { spec->x_exp_mult = m2; spec->x_exp_add = a2; spec->has_x_expand = 1; }
+                else     { spec->y_exp_mult = m2; spec->y_exp_add = a2; spec->has_y_expand = 1; }
+            } else if (!strcmp(key, "angle")) {
+                free(key);
+                skip_ws(p);
+                double v = strtod(p->s, (char **)&p->s);
+                if (v < 0 || v > 90)
+                    return fail(p, "angle= must be between 0 and 90", "");
+                if (isx) spec->x_angle = v; else spec->y_angle = v;
+            } else
                 return fail(p, "scale_*_discrete() option `%s` not implemented; "
-                            "supported: angle=", key);
-            free(key);
-            skip_ws(p);
-            double v = strtod(p->s, (char **)&p->s);
-            if (v < 0 || v > 90)
-                return fail(p, "angle= must be between 0 and 90", "");
-            if (isx) spec->x_angle = v; else spec->y_angle = v;
+                            "supported: angle=, expand=", key);
             skip_ws(p);
             if (*p->s == ',') { p->s++; skip_ws(p); }
         }

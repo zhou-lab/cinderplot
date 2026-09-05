@@ -441,6 +441,12 @@ typedef struct {
     /* Sized for a labelled category axis built by hand (a 63-class panel is
      * an ordinary figure); a few KB in the one PlotSpec, nothing walks it. */
 #define MAX_BREAKS 256
+    /* scale_*_(discrete|continuous)(expand=c(mult, add)): axis expansion
+     * override. ggplot defaults: continuous c(0.05, 0), discrete c(0, 0.6);
+     * expand=c(0,0) makes the panel frame hug a tile grid.
+     * coord_cartesian(expand=FALSE) zeroes both. */
+    double x_exp_mult, x_exp_add, y_exp_mult, y_exp_add;
+    int has_x_expand, has_y_expand;
     double x_breaks[MAX_BREAKS], y_breaks[MAX_BREAKS];   /* scale_*_continuous(breaks=c(...)) */
     int n_x_breaks, n_y_breaks;                   /* 0 = choose them automatically */
     char *x_break_labs[MAX_BREAKS], *y_break_labs[MAX_BREAKS];   /* labels=c(...): tick
