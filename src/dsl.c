@@ -857,6 +857,24 @@ static int parse_term(P *p, PlotSpec *spec) {
                     else if (!strcmp(v, "FALSE") || !strcmp(v, "F")) l->raster = 0;
                     else { free(v); return fail(p, "geom_point(raster=) expects TRUE or FALSE", ""); }
                     free(v);
+                } else if (gt == GEOM_TEXT && !strcmp(key, "angle")) {
+                    if (l->repel)
+                        return fail(p, "geom_text_repel(angle=) is not "
+                                    "implemented: repel measures unrotated "
+                                    "extents", "");
+                    l->txt_angle = strtod(p->s, (char **)&p->s);
+                } else if (gt == GEOM_LABEL && !strcmp(key, "angle")) {
+                    return fail(p, "geom_label(angle=) is not implemented: the "
+                                "background box does not rotate; use "
+                                "geom_text(angle=)", "");
+                } else if (gt == GEOM_TEXT && !strcmp(key, "hjust")) {
+                    skip_ws(p);
+                    char *end;
+                    double v = strtod(p->s, &end);
+                    if (end == p->s || v < 0 || v > 1)
+                        return fail(p, "hjust= takes 0..1", "");
+                    p->s = end;
+                    l->txt_hjust = v; l->has_txt_hjust = 1;
                 } else if ((gt == GEOM_TEXT || gt == GEOM_LABEL) && !strcmp(key, "nudge_x")) {
                     l->nudge_x = strtod(p->s, (char **)&p->s);
                 } else if ((gt == GEOM_TEXT || gt == GEOM_LABEL) && !strcmp(key, "nudge_y")) {
@@ -1106,10 +1124,12 @@ static int parse_term(P *p, PlotSpec *spec) {
                     if (v != 0 && v != 0.5 && v != 1)
                         return fail(p, "vjust= takes 0, 0.5 or 1", "");
                     a->vjust = v; a->has_vjust = 1;
+                } else if (!strcmp(key, "angle")) {
+                    a->angle = v;        /* degrees CCW, ggplot semantics */
                 }
                 else return fail(p, "annotate() option `%s` not implemented; supported: "
                                  "x=, y=, xend=/xmax=, yend=/ymax=, label=, colour=, "
-                                 "size=, hjust=, vjust=", key);
+                                 "size=, hjust=, vjust=, angle=", key);
             }
             skip_ws(p);
         }
@@ -1123,8 +1143,11 @@ static int parse_term(P *p, PlotSpec *spec) {
                         : "annotate(\"rect\") needs xmin=, xmax=, ymin= and ymax=", "");
         if (a->kind != ANNO_TEXT && a->label)
             return fail(p, "label= belongs on annotate(\"text\")", "");
-        if (a->kind != ANNO_TEXT && (a->has_hjust || a->has_vjust))
-            return fail(p, "hjust=/vjust= belong on annotate(\"text\")", "");
+        if (a->kind != ANNO_TEXT && (a->has_hjust || a->has_vjust || a->angle != 0))
+            return fail(p, "hjust=/vjust=/angle= belong on annotate(\"text\")", "");
+        if (a->angle != 0 && a->has_vjust)
+            return fail(p, "vjust= with angle= is not implemented (the rotated "
+                        "frame centres vertically); nudge the coordinate instead", "");
         spec->nannos++;
         return 0;
     }

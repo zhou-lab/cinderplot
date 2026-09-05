@@ -308,6 +308,11 @@ typedef struct {
      * side. `seed` keeps a figure reproducible across renders. */
     int no_outliers;            /* geom_boxplot(outlier.shape=NA): the points are
                                  * already drawn by a jitter layer over the box */
+    double txt_angle;    /* geom_text(angle=): degrees CCW; hjust= anchors in
+                          * the rotated frame. Not on geom_label (the box does
+                          * not rotate) or the repel geoms (they measure
+                          * unrotated extents). */
+    double txt_hjust; int has_txt_hjust;
     double jitter_w, jitter_h;
     unsigned jitter_seed; int has_jitter_seed;
     int raster;                 /* geom_point(raster=TRUE): draw the layer into an
@@ -374,6 +379,9 @@ typedef struct {
                                     * vjust 0 = text sits above y, 1 = below.
                                     * Default 0.5/0.5 = centred on the point. */
     int has_hjust, has_vjust;
+    double angle;                  /* text rotation, degrees CCW (ggplot);
+                                    * hjust applies in the rotated frame,
+                                    * vjust does not (and errors with it) */
 } Annotate;
 #define MAX_ANNOTATES 16
 

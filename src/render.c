@@ -2927,7 +2927,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         g->str = strs[i]; g->size = fs; g->clip = 1; g->col = cols[i];
                         g->tx = panelw_pt > 0 ? rl[i].cx / panelw_pt : NPCX(0);
                         g->ty = panelh_pt > 0 ? rl[i].cy / panelh_pt : NPCY(0);
-                        g->hj = 0.5; g->va = V_INKCENTER;
+                        g->hj = L->has_txt_hjust ? L->txt_hjust : 0.5;
+                        g->va = V_INKCENTER;
+                        g->rot = L->txt_angle;        /* 0 = the usual path */
                         if (gt == GEOM_LABEL) {
                             g->text_box = 1; g->box_fill = C_WHITE; g->box_line = cols[i];
                         }
@@ -3000,6 +3002,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 g->col = an->has_color ? an->color : C_BLACK;
                 g->tx = ax; g->ty = ay;
                 g->hj = an->has_hjust ? an->hjust : 0.5;
+                g->rot = an->angle;                   /* 0 = the usual path */
                 g->va = !an->has_vjust ? V_INKCENTER
                       : an->vjust == 0 ? V_BOTTOM     /* text sits above y */
                       : an->vjust == 1 ? V_TOP        /* text hangs below y */
