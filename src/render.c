@@ -2798,12 +2798,23 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     if (!use[r] || (ff && ff->idx[r] != p)) continue;
                     double cx = TXR(r), cy = disc_y ? YVAL(r) : TY(yc->num[r]);
                     if (isnan(cx) || isnan(cy)) continue;
+                    /* the body takes the MAPPED fill; a layer colour= is the
+                     * BORDER, as in ggplot2 -- it used to take over the fill,
+                     * so geom_tile(colour="white") blanked every cell */
                     g = gt_add(T, G_RECT, R, C, R, C);
-                    g->col = spec->layers[li].has_color ? spec->layers[li].color
-                           : cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BAR;
+                    g->col = cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BAR;
                     g->sub = 1; g->clip = 1;
                     g->x0 = NPCX(cx - wx / 2); g->x1 = NPCX(cx + wx / 2);
                     g->y0 = NPCY(cy - wy / 2); g->y1 = NPCY(cy + wy / 2);
+                    if (spec->layers[li].has_color) {
+                        double bw2 = spec->layers[li].tile_lw > 0
+                                   ? spec->layers[li].tile_lw : 0.1;
+                        g = gt_add(T, G_RECT, R, C, R, C);
+                        g->col = spec->layers[li].color;
+                        g->sub = 1; g->stroke = 1; g->lw = lw_pt(bw2); g->clip = 1;
+                        g->x0 = NPCX(cx - wx / 2); g->x1 = NPCX(cx + wx / 2);
+                        g->y0 = NPCY(cy - wy / 2); g->y1 = NPCY(cy + wy / 2);
+                    }
                 }
             } else if (gt == GEOM_RECT && spec->layers[li].data) {
                 /* A rect layer with its own file is one of two figures. With y

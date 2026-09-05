@@ -317,6 +317,8 @@ typedef struct {
      * side. `seed` keeps a figure reproducible across renders. */
     int no_outliers;            /* geom_boxplot(outlier.shape=NA): the points are
                                  * already drawn by a jitter layer over the box */
+    double tile_lw;      /* geom_tile(linewidth=): border stroke width in
+                          * ggplot linewidth units (0 = the 0.1 default) */
     double txt_angle;    /* geom_text(angle=): degrees CCW; hjust= anchors in
                           * the rotated frame. Not on geom_label (the box does
                           * not rotate) or the repel geoms (they measure

@@ -857,6 +857,14 @@ static int parse_term(P *p, PlotSpec *spec) {
                     else if (!strcmp(v, "FALSE") || !strcmp(v, "F")) l->raster = 0;
                     else { free(v); return fail(p, "geom_point(raster=) expects TRUE or FALSE", ""); }
                     free(v);
+                } else if (gt == GEOM_TILE && !strcmp(key, "linewidth")) {
+                    skip_ws(p);
+                    char *end;
+                    double v = strtod(p->s, &end);
+                    if (end == p->s || !(v > 0))
+                        return fail(p, "geom_tile(linewidth=) expects a number > 0", "");
+                    p->s = end;
+                    l->tile_lw = v;
                 } else if (gt == GEOM_TEXT && !strcmp(key, "angle")) {
                     if (l->repel)
                         return fail(p, "geom_text_repel(angle=) is not "
