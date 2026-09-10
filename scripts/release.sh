@@ -18,9 +18,17 @@
 #                                       then rebuild the dev binary.
 #   scripts/release.sh tag              create the annotated tag vX.Y.Z for the
 #                                       current version (refuses on a dirty tree
-#                                       or a failing `check`) and print the push
-#                                       command. Pushing is left to you.
+#                                       or a failing `check`). Local only.
+#   scripts/release.sh push             push BOTH repos in the order CI needs
+#                                       (cinderplot-examples first), running
+#                                       `check` in between; pushes the tag too
+#                                       when one exists for this version.
+#   scripts/release.sh watch            follow the CI run for the pushed commit
+#                                       and print the failing log if it is red.
 #   scripts/release.sh status           what is deployed where vs. HEAD.
+#
+# The whole sequence:
+#   bump X.Y.Z -> (commit) -> check -> tag -> push -> watch -> deploy -> status
 #
 # Environment:
 #   CINDERPLOT_BUILD_PREFIX   conda env holding cairo for the HPC build
@@ -222,11 +230,76 @@ do_tag() {
     do_check
     step "tag v$v"
     git tag -a "v$v" -m "release $v"
-    green "tagged v$v"
+    green "tagged v$v (local — nothing is published until it is pushed)"
     echo
-    echo "Push with:   git push origin main v$v"
-    echo "CI then builds the conda package and publishes it to the zhou-lab channel."
-    echo "Then:        scripts/release.sh deploy      (lab binary — CI does not do this)"
+    echo "Next:  scripts/release.sh push     # both repos, in the order CI needs"
+}
+
+# ----------------------------------------------------------------- push ----
+# Order matters and is not expressible in the workflow file: the test job
+# checks cinderplot-examples out at its DEFAULT BRANCH, not at a matching
+# commit, so pushing this repo first runs the new binary against the old
+# suite. That is not hypothetical -- it is how the 0.22.0 push first failed.
+do_push() {
+    v=$(header_version)
+    step "both trees must be committed"
+    git diff --quiet && git diff --cached --quiet || fail "uncommitted changes in $here"
+    ( cd "$EXAMPLES" && git diff --quiet && git diff --cached --quiet ) \
+        || fail "uncommitted changes in $EXAMPLES"
+    echo ok
+
+    step "push $EXAMPLES first (CI reads its default branch)"
+    if ( cd "$EXAMPLES" && git rev-parse --abbrev-ref @{u} >/dev/null 2>&1 ); then
+        ( cd "$EXAMPLES" && git push origin HEAD )
+    else
+        echo "no upstream configured; skipping"
+    fi
+
+    do_check          # now that the examples repo is pushed, this can pass
+
+    step "push $here"
+    if git rev-parse "v$v" >/dev/null 2>&1; then
+        echo "tag v$v exists — pushing it too (this publishes the conda package)"
+        git push origin main "v$v"
+    else
+        echo "no v$v tag — pushing main only (no package will be published)"
+        git push origin main
+    fi
+    green "pushed"
+    echo
+    echo "Next:  scripts/release.sh watch    # follow the CI run for this commit"
+}
+
+# ---------------------------------------------------------------- watch ----
+# "Green" has to mean green for THIS commit. The badge shows the last run on
+# main, which is a different thing whenever a push is pending, so match on the
+# pushed sha rather than trusting the newest run.
+do_watch() {
+    command -v gh >/dev/null || fail "watch needs the gh CLI (https://cli.github.com)"
+    sha=$(git rev-parse HEAD)
+    step "waiting for a run on ${sha%${sha#????????}}"
+    id=""
+    i=0
+    while [ "$i" -lt 30 ]; do
+        id=$(gh run list --workflow conda-build.yml --limit 15 \
+              --json databaseId,headSha --jq \
+              "[.[] | select(.headSha==\"$sha\")] | .[0].databaseId // empty" 2>/dev/null || true)
+        [ -n "$id" ] && break
+        i=$((i + 1)); sleep 10
+    done
+    [ -n "$id" ] || fail "no conda-build run appeared for this commit after 5 minutes"
+    echo "run $id"
+    gh run watch "$id" --exit-status --interval 20 || {
+        red "CI FAILED — the log for the failing steps:"
+        gh run view "$id" --log-failed 2>/dev/null | tail -40
+        exit 1
+    }
+    step "result"
+    gh run view "$id" --json conclusion,jobs \
+       --jq '"run: \(.conclusion)", (.jobs[] | "  \(.conclusion)\t\(.name)")'
+    green "CI is green for $(git rev-parse --short HEAD)"
+    echo
+    echo "Next:  scripts/release.sh deploy   # the lab binary; CI does not do this"
 }
 
 # --------------------------------------------------------------- status ----
@@ -251,6 +324,8 @@ case "${1:-}" in
     bump)   do_bump "${2:-}" ;;
     deploy) do_deploy ;;
     tag)    do_tag ;;
+    push)   do_push ;;
+    watch)  do_watch ;;
     status) do_status ;;
     *) sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac
