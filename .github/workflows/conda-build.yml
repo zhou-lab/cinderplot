@@ -8,6 +8,30 @@ on:
     branches: [main]
 
 jobs:
+  # Every push: build against the system cairo, run the regression suite from
+  # the sibling cinderplot-examples repo, and refuse a header/recipe version
+  # mismatch early (before the tag guard below would refuse to publish).
+  test:
+    name: test (linux, system cairo)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: zhou-lab/cinderplot-examples
+          path: cinderplot-examples
+      - name: Install cairo and poppler
+        run: sudo apt-get update && sudo apt-get install -y libcairo2-dev pkg-config poppler-utils zlib1g-dev fonts-liberation
+      - name: Version strings agree
+        run: |
+          h=$(sed -n 's/^#define CINDERPLOT_VERSION "\([^"]*\)".*/\1/p' include/cinderplot.h)
+          r=$(sed -n 's/.*set version = "\([^"]*\)".*/\1/p' conda-recipe/meta.yaml)
+          [ "$h" = "$r" ] || { echo "header $h != recipe $r; run scripts/release.sh bump $h" >&2; exit 1; }
+      - name: Build
+        run: make CFLAGS='-std=gnu11 -Wall -Wextra -O2'
+      - name: Regression suite
+        run: cd cinderplot-examples && CINDERPLOT="$GITHUB_WORKSPACE/cinderplot" sh tests/test.sh
+
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
@@ -37,6 +61,36 @@ jobs:
 
       - name: Build package
         run: conda build -c conda-forge --output-folder "$RUNNER_TEMP/bld" conda-recipe/
+
+      # The package must start on the lab cluster (RHEL 9, glibc 2.34). It once
+      # did not: built on the runner's own glibc it needed 2.38 and died with
+      # "GLIBC_2.38 not found" before printing anything, while the identical
+      # source built locally needed only 2.34. conda-recipe/meta.yaml pins
+      # sysroot_linux-64 2.17 to fix that; this asserts the pin actually took,
+      # every run, instead of trusting that it still does.
+      - name: Packaged binary targets an old glibc
+        if: matrix.name == 'linux-64'
+        run: |
+          set -euo pipefail
+          # zstd and objdump ship with the runner image, but this job runs in a
+          # conda shell whose PATH is not the image's; install if absent rather
+          # than fail the release on a missing tool.
+          if ! command -v zstd >/dev/null; then sudo apt-get update && sudo apt-get install -y zstd; fi
+          if ! command -v objdump >/dev/null; then sudo apt-get install -y binutils; fi
+          pkg=$(ls "$RUNNER_TEMP"/bld/linux-64/*.conda)
+          work=$(mktemp -d); cd "$work"
+          python -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall('.')" "$pkg"
+          zstd -d -q pkg-*.tar.zst -o pkg.tar
+          tar xf pkg.tar bin/cinderplot
+          echo "GLIBC symbol versions required:"
+          objdump -T bin/cinderplot | grep -o 'GLIBC_[0-9.]*' | sort -uV | tee versions
+          max=$(sort -uV versions | tail -1)
+          # sort -V puts 2.17 after 2.14 etc., so the max must be <= 2.17
+          if [ "$(printf '%s\nGLIBC_2.17\n' "$max" | sort -uV | tail -1)" != "GLIBC_2.17" ]; then
+            echo "::error::packaged binary needs $max; the cluster has glibc 2.34 and the pin targets 2.17" >&2
+            exit 1
+          fi
+          echo "ok: highest is $max"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
