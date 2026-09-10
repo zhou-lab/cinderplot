@@ -14,3 +14,8 @@ CLAUDE.md
 # dogfooding drop zone: local intake only, keep just the README tracked
 tmp/*
 !tmp/README.md
+
+# docs/build.py is imported by scripts/release.sh (for the MODES count), which
+# leaves a bytecode cache behind and then fails its own clean-tree check.
+__pycache__/
+*.pyc
