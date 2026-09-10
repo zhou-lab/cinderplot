@@ -122,51 +122,52 @@ pins `sysroot_linux-64 2.17`, and 0.7.x once died on the cluster with
 built locally needed only 2.34. The guard asserts the pin still takes on every
 build (currently `ok: highest is GLIBC_2.14`) instead of trusting a note.
 
-## 7. Deploy the lab binary
+## 7. Deploy to the lab
 
 ```sh
 scripts/release.sh deploy
 ```
 
-**CI does not do this, and it is the step most often skipped** — the lab copy
-sat at 0.7.1 through fourteen releases. Deploying is part of releasing: a lab
-user running the shared binary has no other way to get the work.
+CI does not do this, and it is the step most often skipped — the lab copy sat
+at 0.7.1 through fourteen releases.
+
+**There is one artifact: the conda package.** `conda install -c zhou-lab -c
+conda-forge cinderplot` is the default install, and the lab gets the *same*
+package — `deploy` installs it into the shared env
+(`conda_2026/envs/cinderplot`) and points `/mnt/isilon/zhoulab/labbin/cinderplot`
+at it with a **symlink**. Nothing is built a second time.
+
+That is a deliberate change from how this used to work. The lab binary was
+separately compiled here and copied to labbin, which meant two binaries that
+could report the same version and behave differently — the failure mode that
+cost a user a day, and that no amount of care prevented, because the copy step
+was manual and easy to skip. A symlink cannot drift.
 
 In order, `deploy`:
 
-1. builds **without** the conda rpath. The dev build bakes in a path under
-   `~/tmp`, which is ephemeral and unreadable by anyone else, so a straight
-   copy of it breaks for every other user. `-L` at the conda env is still
-   needed to *link* (the system has `libcairo.so.2` but no `.so` symlink),
-   just not to *run*;
-2. refuses to continue if `ldd` still resolves cairo from that env;
-3. **runs the whole regression suite against the portable binary.** The dev
-   build proves nothing about this one — they link different cairo versions;
-4. refuses to deploy an unpushed commit, since `--version` would then name a
-   revision nobody can fetch;
-5. keeps the outgoing binary as `cinderplot.prev`, so a bad deploy is one
-   `mv` from recovery rather than a rebuild;
-6. installs, and writes `cinderplot.deployed` (`version hash date`) beside it;
-7. renders a real figure with the installed copy, from the deploy directory
-   and with no environment set — which is how a lab user invokes it;
-8. rebuilds the dev binary with the rpath, so the gallery baseline matches
-   again.
+1. refuses unless the channel already has this version. CI publishes on the
+   tag, so this enforces the order: tag, watch, then deploy;
+2. installs `cinderplot=$VERSION` into the shared env and checks the env
+   reports it;
+3. runs the whole regression suite against the *installed package*;
+4. repoints the labbin symlink and stamps `cinderplot.deployed`;
+5. renders a figure through the deployed path with `env -i` — no conda
+   activation, no variables — which is how a lab member invokes it.
 
-The two builds link different cairo versions (system 1.17.4 vs the conda
-env's 1.18.4) and rasterise slightly differently. That is expected, shows up
-only in PNG comparisons, and is the price of a binary that runs for every lab
-user with no environment.
+Why no activation is needed: the package's RPATH is `$ORIGIN/../lib`, and the
+loader resolves `$ORIGIN` against the binary's **real** path, so the symlink
+still finds the env's cairo. (`ldd` on the symlink disagrees — it resolves
+`$ORIGIN` against the link itself and shows the system cairo. `LD_DEBUG=libs`
+and the rendered SVG both confirm the env's cairo is what actually loads. Trust
+the render, not `ldd`, on a symlinked binary.)
 
-To roll back: `mv /mnt/isilon/zhoulab/labbin/cinderplot.prev
-/mnt/isilon/zhoulab/labbin/cinderplot`.
+Reach is unchanged: `labbin` and `conda_2026` are both `drwxrwx--- reslnusers`,
+so the same people can use either.
 
-Deploying does not replace the conda package — **`conda install -c zhou-lab -c
-conda-forge cinderplot` is the default install**, and the lab binary is the
-convenience copy for people who would rather not activate an env. The package
-is also the more portable of the two: CI builds it against the pinned 2.17
-sysroot (ceiling 2.14), while a binary built here inherits this machine's glibc
-2.34, so the package is what to point someone at if a node ever turns out to be
-older than RHEL 9.
+Rollback: `/mnt/isilon/zhoulab/labbin/cinderplot.prev` is the last
+independently built binary. Restore with
+`mv cinderplot.prev cinderplot`, or pin an older package with
+`conda install -p <env> cinderplot=X.Y.Z`.
 
 ## 8. Confirm
 

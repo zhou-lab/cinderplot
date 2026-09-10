@@ -12,10 +12,10 @@
 #   scripts/release.sh bump X.Y.Z       write the new version into BOTH sources
 #                                       (header + conda recipe) and regenerate
 #                                       the docs; then run `check`.
-#   scripts/release.sh deploy           build the PORTABLE binary (no rpath),
-#                                       verify it links the system cairo, copy it
-#                                       to the lab bin, stamp the deployed commit,
-#                                       then rebuild the dev binary.
+#   scripts/release.sh deploy           install the PUBLISHED package into the
+#                                       shared conda env and point labbin at it
+#                                       (a symlink, not a second build), then
+#                                       verify it renders with no environment.
 #   scripts/release.sh tag              create the annotated tag vX.Y.Z for the
 #                                       current version (refuses on a dirty tree
 #                                       or a failing `check`). Local only.
@@ -34,8 +34,9 @@
 #   CINDERPLOT_BUILD_PREFIX   conda env holding cairo for the HPC build
 #                             (default ~/tmp/cinderplot/build; unset on a machine
 #                             with pkg-config cairo)
-#   CINDERPLOT_DEPLOY_DIR     where `deploy` puts the binary
+#   CINDERPLOT_DEPLOY_DIR     where `deploy` puts the cinderplot symlink
 #                             (default /mnt/isilon/zhoulab/labbin if it exists)
+#   CINDERPLOT_CONDA_ENV      the shared conda env `deploy` installs into
 #   CINDERPLOT_EXAMPLES       the sibling cinderplot-examples checkout
 #                             (default ../cinderplot-examples)
 
@@ -47,6 +48,7 @@ cd "$here"
 EXAMPLES=${CINDERPLOT_EXAMPLES:-"$here/../cinderplot-examples"}
 DEPLOY_DIR=${CINDERPLOT_DEPLOY_DIR:-/mnt/isilon/zhoulab/labbin}
 P=${CINDERPLOT_BUILD_PREFIX:-"$HOME/tmp/cinderplot/build"}
+CONDA_ENV=${CINDERPLOT_CONDA_ENV:-/mnt/isilon/zhoulab/labsoftware/anaconda/conda_2026/envs/cinderplot}
 
 red()   { printf '\033[1;31m%s\033[0m\n' "$*" >&2; }
 green() { printf '\033[1;32m%s\033[0m\n' "$*"; }
@@ -203,73 +205,71 @@ do_bump() {
 }
 
 # --------------------------------------------------------------- deploy ----
+# There is ONE artifact: the conda package CI publishes on the tag. The lab
+# used to get a second, separately built binary copied to labbin, and the two
+# drifted -- labbin sat at 0.7.1 through fourteen releases while the header
+# said 0.21.0, and nothing could tell them apart from the outside. So deploy
+# now installs the published package into the shared env and points labbin at
+# it with a symlink: same file, one version, no second build to forget.
+#
+# The package's RPATH is $ORIGIN/../lib, which the loader resolves against the
+# REAL path of the binary, so the symlink finds the env's cairo and needs no
+# `conda activate`. (`ldd` on the symlink says otherwise -- it resolves $ORIGIN
+# against the link -- but LD_DEBUG and the rendered output both confirm the
+# env's cairo is what actually loads.)
 do_deploy() {
     v=$(header_version)
-    [ -d "$DEPLOY_DIR" ] || fail "deploy dir $DEPLOY_DIR does not exist (set CINDERPLOT_DEPLOY_DIR)"
-    git diff --quiet && git diff --cached --quiet || fail "deploy from a clean, committed tree only — the deployed stamp records HEAD"
-    step "portable build (no rpath) for $DEPLOY_DIR"
-    build 0
-    if ldd ./cinderplot | grep -q "$P/lib"; then
-        fail "portable binary still links cairo from $P — the rpath is in; other users cannot read that env"
-    fi
-    ldd ./cinderplot | grep cairo
-    rev=$(git rev-parse --short HEAD)
+    [ -d "$CONDA_ENV" ] || fail "shared env $CONDA_ENV does not exist (set CINDERPLOT_CONDA_ENV)"
+    command -v conda >/dev/null || fail "deploy needs conda on PATH"
 
-    # This binary is about to become every lab user's cinderplot, and the dev
-    # build proves nothing about it: it links a different cairo. Run the whole
-    # suite against THIS binary, exactly as a user would run it.
-    step "regression suite against the portable binary"
-    ( cd "$EXAMPLES" && CINDERPLOT="$here/cinderplot" sh tests/test.sh >/dev/null 2>&1 ) \
-        || fail "the portable binary fails the suite — not installing it"
+    step "the channel must already have $v (CI publishes it on the tag)"
+    if ! conda search -c zhou-lab --override-channels cinderplot 2>/dev/null \
+         | awk '{print $2}' | grep -qx "$v"; then
+        fail "cinderplot $v is not on the zhou-lab channel yet — push the tag and let CI publish it (scripts/release.sh watch), then deploy"
+    fi
     echo ok
 
-    step "deploying a commit nobody can identify is worse than deploying nothing"
-    if git rev-parse --abbrev-ref @{u} >/dev/null 2>&1; then
-        [ "$(git log --oneline @{u}..HEAD | wc -l)" -eq 0 ] \
-            || fail "HEAD is not pushed; --version would name a revision no one else can fetch"
-        echo ok
+    step "install $v into $CONDA_ENV"
+    conda install -y -p "$CONDA_ENV" -c zhou-lab -c conda-forge "cinderplot=$v" >/dev/null \
+        || fail "conda install failed"
+    got=$("$CONDA_ENV/bin/cinderplot" --version 2>/dev/null)
+    case "$got" in
+        "cinderplot $v"*) echo "$got" ;;
+        *) fail "the env reports \"$got\" after installing $v" ;;
+    esac
+
+    step "regression suite against the installed package"
+    ( cd "$EXAMPLES" && CINDERPLOT="$CONDA_ENV/bin/cinderplot" sh tests/test.sh >/dev/null 2>&1 ) \
+        || fail "the published package fails the suite — not linking labbin to it"
+    echo ok
+
+    step "point $DEPLOY_DIR/cinderplot at it"
+    if [ -d "$DEPLOY_DIR" ]; then
+        ln -sfn "$CONDA_ENV/bin/cinderplot" "$DEPLOY_DIR/cinderplot.new" \
+            && mv -Tf "$DEPLOY_DIR/cinderplot.new" "$DEPLOY_DIR/cinderplot"
+        printf '%s %s %s (symlink -> %s)\n' "$v" "$(git rev-parse --short HEAD)" \
+               "$(date +%Y-%m-%dT%H:%M)" "$CONDA_ENV/bin/cinderplot" \
+               > "$DEPLOY_DIR/cinderplot.deployed"
+        ls -l "$DEPLOY_DIR/cinderplot"
     else
-        echo "no upstream configured; skipping"
+        echo "no $DEPLOY_DIR; the env alone is the install"
     fi
 
-    step "install"
-    # Keep the outgoing binary next to the new one. A bad deploy is otherwise
-    # unrecoverable without a rebuild, and the people who notice are users.
-    if [ -x "$DEPLOY_DIR/cinderplot" ]; then
-        cp -p "$DEPLOY_DIR/cinderplot" "$DEPLOY_DIR/cinderplot.prev" \
-            && echo "previous binary kept as cinderplot.prev ($("$DEPLOY_DIR/cinderplot" --version 2>/dev/null))"
-    fi
-    cp ./cinderplot "$DEPLOY_DIR/cinderplot.new" && mv -f "$DEPLOY_DIR/cinderplot.new" "$DEPLOY_DIR/cinderplot"
-    chmod 755 "$DEPLOY_DIR/cinderplot"
-    printf '%s %s %s\n' "$v" "$rev" "$(date +%Y-%m-%dT%H:%M)" > "$DEPLOY_DIR/cinderplot.deployed"
-
-    step "verify the installed copy renders"
-    "$DEPLOY_DIR/cinderplot" --version
+    step "verify the way a lab member invokes it (no activation, empty environment)"
     tmpd=$(mktemp -d)
     printf 'x,y,g\n1,2,a\n2,4,b\n3,1,a\n' > "$tmpd/t.csv"
-    if "$DEPLOY_DIR/cinderplot" "$tmpd/t.csv + aes(x,y,colour=factor(g)) + geom_point()" \
+    target=${DEPLOY_DIR:+$DEPLOY_DIR/cinderplot}
+    [ -x "$target" ] || target="$CONDA_ENV/bin/cinderplot"
+    if env -i HOME="$HOME" "$target" \
+         "$tmpd/t.csv + aes(x,y,colour=factor(g)) + geom_point()" \
          -o "$tmpd/t.pdf" >/dev/null 2>&1 && [ -s "$tmpd/t.pdf" ]; then
-        echo "ok — rendered from $DEPLOY_DIR with no environment"
+        echo "ok — $("$target" --version) rendered with no environment set"
         rm -rf "$tmpd"
     else
         rm -rf "$tmpd"
-        fail "the installed binary did not render; roll back with: mv $DEPLOY_DIR/cinderplot.prev $DEPLOY_DIR/cinderplot"
+        fail "the deployed path did not render"
     fi
-
-    step "rebuild the dev binary (with rpath) so the regression baseline matches again"
-    build 1
-    green "deployed $v ($rev) to $DEPLOY_DIR"
-}
-
-# ------------------------------------------------------------------ tag ----
-do_tag() {
-    v=$(header_version)
-    do_check
-    step "tag v$v"
-    git tag -a "v$v" -m "release $v"
-    green "tagged v$v (local — nothing is published until it is pushed)"
-    echo
-    echo "Next:  scripts/release.sh push     # both repos, in the order CI needs"
+    green "deployed $v — one artifact, shared env + symlink"
 }
 
 # ----------------------------------------------------------------- push ----
