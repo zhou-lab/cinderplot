@@ -160,6 +160,14 @@ user with no environment.
 To roll back: `mv /mnt/isilon/zhoulab/labbin/cinderplot.prev
 /mnt/isilon/zhoulab/labbin/cinderplot`.
 
+Deploying does not replace the conda package — **`conda install -c zhou-lab -c
+conda-forge cinderplot` is the default install**, and the lab binary is the
+convenience copy for people who would rather not activate an env. The package
+is also the more portable of the two: CI builds it against the pinned 2.17
+sysroot (ceiling 2.14), while a binary built here inherits this machine's glibc
+2.34, so the package is what to point someone at if a node ever turns out to be
+older than RHEL 9.
+
 ## 8. Confirm
 
 ```sh
