@@ -34,6 +34,12 @@ jobs:
 
   build:
     name: ${{ matrix.name }}
+    # Nothing is built, and on a tag nothing is PUBLISHED, unless the suite
+    # passed. Without this the two jobs are independent: a red regression suite
+    # would still put a package on the zhou-lab channel, where the next
+    # `conda install` picks it up. The package is the only artifact the lab
+    # gets, so this gate is what makes "green" mean "safe to install".
+    needs: test
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

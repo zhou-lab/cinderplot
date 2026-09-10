@@ -116,6 +116,18 @@ Three guards run there, none of which existed before 0.22.0:
 | Regression suite | the suite lives in the other repo; CI never ran it |
 | Packaged binary targets an old glibc | the package must start on the RHEL 9 cluster |
 
+The build jobs `needs: test`, so **nothing is built, and on a tag nothing is
+published, unless the suite passed**. That gate is what lets step 7 trust the
+channel: the package is the only artifact the lab gets, so a red suite must
+never reach it.
+
+One gap to know about: the two build jobs run with `fail-fast: false`, and each
+publishes its own package at the end. If `linux-64` failed while `osx-arm64`
+succeeded, the channel could end up with the mac package and not the Linux one.
+`deploy` would then refuse (it checks the channel for this version on this
+platform), so the lab is never left with a half-release — but the channel would
+need the missing platform rebuilt before anyone on it can install.
+
 The glibc guard is the one that matters most and is easiest to lose: the recipe
 pins `sysroot_linux-64 2.17`, and 0.7.x once died on the cluster with
 `GLIBC_2.38 not found` before printing anything, while the identical source
