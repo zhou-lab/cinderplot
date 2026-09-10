@@ -117,12 +117,23 @@ static void nw_skip(const char **s) {
     }
 }
 
-static TNode *nw_node(const char **s, char *err);
+static TNode *nw_node(const char **s, int depth, char *err);
 
-static int nw_children(const char **s, TNode *parent, char *err) {
+/* The parser, the layout and the drawing all recurse once per nesting level,
+ * so a deep enough tree overruns the stack somewhere past 10,000 levels on
+ * the default 8 MB. Refuse at the parser, which is the one place that knows
+ * the depth before anything else walks the tree. */
+#define NW_MAX_DEPTH 10000
+
+static int nw_children(const char **s, TNode *parent, int depth, char *err) {
+    if (depth > NW_MAX_DEPTH) {
+        snprintf(err, CP_ERRLEN, "Newick tree nests deeper than %d levels; that is "
+                 "beyond what this renderer can lay out", NW_MAX_DEPTH);
+        return -1;
+    }
     (*s)++;                                     /* '(' */
     for (;;) {
-        TNode *c = nw_node(s, err);
+        TNode *c = nw_node(s, depth, err);
         if (!c) return -1;
         tn_push(parent, c);
         nw_skip(s);
@@ -133,11 +144,11 @@ static int nw_children(const char **s, TNode *parent, char *err) {
     }
 }
 
-static TNode *nw_node(const char **s, char *err) {
+static TNode *nw_node(const char **s, int depth, char *err) {
     nw_skip(s);
     TNode *t = tn_new();
     if (**s == '(') {
-        if (nw_children(s, t, err)) return NULL;
+        if (nw_children(s, t, depth + 1, err)) return NULL;
     }
     t->name = nw_name(s);
     nw_skip(s);
@@ -166,7 +177,7 @@ static TNode *newick_parse(const char *text, char *err) {
     const char *s = text;
     nw_skip(&s);
     if (!*s) { snprintf(err, CP_ERRLEN, "Newick input is empty"); return NULL; }
-    TNode *root = nw_node(&s, err);
+    TNode *root = nw_node(&s, 0, err);
     if (!root) return NULL;
     nw_skip(&s);
     if (*s == ';') s++;
@@ -352,6 +363,22 @@ static int count_named(const TNode *t, const char *name, int leaves) {
     return n;
 }
 
+/* Does every named node of this class (tips or internal) carry a label that
+ * reads as a number? Then a numeric key could mean either the label or the
+ * ape id, and `((3,1),2);` joined on 1..3 would colour by position while the
+ * user meant the name. Counts the named nodes so a tree with none is not
+ * "all numeric" vacuously. */
+static int labels_all_numeric(const TNode *t, int leaves, int *named) {
+    if (t->name && (tn_leaf(t) == !!leaves)) {
+        (*named)++;
+        char *end; strtod(t->name, &end);
+        if (end == t->name || *end) return 0;
+    }
+    for (int i = 0; i < t->nkid; i++)
+        if (!labels_all_numeric(t->kid[i], leaves, named)) return 0;
+    return 1;
+}
+
 /* A name-keyed join is ambiguous the moment a name is not unique: every node
  * called A matches every row for A, which is what a name join means and never
  * what anybody wants. Any tie-break -- first match, by depth, all matches --
@@ -359,7 +386,20 @@ static int count_named(const TNode *t, const char *name, int leaves) {
  * name is usually a defect in the tree anyway. */
 static int join_check_unique(const Join *j, const TNode *root, int leaves,
                              char *err) {
-    if (!j->df || j->by_id) return 0;   /* a number identifies one node already */
+    if (!j->df) return 0;
+    if (j->by_id) {                     /* a number identifies one node already */
+        int named = 0;
+        if (labels_all_numeric(root, leaves, &named) && named > 0) {
+            snprintf(err, CP_ERRLEN, "ambiguous: tree labels are numeric and the join "
+                     "key is numeric; a numeric key means ape node ids, but the %s "
+                     "are named 1, 2, ... too. Rename the %s, or check the ids with "
+                     "geom_%s(label=id) and key the table on those",
+                     leaves ? "tips" : "internal nodes", leaves ? "tips" : "nodes",
+                     leaves ? "tiplab" : "nodelab");
+            return -1;
+        }
+        return 0;
+    }
     for (int r = 0; r < j->df->nrow; r++) {
         const char *nm = j->key->str[r];
         if (!nm) continue;
@@ -757,7 +797,11 @@ int render_tree(const PlotSpec *spec, const char *out,
                 double f0 = (double)k / NB, f1 = (double)(k + 1) / NB;
                 Grob *g2 = gt_add(T, G_RECT, R, 3, R, 3);
                 g2->sub = 1;                 /* without this a rect fills the cell */
-                g2->col = fill_map(&leg->fs, f0);
+                /* sample by VALUE, not by ramp position: gradient2 maps the
+                 * two halves of the range separately, and a bar painted over
+                 * t would contradict the node colours (heatmap.c does the same) */
+                g2->col = fill_map_value(&leg->fs, leg->dmin + f0 * (leg->dmax - leg->dmin),
+                                         leg->dmin, leg->dmax);
                 g2->x0 = 0; g2->x1 = bw;
                 g2->y0 = y - barh + f0 * barh; g2->y1 = y - barh + f1 * barh;
             }

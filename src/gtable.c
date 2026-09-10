@@ -419,6 +419,24 @@ void gt_render(GTable *t, cairo_t *cr) {
             cairo_stroke(cr);
             break;
         }
+        case G_POLYGON: {
+            /* a closed, FILLED path — chord ribbons and sector bands; the
+             * path is filled with the (possibly translucent) colour, and
+             * stroked on top when stroke lw is set */
+            set_col_a(cr, g->col, g->alpha);
+            for (int i = 0; i < g->n; i++) {
+                if (i == 0) cairo_move_to(cr, DX(g->px[i]), DY(g->py[i]));
+                else cairo_line_to(cr, DX(g->px[i]), DY(g->py[i]));
+            }
+            cairo_close_path(cr);
+            if (g->stroke && g->lw > 0) {
+                cairo_fill_preserve(cr);
+                set_col(cr, g->col);
+                cairo_set_line_width(cr, g->lw);
+                cairo_stroke(cr);
+            } else cairo_fill(cr);
+            break;
+        }
         case G_POLYLINE:
             set_col_a(cr, g->col, g->alpha);
             cairo_set_line_width(cr, g->lw);

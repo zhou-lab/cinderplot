@@ -25,9 +25,12 @@ cinderplot data.csv -x hp -y mpg -c cyl -f gear out.pdf      # shortcut flags
 ```
 
 - **The output file is required** — a trailing filename or `-o FILE`. The format
-  comes from the extension (`.pdf`, `.svg`, `.png`); `--dpi` affects PNG only.
+  comes from the extension (`.pdf`, `.svg`, `.png`; anything else is an error,
+  and so is writing over the input file); `--dpi` affects PNG only.
 - Quote the whole expression in **single** quotes; string literals inside it use
-  double quotes. Newlines inside the expression are fine.
+  double quotes. Newlines inside the expression are fine. A column name with a
+  space, hyphen or non-ASCII letters goes in backticks (`` aes(`my col`, y) ``,
+  R-style); a data path with a space goes in double quotes as the leading token.
 - `--size WxH` in inches. A partial `9x` or `x7` auto-fits the other axis.
   Omit it entirely and every mode fits the canvas to its own content.
 - `--font FAMILY` sets the figure font in every mode (default Arial); use the
@@ -61,7 +64,7 @@ cinderplot data.csv -x hp -y mpg -c cyl -f gear out.pdf      # shortcut flags
   main data; without y/yend it is a region-highlight band spanning the panel
   height.
 
-## Four modes, chosen by which verbs appear
+## Five modes, chosen by which verbs appear
 
 Mixing them is an error. The distinction is the data model, not the appearance.
 
@@ -84,7 +87,7 @@ cinderplot 'ggplot("mtcars.csv", aes(hp, mpg, colour=factor(cyl))) + geom_point(
 and ignored (the output path is a command-line argument here).
 
 - **aes**: `x`, `y` positionally, then named — `colour`/`color`/`fill`, `size`,
-  `shape`, `label`, `xend`/`xmax`, `yend`/`ymax`, `chrom`. `shape=` maps a
+  `shape`, `label`, `xend`/`xmax`, `ymin`, `yend`/`ymax`, `chrom`. `shape=` maps a
   **discrete** column to point glyphs (circle, triangle, square, diamond,
   triangle-down, plus) with its own legend, so a scatter can carry two factors
   at once — colour for one, shape for the other. Six levels maximum, as in
@@ -92,11 +95,20 @@ and ignored (the output path is a command-line argument here).
   than inventing a seventh. Needs a point layer. A value is a bare column name
   or `factor(col[, levels=c(...)])`.
 - **geoms**: `point jitter line smooth col histogram boxplot bar segment rect
-  density tile raster hline vline abline text label`, plus
+  density tile raster hline vline abline text label errorbar linerange`, plus
   `text_repel`/`label_repel`.
   Up to 8 layers.
+- `geom_errorbar([width=])` / `geom_linerange()` draw `aes(ymin=, ymax=)`
+  intervals — the mean-and-CI bar chart is `aes(x=factor(g), y=m, ymin=lo,
+  ymax=hi) + geom_col() + geom_errorbar(width=0.4)`. `width=` is the cap in
+  x-axis units (default 0.9 of the x resolution, as ggplot2). Both follow
+  `coord_flip()`, log axes and facets; a bound that is not positive on a log
+  axis drops that row with a stderr note.
 - **layer options**: `size=`, `alpha=`, `linetype="solid"|"dashed"|"dotted"`,
-  `bins=` (histogram), `nudge_x=`/`nudge_y=` (text),
+  `bins=` (histogram; ggplot2's default binning — right-closed bins whose
+  edges sit on the (k+½)·width lattice — so counts match `ggplot_build()`),
+  `bw=`/`adjust=` (density, R's `bw.nrd0` scaled by `adjust`),
+  `nudge_x=`/`nudge_y=` (text),
   `geom_point(raster=TRUE)` — see trap 9 — and
   `geom_boxplot(outlier.shape=NA)` to hide the outlier marks when a jitter
   layer already draws those points.
@@ -186,13 +198,18 @@ for.
   endpoints,
   `scale_x_genome("seqinfo.tsv.gz")`, `ideogram("cytoband.tsv.gz")`.
 - **also**: `facet_wrap(~v[, levels=][, scales=][, ncol=][, nrow=])`, `coord_flip()`, `guides(colour="none")`
-  (or `--no-legend`), `labs()`/`xlab()`/`ylab()`/`ggtitle()`, and
+  (per aesthetic: `guides(size="none")` keeps the colour key; `--no-legend`
+  and `theme(legend.position="none")` drop them all), `labs()`/`xlab()`/`ylab()`/`ggtitle()` — `labs()` also
+  takes `subtitle=` (under the title) and `caption=` (bottom right) — and
   `theme_{gray,bw,minimal,classic,void,linedraw,light,dark,few}()`. Every
   theme selector takes `base_line_size=` (ggplot's own argument): the width
   of the chrome lines — border, axis line, grid, ticks, heatmap/track
   frames — where 0.5 is the ggplot2 default and 0.25 gives half-weight
   axes; data strokes are untouched. `CINDERPLOT_BASE_LINE_SIZE=0.25` in the
   environment makes it a personal default; the spec argument overrides it.
+  The presets themselves are grammar-mode: in heatmap and track modes only
+  `theme_*(base_line_size=)` applies (a bare preset errors), and chord and
+  tree modes refuse `theme_*()` altogether.
 - `annotation("meta.tsv"[, column="ighv"])` draws a categorical metadata band
   under the panel — one chip per x category (bar-width, so chips align under
   stacked `geom_col()` bars), with its own palette and its own legend block,
@@ -218,7 +235,9 @@ grids stack the blocks in the right margin). Needs a discrete colour/fill;
 named `scale_*_manual(values=)` maps per level, positional lists and brewer
 sets apply per facet. The use: one figure, same points, three colour
 meanings. `guides(colour=guide_legend(ncol=N))` folds a long discrete legend
-over N columns, column-major; `nrow=N` caps the rows instead, and under
+over N columns, column-major; `nrow=N` caps the rows instead;
+`reverse=TRUE` flips the key order without touching the factor (the stacked
+`geom_col()` legend read top-down), and under
 free_colour each block then derives its own column count (a 4/6/10-level trio
 with nrow=6 folds only the 10). Without either, blocks now AUTO-fold to as
 many columns as fit their panel's width. `labs(colour="")` drops the block
@@ -247,8 +266,9 @@ to 6x4; an explicit `--size` is always honoured as given.
 
 ```sh
 cinderplot 'm.tsv + heatmap(name="m", cluster=both, rownames=right)
-  + dendrogram(top_of("m")) + dendrogram(left_of("m"))
-  + annotation("groups.tsv", column="diagnosis", left_of("m"))
+  + dendrogram(top_of("m"))
+  + annotation("groups.tsv", column="diagnosis", left_of("m"), name="dx")
+  + dendrogram(left_of("dx"))
   + legend(right_of("m"))
   + scale_fill_gradient2(low="#2166ac", mid="#f7f7f7", high="#b2182b")' out.pdf
 ```
@@ -261,8 +281,14 @@ placement would otherwise inherit from its anchor included). The first placed ob
 (`off`/`hide` also read as `none`); **both default to none**, so a heatmap with
 no `colnames=` renders that axis unlabelled. Clustering is hclust ward.D2,
 matching R. `annotation()` takes `column=` to pick
-which column colours the bar (default: the last). An annotation may be anchored
-by its data column name, e.g. `legend(right_of("diagnosis"))`.
+which column colours the bar (default: the last). Its rows are matched to the
+matrix by the first (name) column when that column is text and every name is
+found; a file with no name column is taken in matrix order, and a partial match
+is an error naming the first unknown key. An annotation may be anchored
+by its data column name, e.g. `legend(right_of("diagnosis"))`. **One object per
+slot**: a second `left_of("m")` errors and says which object holds the slot —
+chain the next one off that object (`dendrogram(left_of("dx"))`), as the
+example above does; legends are exempt and stack.
 
 `labs(x=)`/`labs(y=)` name the axes; `labs(title=)` titles the figure, and
 `title=` on a placed object names *that panel* — which is how a stack of
@@ -290,10 +316,11 @@ staple (`geom_tile() + geom_text(aes(label=))`). One font size is fitted to the
 cells, and each number switches black/white against its fill's luminance; under
 4pt of text the labels drop with a warning.
 
-`highlight("row","col"[, color="red"][, name="m"])` draws a bounding box on one
+`highlight("row","col"[, colour="red"][, name="m"])` draws a bounding box on one
 cell, addressed by its row and column names (so clustering cannot move the box
 off the intended cell); an unknown name errors. Repeat the verb for several
-cells; `name=` picks the heatmap when the figure has more than one.
+cells; `name=` picks the heatmap when the figure has more than one. (The track
+form of the same verb boxes a `matrix()` track row — see mode 3.)
 
 `scale_fill_*(limits=c(lo,hi))` pins the fill domain, so several figures (a
 multi-page grid, say) share one ramp; out-of-range values squish to the ends
@@ -378,7 +405,10 @@ cinderplot 'region("chr20:44616522-44655233")
 Track verbs: `coverage() interval() genes() arcs() matrix() cytoband()`, each
 taking a file plus `name= height= max= color= data= cluster= rownames=
 colnames= transcripts=`. Inputs are BED/bedGraph/BEDPE/BED12/matrix TSV, tabix
-`.gz` allowed. `region()` with no argument infers the window from `matrix()`.
+`.gz` allowed. `region()` with no argument infers the window from `matrix()`,
+and `-r chr:start-end` / `--region` on the command line supplies it from
+outside the expression (a shell loop over loci). Region strings are 0-based,
+half-open like BED (`chr1:100-200` covers BED bases 100..199).
 
 **Several windows on one axis** — `regions("windows.bed")` lays each window in
 its own panel with a real gap between them, sharing the sample rows, colour
@@ -393,6 +423,54 @@ cinderplot 'regions("windows.bed") + genes("genes.bed.gz", height=1.4)
 A header row is tolerated. Panel widths follow the matrix column count when a
 matrix track is present, so a cell is about the same width in every window.
 Supported inside `regions()` so far: `matrix()`, `genes()`, `interval()`.
+
+**Marking calls on a `matrix()` track** — `highlight()` again, addressed by
+sample row and genomic span rather than row and column:
+
+```sh
+cinderplot 'region("chr10:131089928-131099667")
+  + matrix("betas_long.tsv", name="beta", cluster=none, height=5)
+  + highlight(name="beta", row="RCC-KI258T", region="chr10:131092575-131093386",
+              colour="#d73027", label="F")
+  + highlight(name="beta", row="RCC-KI258T", region="chr10:131096625-131097007",
+              colour="#e08214", linetype="dashed")' out.pdf
+```
+
+The box spans the probe *columns* whose position falls in the span (the
+heatmap's x is probe-index space, so its edges are column edges), over that
+sample's row band. `linetype=` takes solid/dashed/dotted, `label=` writes a
+small tag at the top-right corner in the box colour, and `name=` picks the
+matrix track when there is more than one.
+
+For many boxes — a classifier's output over a `regions()` grid — give a file
+instead: `highlight("boxes.tsv", name="beta")` with columns
+`row chrom beg end [colour] [label] [linetype]`, one box per line and no cap
+(the inline form is capped at 64 calls). Under `regions()` each box lands in
+whichever panel contains its span; a box outside every panel, or covering no
+probe column, warns on stderr rather than failing the figure. An unknown
+sample row is an error.
+
+### 5. Chord diagram — circlize's chordDiagram() defaults, its own mode
+
+```sh
+cinderplot 'links.csv + chord([gap=2][, alpha=0.6])
+  + scale_fill_manual(values=c("LIHC"="#1b9e77", ...))' out.pdf --size 6x6
+```
+
+Input is a long (from, to, value) table (`from=`/`to=`/`value=` name other
+columns; defaults are those names, else the first three columns). Sectors
+are the union of from/to names in first-appearance order, arc length
+proportional to each sector's total flow, with an outer colour band and the
+name outside. Ribbons connect source and target sub-arcs, width
+proportional to value, coloured by SOURCE with `alpha=` translucency, drawn
+largest-first so small flows stay visible; self-links work. Values must be
+positive; sector colours default to the hue palette, with named
+`scale_fill_manual(values=)` overriding per sector. `order=c(...)` gives an
+explicit complete sector order (circlize's order=), and `bipartite=TRUE`
+puts every from-sector first, then every to-sector, with a 10-degree gap
+between the two groups — the readable layout for source-to-target flows;
+a name on both sides (a self-link) errors there. Directional arrows and
+circlize's scaling options are not implemented.
 
 ## When unsure, try it
 
@@ -411,9 +489,10 @@ statistical transformations beyond binning, density and loess.
    `aes(x=value, y=cat)`.
 2. **`geom_boxplot()` and `geom_bar()` need a discrete x** — wrap it:
    `aes(x=factor(g), ...)`. A text column is discrete already.
-3. **`geom_col()` stacks a varying discrete fill** (ggplot's default
-   position): `aes(x=donor, y=pct, fill=class) + geom_col()` sums duplicated
-   (category, group) rows and stacks with the last factor level at the bottom.
+3. **`geom_col()` stacks** (ggplot's default position): duplicated x rows are
+   summed, with or without a fill; with a varying discrete fill
+   `aes(x=donor, y=pct, fill=class) + geom_col()` stacks the groups with the
+   last factor level at the bottom.
    Stacking needs a discrete x and refuses negative values. A *continuous*
    `fill=` maps each bar through the gradient scale instead (a colourbar
    legend, as `geom_rect()` has). `geom_histogram()` still requires its fill
@@ -427,7 +506,13 @@ statistical transformations beyond binning, density and loess.
    an error, not a silent drop to NA that would delete rows from the figure.
 6. **A long default axis or legend title can squeeze the panel.** The default
    title is the verbatim `aes()` text; set it with `labs()` if it is long.
-NOMATCH2
+7. **Caps error instead of lying.** `scale_*_manual(values=)` holds 64
+   colours; more errors, and a positional list shorter than the factor errors
+   naming both counts. There is no discrete-category or legend-level cap any
+   more. Still hard limits: 8 layers, 12 tracks, 16 heatmap objects, 256
+   breaks/labels. A legend stack taller than the figure grows the auto-fit
+   canvas; under an explicit `--size` it warns before clipping.
+8. **`coord_flip()` is grammar-mode only** — it errors with `scale_x_genome()`
    and `ideogram()`, and is ignored in heatmap and track modes.
 9. **A dense scatter is the one slow case — use `geom_point(raster=TRUE)`.**
    A vector PDF spends ~136 bytes and one fill per point, so 10^6 points takes

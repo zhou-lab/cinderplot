@@ -332,8 +332,8 @@ ggplot(transform(upscale, panel = factor(panel,
             <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/mtcars_heat.csv
   + heatmap(name=&quot;m&quot;, cluster=both, rownames=right)
   + dendrogram(top_of(&quot;m&quot;))
-  + dendrogram(left_of(&quot;m&quot;))
-  + annotation(&quot;data/mtcars_cyl.csv&quot;, left_of(&quot;m&quot;))
+  + annotation(&quot;data/mtcars_cyl.csv&quot;, left_of(&quot;m&quot;), name=&quot;cyl&quot;)
+  + dendrogram(left_of(&quot;cyl&quot;))
   + legend(right_of(&quot;m&quot;))
   + scale_fill_gradient2(low=&quot;#2166ac&quot;, mid=&quot;#f7f7f7&quot;, high=&quot;#b2182b&quot;)&#x27; \
   -o out.svg</pre></div>

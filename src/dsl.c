@@ -24,13 +24,56 @@ static int fail(P *p, const char *fmt, const char *a) {
     return -1;
 }
 
-/* identifier: letters, digits, '_', '.' (R-style column names) */
+/* identifier: letters, digits, '_', '.' (R-style column names). Bytes >= 0x80
+ * are accepted too, so a UTF-8 header ("β-value" minus the hyphen, "μ") can be
+ * named bare; the parser only ever looks for ASCII punctuation, so multi-byte
+ * sequences pass through intact. */
 static char *ident(P *p) {
     skip_ws(p);
     const char *s = p->s;
-    while (isalnum((unsigned char)*p->s) || *p->s == '_' || *p->s == '.') p->s++;
+    while (isalnum((unsigned char)*p->s) || *p->s == '_' || *p->s == '.'
+           || (unsigned char)*p->s >= 0x80) p->s++;
     if (p->s == s) return NULL;
     return strndup(s, p->s - s);
+}
+
+/* column name: an identifier, or R's `backtick quoted` form for names with
+ * spaces, hyphens or anything else the bare form cannot carry. */
+static char *colname(P *p) {
+    skip_ws(p);
+    if (*p->s != '`') return ident(p);
+    const char *s = ++p->s;
+    while (*p->s && *p->s != '`') p->s++;
+    if (*p->s != '`' || p->s == s) {
+        snprintf(p->err, CP_ERRLEN, "unterminated or empty `backtick` column name near \"%.20s\"", s);
+        return NULL;
+    }
+    char *out = strndup(s, p->s - s);
+    p->s++;
+    return out;
+}
+
+/* TRUE/true/T/1 and FALSE/false/F/0, the same everywhere a boolean is read;
+ * a quoted spelling is accepted too. Returns -1 when the token is not one. */
+static int parse_bool(P *p, int *out) {
+    skip_ws(p);
+    const char *save = p->s;
+    char *v = NULL;
+    if (*p->s == '"' || *p->s == '\'') {
+        p->s++;
+        const char *s = p->s;
+        while (*p->s && *p->s != save[0]) p->s++;
+        if (*p->s != save[0]) { p->s = save; return -1; }
+        v = strndup(s, p->s - s);
+        p->s++;
+    } else v = ident(p);
+    if (!v) { p->s = save; return -1; }
+    int r = 0;
+    if (!strcmp(v, "TRUE") || !strcmp(v, "true") || !strcmp(v, "T") || !strcmp(v, "1")) *out = 1;
+    else if (!strcmp(v, "FALSE") || !strcmp(v, "false") || !strcmp(v, "F") || !strcmp(v, "0")) *out = 0;
+    else { r = -1; p->s = save; }
+    free(v);
+    return r;
 }
 
 static int expect(P *p, char c) {
@@ -44,13 +87,15 @@ static int expect(P *p, char c) {
     return 0;
 }
 
+/* "double" or 'single' quoted, R accepting both; the closer matches the
+ * opener, so an apostrophe inside "..." is ordinary text. */
 static char *string_lit(P *p) {
     skip_ws(p);
-    if (*p->s != '"') return NULL;
-    p->s++;
+    if (*p->s != '"' && *p->s != '\'') return NULL;
+    char q = *p->s++;
     size_t cap = strlen(p->s) + 1, n = 0;
     char *out = cp_xmalloc(cap);
-    while (*p->s && *p->s != '"') {
+    while (*p->s && *p->s != q) {
         if (*p->s == '\\' && p->s[1]) {
             p->s++;
             if (*p->s == 'n') out[n++] = '\n';
@@ -59,14 +104,21 @@ static char *string_lit(P *p) {
             p->s++;
         } else out[n++] = *p->s++;
     }
-    if (*p->s != '"') { free(out); return NULL; }
+    if (*p->s != q) { free(out); return NULL; }
     p->s++;
     out[n] = 0;
     return out;
 }
 
+static int is_quote(P *p) { skip_ws(p); return *p->s == '"' || *p->s == '\''; }
+
+/* option value that may be bare or quoted: cluster=both and cluster="both"
+ * both read, as scales=free / scales="free" already did. */
+static char *word(P *p) { return is_quote(p) ? string_lit(p) : ident(p); }
+
 /* raw value token: filename or bare word (until , ) or whitespace) */
 static char *raw_token(P *p);
+static int parse_lim_pair(P *p, const char *fn, double *lo, double *hi);
 
 /* levels=c("a", "b", ...) — an explicit discrete order. Elements may be quoted
  * or bare (so numeric levels read as c(8, 4, 6)); they are matched against the
@@ -95,16 +147,55 @@ static int parse_levels(P *p, char ***out, int *n) {
 
 /* value in aes: IDENT or factor(IDENT[, levels=c(...)]); fills entry incl.
  * source text */
+/* The R idioms a ggplot2 habit reaches for inside aes() that have no
+ * equivalent here. Each gets a message naming the cinderplot spelling, since
+ * the bare "expected ')'" they used to produce reads as a syntax slip. */
+static int aes_r_idiom(P *p, const char *id) {
+    skip_ws(p);
+    if (*p->s == '(') {
+        if (!strcmp(id, "as.factor") || !strcmp(id, "as.character") || !strcmp(id, "as.ordered"))
+            return fail(p, "aes(): %s() is not implemented; use factor(col) (add levels=c(...) for an order)", id);
+        if (!strcmp(id, "reorder") || !strcmp(id, "fct_reorder") || !strcmp(id, "fct_relevel")
+            || !strcmp(id, "fct_rev") || !strcmp(id, "fct_infreq") || !strcmp(id, "forcats"))
+            return fail(p, "aes(): %s() is not implemented; order the levels explicitly "
+                        "with factor(col, levels=c(\"a\", \"b\", ...))", id);
+        if (!strcmp(id, "log10") || !strcmp(id, "log2") || !strcmp(id, "log") || !strcmp(id, "log1p")
+            || !strcmp(id, "sqrt") || !strcmp(id, "exp") || !strcmp(id, "abs") || !strcmp(id, "scale"))
+            return fail(p, "aes(): %s() inside aes() is not implemented; use "
+                        "scale_x_log10()/scale_y_log10() for a log axis, or add the "
+                        "transformed column to the data (e.g. with tabl mutate)", id);
+        if (!strcmp(id, "as.numeric") || !strcmp(id, "as.integer") || !strcmp(id, "as.double"))
+            return fail(p, "aes(): %s() is not implemented; a numeric column is read as "
+                        "numeric already -- check the column for non-numeric cells", id);
+        if (!strcmp(id, "paste") || !strcmp(id, "paste0") || !strcmp(id, "interaction")
+            || !strcmp(id, "sprintf") || !strcmp(id, "round") || !strcmp(id, "format")
+            || !strcmp(id, "ifelse") || !strcmp(id, "cut"))
+            return fail(p, "aes(): %s() is not implemented; add the derived column "
+                        "to the data (e.g. with tabl mutate) and map it", id);
+        return fail(p, "aes(): `%s()` is not a mapping; only a column name or "
+                    "factor(col) is accepted here", id);
+    }
+    if (strchr("+-*/^%", *p->s) && p->s[1] != '=')
+        return fail(p, "aes(): arithmetic (%.12s...) inside aes() is not implemented; "
+                    "add the computed column to the data (e.g. with tabl mutate) and map it",
+                    p->s);
+    return 0;
+}
+
 static int aes_value(P *p, AesEntry *e) {
     const char *start;
     skip_ws(p);
     start = p->s;
-    char *id = ident(p);
-    if (!id) return fail(p, "expected a column name near \"%.20s\"", p->s);
+    if (is_quote(p))
+        return fail(p, "aes() maps a column name, not a string, near \"%.20s\"; "
+                    "for a `name with spaces` use backticks", p->s);
+    char *id = colname(p);
+    if (!id) return *p->err ? -1 : fail(p, "expected a column name near \"%.20s\"", p->s);
+    if (strcmp(id, "factor") && aes_r_idiom(p, id)) return -1;
     if (!strcmp(id, "factor")) {
         if (expect(p, '(')) return -1;
-        e->col = ident(p);
-        if (!e->col) return fail(p, "expected a column name in factor() near \"%.20s\"", p->s);
+        e->col = colname(p);
+        if (!e->col) return *p->err ? -1 : fail(p, "expected a column name in factor() near \"%.20s\"", p->s);
         skip_ws(p);
         if (*p->s == ',') {                       /* factor(col, levels=c(...)) */
             p->s++;
@@ -133,7 +224,11 @@ static int aes_value(P *p, AesEntry *e) {
 }
 
 static int parse_aes(P *p, PlotSpec *spec) {
-    int pos = 0;
+    /* Several ggplot2 keys share one slot here (xmin= is x, ymax= is yend,
+     * fill= is colour). A second mapping onto an occupied slot used to win
+     * silently -- aes(x=hp, xmin=wt) plotted wt -- so remember which key
+     * claimed each slot and refuse the collision, naming both. */
+    const char *claimed[10] = {0};
     skip_ws(p);
     if (*p->s == ')') { p->s++; return 0; }
     for (;;) {
@@ -142,31 +237,55 @@ static int parse_aes(P *p, PlotSpec *spec) {
         const char *save = p->s;
         char *key = ident(p);
         AesEntry *e = NULL;
+        int slot = -1;
         skip_ws(p);
         if (key && *p->s == '=') {
             p->s++;
-            if (!strcmp(key, "x") || !strcmp(key, "xmin")) e = &spec->x;
-            else if (!strcmp(key, "y") || !strcmp(key, "ymin")) e = &spec->y;
-            else if (!strcmp(key, "xend") || !strcmp(key, "xmax")) e = &spec->xend;
-            else if (!strcmp(key, "yend") || !strcmp(key, "ymax")) e = &spec->yend;
-            else if (!strcmp(key, "chrom") || !strcmp(key, "chr")) e = &spec->chrom;
-            else if (!strcmp(key, "label")) e = &spec->label;
-            else if (!strcmp(key, "size")) e = &spec->size;
-            else if (!strcmp(key, "shape")) e = &spec->shape;
+            if (!strcmp(key, "x") || !strcmp(key, "xmin")) { e = &spec->x; slot = 0; }
+            else if (!strcmp(key, "y")) { e = &spec->y; slot = 1; }
+            else if (!strcmp(key, "xend") || !strcmp(key, "xmax")) { e = &spec->xend; slot = 2; }
+            else if (!strcmp(key, "yend") || !strcmp(key, "ymax")) { e = &spec->yend; slot = 3; }
+            else if (!strcmp(key, "ymin")) { e = &spec->ymin; slot = 4; }
+            else if (!strcmp(key, "chrom") || !strcmp(key, "chr")) { e = &spec->chrom; slot = 5; }
+            else if (!strcmp(key, "label")) { e = &spec->label; slot = 6; }
+            else if (!strcmp(key, "size")) { e = &spec->size; slot = 7; }
+            else if (!strcmp(key, "shape")) { e = &spec->shape; slot = 8; }
             else if (!strcmp(key, "colour") || !strcmp(key, "color")
                   || !strcmp(key, "fill")) {
-                e = &spec->colour;
+                e = &spec->colour; slot = 9;
                 spec->colour.is_fill = key[0] == 'f';
             }
-            else return fail(p, "aes(%s=...) is not implemented; supported: x, y, xend, yend, label, size, shape, chrom, colour, fill", key);
-            free(key);
+            else if (!strcmp(key, "group") || !strcmp(key, "linetype") || !strcmp(key, "alpha")
+                     || !strcmp(key, "weight") || !strcmp(key, "linewidth"))
+                return fail(p, "aes(%s=...) is not implemented; a discrete colour= "
+                            "already groups lines and sets the legend", key);
+            else return fail(p, "aes(%s=...) is not implemented; supported: x, y, xend, yend, ymin, ymax, label, size, shape, chrom, colour, fill", key);
         } else {
-            p->s = save;                     /* positional: x then y */
-            if (pos == 0) e = &spec->x;
-            else if (pos == 1) e = &spec->y;
+            /* positional: the first unclaimed of x, y -- R's matching, so
+             * aes(x=factor(g), v) puts v on y */
+            p->s = save;
+            free(key); key = NULL;
+            if (!claimed[0]) { e = &spec->x; slot = 0; }
+            else if (!claimed[1]) { e = &spec->y; slot = 1; }
             else return fail(p, "too many positional aes() arguments near \"%.20s\"", p->s);
-            pos++;
         }
+        const char *k2 = key ? key : (slot == 0 ? "x" : "y");
+        if (claimed[slot]) {
+            char msg[CP_ERRLEN];
+            if (!strcmp(claimed[slot], k2))
+                snprintf(msg, sizeof msg, "aes(%s=) is given twice", k2);
+            else if (slot == 9)
+                snprintf(msg, sizeof msg, "aes(): %s= and %s= both map the colour "
+                         "aesthetic (fill and colour are one aesthetic here; on "
+                         "geom_boxplot the key chooses body vs chrome); give one",
+                         claimed[slot], k2);
+            else
+                snprintf(msg, sizeof msg, "aes(): %s= and %s= both map the %s slot "
+                         "(they are aliases here); give one", claimed[slot], k2,
+                         slot == 0 ? "x" : slot == 2 ? "xend/xmax" : "yend/ymax");
+            return fail(p, "%s", msg);
+        }
+        claimed[slot] = k2;                  /* key is kept alive by this */
         if (aes_value(p, e)) return -1;
         skip_ws(p);
         if (*p->s == ',') { p->s++; continue; }
@@ -208,8 +327,7 @@ static int parse_labs(P *p, PlotSpec *spec) {
 
 /* raw value token: filename or bare word (until , ) or whitespace) */
 static char *raw_token(P *p) {
-    skip_ws(p);
-    if (*p->s == '"') return string_lit(p);
+    if (is_quote(p)) return string_lit(p);
     const char *s = p->s;
     while (*p->s && !strchr(",() \t\n", *p->s)) p->s++;
     if (p->s == s) return NULL;
@@ -222,6 +340,7 @@ static int parse_place(P *p, const char *kind, HPlace *pl) {
              : !strcmp(kind, "beneath") ? PL_BENEATH
              : !strcmp(kind, "right_of") ? PL_RIGHT_OF : PL_LEFT_OF;
     pl->anchor = NULL; pl->pad = 0.01; pl->width = -1; pl->height = -1;
+    pl->given = 1;
     if (expect(p, '(')) return -1;
     skip_ws(p);
     if (*p->s == ')') { p->s++; return 0; }
@@ -258,6 +377,32 @@ static TrackObj *trk_new(P *p, PlotSpec *spec, TrackType t) {
     return o;
 }
 
+/* Per-track-type option sets, mirroring what render_tracks.c reads: the
+ * generic parser accepted coverage(cluster=samples) and dropped it. */
+static const char *trk_name(TrackType t) {
+    static const char *nm[] = { "coverage", "interval", "genes", "arcs", "matrix", "cytoband" };
+    return nm[t];
+}
+static int trk_opt_ok(TrackType t, const char *key) {
+    if (!strcmp(key, "name") || !strcmp(key, "height") || !strcmp(key, "data")) return 1;
+    if (!strcmp(key, "max")) return t == TRK_COVERAGE;
+    if (!strcmp(key, "color") || !strcmp(key, "colour"))
+        return t == TRK_COVERAGE || t == TRK_INTERVAL || t == TRK_GENES || t == TRK_ARCS;
+    if (!strcmp(key, "cluster") || !strcmp(key, "rownames") || !strcmp(key, "colnames"))
+        return t == TRK_MATRIX;
+    if (!strcmp(key, "transcripts")) return t == TRK_GENES;
+    return 0;
+}
+static const char *trk_opt_menu(TrackType t) {
+    switch (t) {
+    case TRK_COVERAGE: return "name=, height=, data=, color=, max=";
+    case TRK_INTERVAL: case TRK_ARCS: return "name=, height=, data=, color=";
+    case TRK_GENES: return "name=, height=, data=, color=, transcripts=";
+    case TRK_MATRIX: return "name=, height=, data=, cluster=, rownames=, colnames=";
+    default: return "name=, height=, data=";
+    }
+}
+
 static int parse_trk_args(P *p, TrackObj *o) {
     skip_ws(p);
     if (*p->s == ')') { p->s++; goto done; }
@@ -268,6 +413,16 @@ static int parse_trk_args(P *p, TrackObj *o) {
         skip_ws(p);
         if (key && *p->s == '=') {
             p->s++;
+            if (!trk_opt_ok(o->type, key)) {
+                char msg[CP_ERRLEN];
+                int known = !strcmp(key, "max") || !strcmp(key, "color") || !strcmp(key, "colour")
+                         || !strcmp(key, "cluster") || !strcmp(key, "rownames")
+                         || !strcmp(key, "colnames") || !strcmp(key, "transcripts");
+                snprintf(msg, sizeof msg, "option `%s` is %s %s(); supported: %s", key,
+                         known ? "not valid for" : "not implemented on",
+                         trk_name(o->type), trk_opt_menu(o->type));
+                return fail(p, "%s", msg);
+            }
             if (!strcmp(key, "name")) {
                 o->name = string_lit(p);
                 if (!o->name) return fail(p, "name= expects a quoted string", "");
@@ -283,35 +438,47 @@ static int parse_trk_args(P *p, TrackObj *o) {
                 o->data = string_lit(p);
                 if (!o->data) return fail(p, "data= expects a quoted path", "");
             } else if (!strcmp(key, "cluster")) {
-                char *v = ident(p);
+                char *v = word(p);
                 if (!v) return fail(p, "cluster= expects samples or none", "");
                 if (!strcmp(v, "samples") || !strcmp(v, "rows")) o->cluster = 1;
-                else if (!strcmp(v, "none")) o->cluster = 0;
+                else if (!strcmp(v, "none") || !strcmp(v, "off")) o->cluster = 0;
                 else return fail(p, "cluster=%s invalid; use samples or none", v);
             } else if (!strcmp(key, "rownames")) {
-                char *v = ident(p);
+                /* left/right read as on: the matrix track draws its sample
+                 * labels on one side only, and heatmap() spells sides */
+                char *v = word(p);
                 if (!v) return fail(p, "rownames= expects on or off", "");
-                if (!strcmp(v, "off") || !strcmp(v, "none") || !strcmp(v, "hide")) o->hide_rownames = 1;
-                else if (!strcmp(v, "on") || !strcmp(v, "show")) o->hide_rownames = 0;
+                if (!strcmp(v, "off") || !strcmp(v, "none") || !strcmp(v, "hide")
+                    || !strcmp(v, "FALSE") || !strcmp(v, "false")) o->hide_rownames = 1;
+                else if (!strcmp(v, "on") || !strcmp(v, "show") || !strcmp(v, "left")
+                         || !strcmp(v, "right") || !strcmp(v, "TRUE") || !strcmp(v, "true"))
+                    o->hide_rownames = 0;
                 else return fail(p, "rownames=%s invalid; use on or off", v);
             } else if (!strcmp(key, "colnames")) {
                 /* Symmetric with rownames=. For a CpG matrix the per-probe
                  * labels are almost always noise -- 127 of them collapse into
                  * an unreadable band about a third of the figure high -- so
                  * turning them off has to be reachable. */
-                char *v = ident(p);
+                char *v = word(p);
                 if (!v) return fail(p, "colnames= expects on or off", "");
-                if (!strcmp(v, "off") || !strcmp(v, "none") || !strcmp(v, "hide")) o->hide_colnames = 1;
-                else if (!strcmp(v, "on") || !strcmp(v, "show")) o->hide_colnames = 0;
+                if (!strcmp(v, "off") || !strcmp(v, "none") || !strcmp(v, "hide")
+                    || !strcmp(v, "FALSE") || !strcmp(v, "false")) o->hide_colnames = 1;
+                else if (!strcmp(v, "on") || !strcmp(v, "show") || !strcmp(v, "top")
+                         || !strcmp(v, "bottom") || !strcmp(v, "TRUE") || !strcmp(v, "true"))
+                    o->hide_colnames = 0;
                 else return fail(p, "colnames=%s invalid; use on or off", v);
             } else if (!strcmp(key, "transcripts")) {
-                char *v = ident(p);
+                char *v = word(p);
                 if (!v) return fail(p, "transcripts= expects all or canonical", "");
                 if (!strcmp(v, "all")) o->all_transcripts = 1;
                 else if (!strcmp(v, "canonical") || !strcmp(v, "longest")) o->all_transcripts = 0;
                 else return fail(p, "transcripts=%s invalid; use all or canonical", v);
-            } else return fail(p, "track option `%s` not implemented; supported: name, "
-                                  "height, max, color, data, cluster, rownames, transcripts", key);
+            } else {
+                char msg[CP_ERRLEN];
+                snprintf(msg, sizeof msg, "track option `%s` not implemented; supported "
+                         "on %s(): %s", key, trk_name(o->type), trk_opt_menu(o->type));
+                return fail(p, "%s", msg);
+            }
         } else {
             p->s = save;
             char *v = raw_token(p);
@@ -345,6 +512,33 @@ static int is_place_name(const char *s) {
         || !strcmp(s, "right_of") || !strcmp(s, "left_of");
 }
 
+/* Which options each placed object honours (heatmap.c reads them by type;
+ * the rest parsed and vanished, so legend(cluster=both) was accepted). */
+static const char *hm_obj_name(HMType t) {
+    return t == HM_HEATMAP ? "heatmap" : t == HM_ANNOTATION ? "annotation"
+         : t == HM_LEGEND ? "legend" : "dendrogram";
+}
+static int hm_opt_ok(HMType t, const char *key) {
+    if (!strcmp(key, "name")) return 1;
+    if (!strcmp(key, "title")) return t != HM_DENDROGRAM;
+    if (!strcmp(key, "data")) return t == HM_HEATMAP || t == HM_ANNOTATION;
+    if (!strcmp(key, "column")) return t == HM_ANNOTATION;
+    if (!strcmp(key, "cluster") || !strcmp(key, "rownames") || !strcmp(key, "colnames")
+        || !strcmp(key, "aspect")) return t == HM_HEATMAP;
+    if (!strcmp(key, "labels") || !strcmp(key, "box") || !strcmp(key, "grid"))
+        return t == HM_HEATMAP || t == HM_ANNOTATION;
+    return 0;
+}
+static const char *hm_opt_menu(HMType t) {
+    switch (t) {
+    case HM_HEATMAP: return "name=, data=, title=, cluster=, rownames=, colnames=, "
+                            "labels=, aspect=, box=, grid=, placements";
+    case HM_ANNOTATION: return "name=, data=, title=, column=, labels=, box=, grid=, placements";
+    case HM_LEGEND: return "name=, title=, placements (e.g. right_of(\"m\"))";
+    default: return "name=, placements (e.g. left_of(\"m\"))";
+    }
+}
+
 /* heatmap(...) / annotation(file, ...) / legend(...) argument list */
 static int parse_hm_args(P *p, HMObj *o, int want_data) {
     skip_ws(p);
@@ -358,6 +552,23 @@ static int parse_hm_args(P *p, HMObj *o, int want_data) {
             if (parse_place(p, key, &o->place)) return -1;
         } else if (key && *p->s == '=') {
             p->s++;
+            if (!hm_opt_ok(o->type, key)) {
+                char msg[CP_ERRLEN];
+                const char *where = hm_opt_ok(HM_HEATMAP, key) && hm_opt_ok(HM_ANNOTATION, key)
+                                  ? "heatmap() and annotation()"
+                                  : hm_opt_ok(HM_HEATMAP, key) ? "heatmap()"
+                                  : hm_opt_ok(HM_ANNOTATION, key) ? "annotation()"
+                                  : hm_opt_ok(HM_LEGEND, key) ? "heatmap(), annotation() and legend()"
+                                  : NULL;
+                if (where)
+                    snprintf(msg, sizeof msg, "option `%s` is not valid for %s(); %s= applies "
+                             "to %s. %s() takes: %s", key, hm_obj_name(o->type), key, where,
+                             hm_obj_name(o->type), hm_opt_menu(o->type));
+                else
+                    snprintf(msg, sizeof msg, "option `%s` not implemented; supported for %s(): %s",
+                             key, hm_obj_name(o->type), hm_opt_menu(o->type));
+                return fail(p, "%s", msg);
+            }
             if (!strcmp(key, "name")) {
                 char *v = string_lit(p);
                 if (!v) return fail(p, "name= expects a quoted string", "");
@@ -375,7 +586,7 @@ static int parse_hm_args(P *p, HMObj *o, int want_data) {
                 if (!v) return fail(p, "title= expects a quoted string", "");
                 o->title = v;
             } else if (!strcmp(key, "cluster")) {
-                char *v = ident(p);
+                char *v = word(p);           /* both and "both" alike */
                 if (!v) return fail(p, "cluster= expects rows, cols, both, "
                                     "diagonal, symmetric, or none", "");
                 if (!strcmp(v, "rows")) o->cluster = CL_ROWS;
@@ -389,25 +600,32 @@ static int parse_hm_args(P *p, HMObj *o, int want_data) {
                                  "diagonal, symmetric, or none", v);
             } else if (!strcmp(key, "rownames") || !strcmp(key, "colnames")) {
                 int row = key[0] == 'r';
-                char *v = ident(p);
+                char *v = word(p);
                 if (!v) return fail(p, "%s= expects left/right (rownames) or top/bottom (colnames), or none", key);
                 Side s;
-                /* `off`/`hide` because matrix() tracks spell the same idea that
-                 * way; the two modes should not disagree on how to say it. */
-                if (!strcmp(v, "none") || !strcmp(v, "off") || !strcmp(v, "hide"))
+                /* `off`/`hide`/`on` because matrix() tracks spell the same idea
+                 * that way; the two modes should not disagree on how to say
+                 * it. `on` takes the side the default layout puts labels on. */
+                if (!strcmp(v, "none") || !strcmp(v, "off") || !strcmp(v, "hide")
+                    || !strcmp(v, "FALSE") || !strcmp(v, "false"))
                     s = SIDE_NONE;
+                else if (!strcmp(v, "on") || !strcmp(v, "show") || !strcmp(v, "TRUE")
+                         || !strcmp(v, "true"))
+                    s = row ? SIDE_RIGHT : SIDE_BOTTOM;
                 else if (row && !strcmp(v, "left")) s = SIDE_LEFT;
                 else if (row && !strcmp(v, "right")) s = SIDE_RIGHT;
                 else if (!row && !strcmp(v, "top")) s = SIDE_TOP;
                 else if (!row && !strcmp(v, "bottom")) s = SIDE_BOTTOM;
-                else return fail(p, row ? "rownames= must be left, right, or none"
-                                        : "colnames= must be top, bottom, or none", "");
+                else return fail(p, row ? "rownames= must be left, right, on, or none"
+                                        : "colnames= must be top, bottom, on, or none", "");
                 if (row) o->rownames = s; else o->colnames = s;
             } else if (!strcmp(key, "labels")) {
-                char *v = ident(p);
+                char *v = word(p);
                 if (!v) return fail(p, "labels= expects data/on or none/off", "");
-                if (!strcmp(v, "data") || !strcmp(v, "on") || !strcmp(v, "true")) o->label_data = 1;
-                else if (!strcmp(v, "none") || !strcmp(v, "off") || !strcmp(v, "false")) o->label_data = 0;
+                if (!strcmp(v, "data") || !strcmp(v, "on") || !strcmp(v, "true")
+                    || !strcmp(v, "TRUE") || !strcmp(v, "T") || !strcmp(v, "1")) o->label_data = 1;
+                else if (!strcmp(v, "none") || !strcmp(v, "off") || !strcmp(v, "false")
+                         || !strcmp(v, "FALSE") || !strcmp(v, "F") || !strcmp(v, "0")) o->label_data = 0;
                 else return fail(p, "labels=%s invalid; use data/on or none/off", v);
             } else if (!strcmp(key, "aspect")) {
                 skip_ws(p);
@@ -430,13 +648,15 @@ static int parse_hm_args(P *p, HMObj *o, int want_data) {
                 } else {
                     char *v = ident(p);
                     if (!v) return fail(p, "box= expects on/off or a quoted colour", "");
-                    if (!strcmp(v, "on") || !strcmp(v, "true") || !strcmp(v, "TRUE")) {
+                    if (!strcmp(v, "on") || !strcmp(v, "true") || !strcmp(v, "TRUE")
+                        || !strcmp(v, "T") || !strcmp(v, "1")) {
                         o->box = 1;
                         Col grey = {0.4, 0.4, 0.4};   /* as matrix() tracks frame theirs */
                         o->box_col = grey;
                     }
                     else if (!strcmp(v, "none") || !strcmp(v, "off")
-                             || !strcmp(v, "false") || !strcmp(v, "FALSE")) o->box = 0;
+                             || !strcmp(v, "false") || !strcmp(v, "FALSE")
+                             || !strcmp(v, "F") || !strcmp(v, "0")) o->box = 0;
                     else return fail(p, "box=%s invalid; use on/off or a quoted colour", v);
                 }
             } else if (!strcmp(key, "grid")) {
@@ -452,21 +672,31 @@ static int parse_hm_args(P *p, HMObj *o, int want_data) {
                 } else {
                     char *v = ident(p);
                     if (!v) return fail(p, "grid= expects on/off or a quoted colour", "");
-                    if (!strcmp(v, "on") || !strcmp(v, "true") || !strcmp(v, "TRUE")) {
+                    if (!strcmp(v, "on") || !strcmp(v, "true") || !strcmp(v, "TRUE")
+                        || !strcmp(v, "T") || !strcmp(v, "1")) {
                         o->grid = 1;
                         Col grey = {0.702, 0.702, 0.702};   /* grey70: dim on white, legible on fills */
                         o->grid_col = grey;
                     }
                     else if (!strcmp(v, "none") || !strcmp(v, "off")
-                             || !strcmp(v, "false") || !strcmp(v, "FALSE")) o->grid = 0;
+                             || !strcmp(v, "false") || !strcmp(v, "FALSE")
+                             || !strcmp(v, "F") || !strcmp(v, "0")) o->grid = 0;
                     else return fail(p, "grid=%s invalid; use on/off or a quoted colour", v);
                 }
-            } else return fail(p, "option `%s` not implemented; supported: name=, data=, "
-                                  "cluster=, rownames=, colnames=, labels=, box=, grid=, "
-                                  "aspect=, placements", key);
+            } else {
+                char msg[CP_ERRLEN];
+                snprintf(msg, sizeof msg, "option `%s` not implemented; supported for %s(): %s",
+                         key, hm_obj_name(o->type), hm_opt_menu(o->type));
+                return fail(p, "%s", msg);
+            }
         } else {
             p->s = save;
             char *v = raw_token(p);
+            if (v && *v && !want_data && o->type == HM_HEATMAP)
+                /* the heatmap's table is the leading data term (or stdin);
+                 * a bare path here was reported as a mystery argument */
+                return fail(p, "heatmap() takes no positional file; put it first "
+                            "(`%s + heatmap()`) or give data=\"...\"", v);
             if (!v || !want_data || o->data)
                 return fail(p, "unexpected argument near \"%.20s\"", save);
             o->data = v;
@@ -511,30 +741,42 @@ static int parse_grad_scale(P *p, FillScale *fs, const char *k, const char *fn) 
                  "parula, turbo, coolwarm, bwr, jet, gradient, gradient2", fn, k);
         return fail(p, "%s", msg);
     }
+    int is_grad = fs->kind == FILL_GRADIENT || fs->kind == FILL_GRADIENT2;
     skip_ws(p);
     while (*p->s != ')') {
         char *key = ident(p);
         if (!key || expect(p, '=')) return fail(p, "bad scale argument", "");
         skip_ws(p);
+        /* low=/mid=/high=/midpoint= are gradient() stops; a fixed palette
+         * (viridis, jet, ...) ignored them and painted its own ramp */
+        if (!is_grad && (!strcmp(key, "low") || !strcmp(key, "mid")
+                         || !strcmp(key, "high") || !strcmp(key, "midpoint"))) {
+            char msg[CP_ERRLEN];
+            snprintf(msg, sizeof msg, "%s= is not valid for %s%s(): the palette is "
+                     "fixed; use %sgradient(low=, high=) or %sgradient2(low=, mid=, "
+                     "high=, midpoint=)", key, fn, k, fn, fn);
+            return fail(p, "%s", msg);
+        }
         if (!strcmp(key, "midpoint")) {
-            fs->midpoint = strtod(p->s, (char **)&p->s);
+            if (fs->kind != FILL_GRADIENT2)
+                return fail(p, "midpoint= belongs to %sgradient2()", fn);
+            char *end;
+            fs->midpoint = strtod(p->s, &end);
+            if (end == p->s) return fail(p, "midpoint= expects a number", "");
+            p->s = end;
         } else if (!strcmp(key, "limits")) {         /* c(lo, hi) — domain + squish */
-            skip_ws(p);
-            if (p->s[0] == 'c' && p->s[1] == '(') p->s += 2;
-            else return fail(p, "limits= expects c(lo, hi)", "");
-            fs->lim_lo = strtod(p->s, (char **)&p->s);
-            skip_ws(p); if (*p->s == ',') p->s++;
-            fs->lim_hi = strtod(p->s, (char **)&p->s);
-            skip_ws(p); if (*p->s == ')') p->s++;
-            if (!(fs->lim_lo < fs->lim_hi))
-                return fail(p, "limits= expects lo < hi", "");
+            if (parse_lim_pair(p, "limits=", &fs->lim_lo, &fs->lim_hi)) return -1;
             fs->has_limits = 1;
         } else {
             char *v = string_lit(p); Col c;
             if (!v || parse_color(v, &c))
                 return fail(p, "bad colour for `%s` (use names or #RRGGBB)", key);
             if (!strcmp(key, "low")) fs->low = c;
-            else if (!strcmp(key, "mid")) fs->mid = c;
+            else if (!strcmp(key, "mid")) {
+                if (fs->kind != FILL_GRADIENT2)
+                    return fail(p, "mid= belongs to %sgradient2()", fn);
+                fs->mid = c;
+            }
             else if (!strcmp(key, "high")) fs->high = c;
             else return fail(p, "scale option `%s` not implemented", key);
         }
@@ -645,6 +887,7 @@ static int parse_brewer_discrete(P *p, PlotSpec *spec) {
 
 static int parse_manual_scale(P *p, PlotSpec *spec, const char *fn) {
     spec->n_manual = 0; spec->has_manual = 1;
+    spec->brewer_disc = NULL;    /* a later manual palette replaces a brewer one */
     skip_ws(p);
     while (*p->s != ')') {
         char *key = ident(p);
@@ -691,6 +934,45 @@ static int parse_manual_scale(P *p, PlotSpec *spec, const char *fn) {
     return 0;
 }
 
+/* xlim(lo, hi) / ylim(lo, hi) / limits=c(lo, hi): two numbers, lo < hi.
+ * Used to read whatever strtod made of the text, so xlim(300, 50), xlim(5)
+ * and xlim() all reached the renderer and died there with a message about
+ * expand=. R's c(...) wrapper is accepted on xlim() too, since that is the
+ * form ggplot2 users type; NA (the one-sided idiom) is refused by name. */
+static int parse_lim_pair(P *p, const char *fn, double *lo, double *hi) {
+    skip_ws(p);
+    int wrapped = 0;
+    if (p->s[0] == 'c' && p->s[1] == '(') { p->s += 2; wrapped = 1; }
+    double v[2]; int na[2] = {0, 0}, n = 0;
+    for (; n < 2; n++) {
+        skip_ws(p);
+        if (!strncmp(p->s, "NA_real_", 8)) { p->s += 8; na[n] = 1; v[n] = 0; }
+        else if (!strncmp(p->s, "NA", 2) && !isalnum((unsigned char)p->s[2]) && p->s[2] != '_') {
+            p->s += 2; na[n] = 1; v[n] = 0;
+        } else {
+            char *end;
+            v[n] = strtod(p->s, &end);
+            if (end == p->s) break;
+            p->s = end;
+        }
+        skip_ws(p);
+        if (*p->s == ',') { p->s++; continue; }
+        n++; break;
+    }
+    if (n != 2) return fail(p, "%s expects two numbers, lo and hi", fn);
+    if (wrapped && expect(p, ')')) return -1;
+    if (na[0] || na[1])
+        return fail(p, "%s one-sided limits (NA) are not implemented; give both ends", fn);
+    if (!(v[0] < v[1])) {
+        char got[96];
+        snprintf(got, sizeof got, "%s: lo must be < hi (got %g, %g)", fn, v[0], v[1]);
+        return fail(p, v[0] == v[1] ? "%s; equal ends leave no range"
+                    : "%s; a reversed range is not implemented", got);
+    }
+    *lo = v[0]; *hi = v[1];
+    return 0;
+}
+
 static int parse_term(P *p, PlotSpec *spec) {
     char *name = ident(p);
     if (!name) return fail(p, "expected a function call near \"%.20s\"", p->s);
@@ -704,6 +986,16 @@ static int parse_term(P *p, PlotSpec *spec) {
         if (name[0] == 'x') spec->lab_x = val;
         else if (name[0] == 'y') spec->lab_y = val;
         else spec->lab_title = val;
+        skip_ws(p);
+        if (*p->s == ',' && name[0] == 'g') {          /* ggtitle("T", subtitle="S") */
+            p->s++;
+            char *key = ident(p);
+            if (!key || strcmp(key, "subtitle") || expect(p, '='))
+                return fail(p, "ggtitle() takes (\"title\"[, subtitle=\"...\"])", "");
+            free(key);
+            if (!(spec->lab_subtitle = string_lit(p)))
+                return fail(p, "ggtitle(subtitle=) expects a quoted string", "");
+        }
         return expect(p, ')');
     }
 
@@ -723,6 +1015,8 @@ static int parse_term(P *p, PlotSpec *spec) {
      * synonym rather than making the caller care. */
     else if (!strcmp(name, "geom_raster")) gt = GEOM_TILE;
     else if (!strcmp(name, "geom_segment")) gt = GEOM_SEGMENT;
+    else if (!strcmp(name, "geom_errorbar")) gt = GEOM_ERRORBAR;
+    else if (!strcmp(name, "geom_linerange")) gt = GEOM_LINERANGE;
     else if (!strcmp(name, "geom_rect")) gt = GEOM_RECT;
     else if (!strcmp(name, "geom_density")) gt = GEOM_DENSITY;
     else if (!strcmp(name, "geom_hline")) gt = GEOM_HLINE;
@@ -740,16 +1034,7 @@ static int parse_term(P *p, PlotSpec *spec) {
         l->slope = 1;                                /* geom_abline default slope */
         l->repel = is_repel;
         skip_ws(p);
-        if (gt == GEOM_HISTOGRAM && *p->s != ')') {
-            char *key = ident(p);
-            if (!key || strcmp(key, "bins") || expect(p, '='))
-                return fail(p, "geom_histogram() supports only bins=N", "");
-            skip_ws(p);
-            l->bins = (int)strtol(p->s, (char **)&p->s, 10);
-            if (l->bins < 1 || l->bins > 10000)
-                return fail(p, "geom_histogram(bins=...) must be 1..10000", "");
-            skip_ws(p);
-        } else {
+        {
             /* generic layer args: color=/colour=/fill= sets a constant colour
              * for any geom (overriding the colour aesthetic, as ggplot does when
              * the aesthetic is set outside aes()); data=/y= give a second data
@@ -757,14 +1042,48 @@ static int parse_term(P *p, PlotSpec *spec) {
             int se = (gt == GEOM_SEGMENT || gt == GEOM_RECT);
             while (*p->s != ')') {
                 char *key = ident(p);
-                if (!key || expect(p, '='))
-                    return fail(p, "geom args: color=/fill= (segment/rect also data=, y=)", "");
                 skip_ws(p);
-                if (!strcmp(key, "color") || !strcmp(key, "colour") || !strcmp(key, "fill")) {
+                if (key && !strcmp(key, "aes") && *p->s == '(') {
+                    /* ggplot2's per-layer mapping. There is one aes() here,
+                     * so say where the mapping goes instead of the generic
+                     * argument menu, which reads as if aes() were a typo. */
+                    if (gt == GEOM_HLINE || gt == GEOM_VLINE)
+                        return fail(p, "%s(aes(...)) -- one line per data row -- is "
+                                    "not implemented; give a literal intercept "
+                                    "(yintercept=20 / xintercept=20) and repeat the "
+                                    "layer for several", name);
+                    return fail(p, "%s(aes(...)) is not implemented: layer-level "
+                                "mappings go in the one top-level aes(), e.g. "
+                                "`aes(x, y, colour=g) + geom_point()`", name);
+                }
+                if (!key || expect(p, '='))
+                    return fail(p, "%s() takes key=value arguments: colour=/fill=, alpha=, "
+                                "linetype=, and the geom's own options", name);
+                skip_ws(p);
+                if (gt == GEOM_HISTOGRAM && !strcmp(key, "bins")) {
+                    char *end;
+                    double v = strtod(p->s, &end);
+                    if (end == p->s || v < 1 || v > 10000 || v != (int)v)
+                        return fail(p, "geom_histogram(bins=...) must be a whole number 1..10000", "");
+                    p->s = end;
+                    l->bins = (int)v;
+                } else if (gt == GEOM_HISTOGRAM
+                           && (!strcmp(key, "binwidth") || !strcmp(key, "breaks")
+                               || !strcmp(key, "boundary") || !strcmp(key, "center")
+                               || !strcmp(key, "closed") || !strcmp(key, "position"))) {
+                    return fail(p, "geom_histogram(%s=) is not implemented; only bins=N "
+                                "chooses the binning", key);
+                } else if ((gt == GEOM_LINE || gt == GEOM_SMOOTH)
+                           && (!strcmp(key, "size") || !strcmp(key, "linewidth"))) {
+                    /* the stroke is a fixed 0.5; saying "layer option not
+                     * implemented" hid that it is the WIDTH that is missing */
+                    return fail(p, "line width on %s() (size=/linewidth=) is not implemented", name);
+                } else if (!strcmp(key, "color") || !strcmp(key, "colour") || !strcmp(key, "fill")) {
                     char *v = string_lit(p);
                     if (!v || parse_color(v, &l->color))
                         return fail(p, "bad colour for `%s`", key);
                     l->has_color = 1;
+                    l->color_is_fill = key[0] == 'f';
                 } else if (se && !strcmp(key, "data")) {
                     l->data = string_lit(p);
                     if (!l->data) return fail(p, "data= expects a quoted path", "");
@@ -779,13 +1098,12 @@ static int parse_term(P *p, PlotSpec *spec) {
                         return fail(p, "span= expects a fraction in (0, 1]", "");
                     p->s = end; l->span = v;
                 } else if (gt == GEOM_SMOOTH && !strcmp(key, "se")) {
-                    char *v = string_lit(p);
-                    if (!v) v = ident(p);
-                    if (!v) return fail(p, "se= expects TRUE or FALSE", "");
+                    int b;
+                    if (parse_bool(p, &b)) return fail(p, "se= expects TRUE or FALSE", "");
                     /* ggplot defaults se=TRUE. The ribbon is not implemented, and
                      * quietly drawing the line without it would be a figure that
                      * claims less uncertainty than the caller asked to see. */
-                    if (strcmp(v, "FALSE") && strcmp(v, "false") && strcmp(v, "F"))
+                    if (b)
                         return fail(p, "geom_smooth(se=TRUE) is not implemented -- "
                                     "the confidence ribbon is missing, not hidden; "
                                     "pass se=FALSE for the fitted line alone", "");
@@ -796,10 +1114,18 @@ static int parse_term(P *p, PlotSpec *spec) {
                 } else if (gt == GEOM_DENSITY && !strcmp(key, "adjust")) {
                     l->adjust = strtod(p->s, (char **)&p->s);
                     if (l->adjust <= 0) return fail(p, "geom_density(adjust=...) must be > 0", "");
-                } else if (gt == GEOM_HLINE && !strcmp(key, "yintercept")) {
-                    l->intercept = strtod(p->s, (char **)&p->s); l->has_intercept = 1;
-                } else if (gt == GEOM_VLINE && !strcmp(key, "xintercept")) {
-                    l->intercept = strtod(p->s, (char **)&p->s); l->has_intercept = 1;
+                } else if ((gt == GEOM_HLINE && !strcmp(key, "yintercept"))
+                           || (gt == GEOM_VLINE && !strcmp(key, "xintercept"))) {
+                    /* an empty value read as 0 and a c(...) as its first
+                     * element -- both drew a line nobody asked for */
+                    if (p->s[0] == 'c' && p->s[1] == '(')
+                        return fail(p, "%s= takes one value; repeat the layer for "
+                                    "several (+ geom_hline(yintercept=10) + geom_hline(yintercept=20))", key);
+                    char *end;
+                    double v = strtod(p->s, &end);
+                    if (end == p->s) return fail(p, "%s= needs a number", key);
+                    p->s = end;
+                    l->intercept = v; l->has_intercept = 1;
                 } else if (gt == GEOM_ABLINE && !strcmp(key, "slope")) {
                     l->slope = strtod(p->s, (char **)&p->s); l->has_slope = 1;
                 } else if (gt == GEOM_ABLINE && !strcmp(key, "intercept")) {
@@ -813,14 +1139,14 @@ static int parse_term(P *p, PlotSpec *spec) {
                     /* ggplot spells it outlier.shape=NA; the only value that
                      * changes anything here is "no outliers", so accept NA and
                      * the booleans and reject a shape we cannot draw. */
-                    char *v = string_lit(p);
-                    if (!v) v = ident(p);
+                    char *v = word(p);
                     if (!v) return fail(p, "outlier.shape= expects NA, TRUE or FALSE", "");
                     if (!strcmp(v, "NA") || !strcmp(v, "FALSE") || !strcmp(v, "false")
+                        || !strcmp(v, "F") || !strcmp(v, "0")
                         || !strcmp(v, "none") || !strcmp(v, "off"))
                         l->no_outliers = 1;
                     else if (!strcmp(v, "TRUE") || !strcmp(v, "true")
-                             || !strcmp(v, "on"))
+                             || !strcmp(v, "T") || !strcmp(v, "1") || !strcmp(v, "on"))
                         l->no_outliers = 0;
                     else return fail(p, "outlier.shape=%s not understood; "
                                      "cinderplot draws one outlier shape, so only "
@@ -851,12 +1177,16 @@ static int parse_term(P *p, PlotSpec *spec) {
                                              || !strcmp(key, "rasterize"))) {
                     /* ggrastr spelling, plus both -ise/-ize, since the point of
                      * the grammar is that ggplot2 habits transfer. */
-                    char *v = ident(p);
-                    if (!v) return fail(p, "geom_point(raster=) expects TRUE or FALSE", "");
-                    if (!strcmp(v, "TRUE") || !strcmp(v, "T")) l->raster = 1;
-                    else if (!strcmp(v, "FALSE") || !strcmp(v, "F")) l->raster = 0;
-                    else { free(v); return fail(p, "geom_point(raster=) expects TRUE or FALSE", ""); }
-                    free(v);
+                    if (parse_bool(p, &l->raster))
+                        return fail(p, "geom_point(raster=) expects TRUE or FALSE", "");
+                } else if (gt == GEOM_ERRORBAR && !strcmp(key, "width")) {
+                    skip_ws(p);
+                    char *end;
+                    double v = strtod(p->s, &end);
+                    if (end == p->s || !(v > 0))
+                        return fail(p, "geom_errorbar(width=) expects a number > 0", "");
+                    p->s = end;
+                    l->eb_width = v;
                 } else if (gt == GEOM_TILE && !strcmp(key, "linewidth")) {
                     skip_ws(p);
                     char *end;
@@ -910,9 +1240,12 @@ static int parse_term(P *p, PlotSpec *spec) {
                 if (*p->s == ',') { p->s++; skip_ws(p); }
             }
         }
-        if (*p->s != ')')
-            return fail(p, "`%s()` arguments are not implemented yet", name);
-        p->s++;
+        if (expect(p, ')')) return -1;
+        /* a reference line with no position parsed and drew nothing */
+        if (gt == GEOM_HLINE && !l->has_intercept)
+            return fail(p, "geom_hline() needs yintercept=", "");
+        if (gt == GEOM_VLINE && !l->has_intercept)
+            return fail(p, "geom_vline() needs xintercept=", "");
         return 0;
     }
     if (!strcmp(name, "scale_x_log10") || !strcmp(name, "scale_y_log10") ||
@@ -926,12 +1259,9 @@ static int parse_term(P *p, PlotSpec *spec) {
             if (!key || expect(p, '=')) return fail(p, "bad scale_*_log argument", "");
             skip_ws(p);
             if (strcmp(key, "limits")) return fail(p, "scale_*_log option `%s` not implemented (only limits=)", key);
-            if (p->s[0] == 'c' && p->s[1] == '(') p->s += 2;
-            else return fail(p, "limits= expects c(lo, hi)", "");
-            double lo = strtod(p->s, (char **)&p->s);
-            skip_ws(p); if (*p->s == ',') p->s++;
-            double hi = strtod(p->s, (char **)&p->s);
-            skip_ws(p); if (*p->s == ')') p->s++;
+            if (!(p->s[0] == 'c' && p->s[1] == '(')) return fail(p, "limits= expects c(lo, hi)", "");
+            double lo, hi;
+            if (parse_lim_pair(p, "limits=", &lo, &hi)) return -1;
             if (isx) { spec->xlim_lo = lo; spec->xlim_hi = hi; spec->has_xlim = 1; }
             else     { spec->ylim_lo = lo; spec->ylim_hi = hi; spec->has_ylim = 1; }
             skip_ws(p);
@@ -981,12 +1311,9 @@ static int parse_term(P *p, PlotSpec *spec) {
                                        "percent, c(\"...\", ...)", v);
                 }
             } else if (!strcmp(key, "limits")) {
-                if (p->s[0] == 'c' && p->s[1] == '(') p->s += 2;
-                else return fail(p, "limits= expects c(lo, hi)", "");
-                double lo = strtod(p->s, (char **)&p->s);
-                skip_ws(p); if (*p->s == ',') p->s++;
-                double hi = strtod(p->s, (char **)&p->s);
-                skip_ws(p); if (*p->s == ')') p->s++;
+                if (!(p->s[0] == 'c' && p->s[1] == '(')) return fail(p, "limits= expects c(lo, hi)", "");
+                double lo, hi;
+                if (parse_lim_pair(p, "limits=", &lo, &hi)) return -1;
                 if (isx) { spec->xlim_lo = lo; spec->xlim_hi = hi; spec->has_xlim = 1; }
                 else     { spec->ylim_lo = lo; spec->ylim_hi = hi; spec->has_ylim = 1; }
             } else if (!strcmp(key, "breaks")) {
@@ -1045,9 +1372,9 @@ static int parse_term(P *p, PlotSpec *spec) {
         return expect(p, ')');
     }
     if (!strcmp(name, "xlim") || !strcmp(name, "ylim")) {   /* xlim(lo, hi) / ylim(lo, hi) */
-        double lo = strtod(p->s, (char **)&p->s);
-        skip_ws(p); if (*p->s == ',') p->s++; skip_ws(p);
-        double hi = strtod(p->s, (char **)&p->s);
+        double lo, hi;
+        if (parse_lim_pair(p, name[0] == 'x' ? "xlim()" : "ylim()", &lo, &hi))
+            return -1;
         if (name[0] == 'x') { spec->xlim_lo = lo; spec->xlim_hi = hi; spec->has_xlim = 1; }
         else                { spec->ylim_lo = lo; spec->ylim_hi = hi; spec->has_ylim = 1; }
         return expect(p, ')');
@@ -1172,28 +1499,43 @@ static int parse_term(P *p, PlotSpec *spec) {
         return 0;
     }
     if (!strcmp(name, "highlight")) {
-        /* highlight("row","col"[, color="red"][, name="m"]): a bounding box
-         * on one heatmap cell, addressed by its row and column names. */
+        /* Three spellings, one verb:
+         *   highlight("row","col"[, color=][, name=])      heatmap cell
+         *   highlight(name=, row=, region=[, colour=][, linetype=][, label=])
+         *                                                  matrix() track box
+         *   highlight("boxes.tsv"[, name=])                 file of track boxes
+         * The mode check at the end of dsl_parse pairs each form with its
+         * mode; here only the shape is settled. */
         if (spec->nhls >= MAX_HIGHLIGHTS)
-            return fail(p, "too many highlight() calls (max 16)", "");
+            return fail(p, "too many highlight() calls (max 64; the file form "
+                        "highlight(\"boxes.tsv\") has no cap)", "");
         CellHighlight *h = &spec->hls[spec->nhls];
+        memset(h, 0, sizeof *h);
         Col red = {1, 0, 0};
         h->color = red;
         skip_ws(p);
-        h->row = string_lit(p);
-        skip_ws(p);
-        if (!h->row || *p->s != ',')
-            return fail(p, "highlight() expects (\"row\", \"col\", ...)", "");
-        p->s++;
-        h->col = string_lit(p);
-        if (!h->col)
-            return fail(p, "highlight() expects (\"row\", \"col\", ...)", "");
-        skip_ws(p);
-        while (*p->s == ',') {
-            p->s++;
+        if (is_quote(p)) {                     /* positional: cell form or file form */
+            char *first = string_lit(p);
+            skip_ws(p);
+            if (*p->s == ',') {
+                const char *save = p->s;
+                p->s++; skip_ws(p);
+                if (is_quote(p)) {             /* ("row","col", ...) */
+                    h->row = first;
+                    h->col = string_lit(p);
+                    skip_ws(p);
+                } else p->s = save;            /* ("file", key=...) */
+            }
+            if (!h->row) h->file = first;
+        }
+        while (*p->s == ',' || (h->row == NULL && h->file == NULL && *p->s != ')')) {
+            if (*p->s == ',') p->s++;
+            skip_ws(p);
             char *key = ident(p);
             if (!key || expect(p, '='))
-                return fail(p, "bad highlight() argument", "");
+                return fail(p, "bad highlight() argument; forms: (\"row\",\"col\"), "
+                            "(name=, row=, region=) or (\"boxes.tsv\", name=)", "");
+            skip_ws(p);
             if (!strcmp(key, "color") || !strcmp(key, "colour")) {
                 char *v = string_lit(p);
                 if (!v || parse_color(v, &h->color))
@@ -1203,11 +1545,46 @@ static int parse_term(P *p, PlotSpec *spec) {
                 char *v = string_lit(p);
                 if (!v) return fail(p, "name= expects a quoted string", "");
                 h->target = v;
+            } else if (!strcmp(key, "row")) {
+                if (h->row) return fail(p, "highlight(): row given twice", "");
+                char *v = string_lit(p);
+                if (!v) return fail(p, "row= expects a quoted sample/row name", "");
+                h->row = v;
+            } else if (!strcmp(key, "region")) {
+                char *v = string_lit(p);
+                if (!v) return fail(p, "region= expects a quoted \"chr:beg-end\"", "");
+                if (region_parse(v, h->chrom, &h->beg, &h->end))
+                    return fail(p, "highlight(region=\"%s\"): expected chr:beg-end", v);
+                h->region = v;
+            } else if (!strcmp(key, "linetype")) {
+                char *v = *p->s == '"' ? string_lit(p) : ident(p);
+                if (!v) return fail(p, "linetype= expects solid, dashed or dotted", "");
+                if (!strcmp(v, "solid")) h->dash = 0;
+                else if (!strcmp(v, "dashed")) h->dash = 1;
+                else if (!strcmp(v, "dotted")) h->dash = 2;
+                else return fail(p, "linetype `%s` not implemented on highlight(); "
+                                 "solid, dashed or dotted", v);
+            } else if (!strcmp(key, "label")) {
+                char *v = string_lit(p);
+                if (!v) return fail(p, "label= expects a quoted string", "");
+                h->label = v;
             } else return fail(p, "option `%s` not implemented on highlight(); "
-                               "supported: color=, name=", key);
+                               "supported: colour=, name=, row=, region=, "
+                               "linetype=, label=", key);
             skip_ws(p);
         }
         if (expect(p, ')')) return -1;
+        if (h->file && (h->row || h->region || h->label))
+            return fail(p, "highlight(\"file\") takes only name=; the rows, spans, "
+                        "colours and labels come from the file", "");
+        if (!h->file && !h->col && !h->region)
+            return fail(p, "highlight() needs a target: (\"row\",\"col\") for a "
+                        "heatmap cell, or row= and region= for a matrix() track", "");
+        if (!h->file && h->region && !h->row)
+            return fail(p, "highlight(region=) needs row= (the sample to box)", "");
+        if (h->col && (h->region || h->label || h->dash))
+            return fail(p, "highlight(\"row\",\"col\") is the heatmap form; "
+                        "region=/label=/linetype= belong to the track form", "");
         spec->nhls++;
         return 0;
     }
@@ -1240,6 +1617,84 @@ static int parse_term(P *p, PlotSpec *spec) {
         spec->has_colour_scale = 1;
         return parse_grad_scale(p, &spec->colour_scale, k, "scale_colour_");
     }
+    if (!strcmp(name, "chord")) {
+        /* chord("links.csv"[, from=][, to=][, value=][, gap=][, alpha=]) —
+         * a circlize-style chord diagram; its own mode, like the tree.
+         * Sectors are the union of the from/to names, arc length
+         * proportional to each sector's total flow; ribbons connect
+         * sub-arcs, width proportional to value, coloured by source. */
+        spec->chord_mode = 1;
+        skip_ws(p);
+        if (*p->s == '"') {
+            spec->data_path = string_lit(p);
+            skip_ws(p);
+            if (*p->s == ',') { p->s++; skip_ws(p); }
+        }
+        while (*p->s != ')') {
+            char *key = ident(p);
+            if (!key || expect(p, '=')) return fail(p, "bad chord() argument", "");
+            skip_ws(p);
+            if (!strcmp(key, "from")) {
+                spec->chord_from = string_lit(p);
+                if (!spec->chord_from) return fail(p, "from= expects a quoted column name", "");
+            } else if (!strcmp(key, "to")) {
+                spec->chord_to = string_lit(p);
+                if (!spec->chord_to) return fail(p, "to= expects a quoted column name", "");
+            } else if (!strcmp(key, "value")) {
+                spec->chord_value = string_lit(p);
+                if (!spec->chord_value) return fail(p, "value= expects a quoted column name", "");
+            } else if (!strcmp(key, "gap")) {
+                char *end;
+                double v = strtod(p->s, &end);
+                if (end == p->s || v < 0 || v >= 90)
+                    return fail(p, "gap= expects degrees in [0, 90)", "");
+                p->s = end;
+                spec->chord_gap = v;
+            } else if (!strcmp(key, "alpha")) {
+                char *end;
+                double v = strtod(p->s, &end);
+                if (end == p->s || !(v > 0 && v <= 1))
+                    return fail(p, "alpha= must be in (0, 1]", "");
+                p->s = end;
+                spec->chord_alpha = v;
+            } else if (!strcmp(key, "order")) {
+                /* order=c("A", ...): the full sector list, circlize's order= */
+                if (p->s[0] == 'c' && p->s[1] == '(') p->s += 2;
+                else return fail(p, "order= expects c(\"...\", ...)", "");
+                spec->chord_order = cp_xmalloc(256 * sizeof(char *));
+                spec->n_chord_order = 0;
+                for (;;) {
+                    skip_ws(p);
+                    if (*p->s == ')') { p->s++; break; }
+                    char *v = string_lit(p);
+                    if (!v) return fail(p, "order=c(...) expects quoted names", "");
+                    if (spec->n_chord_order >= 256)
+                        return fail(p, "order=c(...) holds at most 256 sectors", "");
+                    for (int i = 0; i < spec->n_chord_order; i++)
+                        if (!strcmp(spec->chord_order[i], v))
+                            return fail(p, "order=c(...): `%s` is listed twice; every "
+                                        "sector goes exactly once", v);
+                    spec->chord_order[spec->n_chord_order++] = v;
+                    skip_ws(p);
+                    if (*p->s == ',') { p->s++; continue; }
+                    if (*p->s == ')') { p->s++; break; }
+                    return fail(p, "expected , or ) in order=c(...)", "");
+                }
+            } else if (!strcmp(key, "bipartite")) {
+                if (parse_bool(p, &spec->chord_bipartite))
+                    return fail(p, "bipartite= expects TRUE or FALSE", "");
+            } else return fail(p, "chord() option `%s` not implemented; supported: "
+                               "from=, to=, value=, gap=, alpha=, order=, bipartite=", key);
+            skip_ws(p);
+            if (*p->s == ',') { p->s++; skip_ws(p); }
+        }
+        if (expect(p, ')')) return -1;
+        /* both prescribe the sector order; order= used to win silently */
+        if (spec->n_chord_order && spec->chord_bipartite)
+            return fail(p, "chord(): order= and bipartite=TRUE both fix the sector "
+                        "order; give one (order= can list the from-group first)", "");
+        return 0;
+    }
     if (!strcmp(name, "coord_cartesian")) {
         /* only the expansion control is meaningful here (there is no zoom
          * yet): expand=FALSE zeroes both axes' expansion at once, the
@@ -1251,8 +1706,8 @@ static int parse_term(P *p, PlotSpec *spec) {
             if (strcmp(key, "expand"))
                 return fail(p, "coord_cartesian option `%s` not implemented "
                             "(expand=FALSE)", key);
-            char *v = ident(p);
-            if (!v || (strcmp(v, "FALSE") && strcmp(v, "false")))
+            int b;
+            if (parse_bool(p, &b) || b)
                 return fail(p, "coord_cartesian supports only expand=FALSE", "");
             spec->x_exp_mult = spec->x_exp_add = 0; spec->has_x_expand = 1;
             spec->y_exp_mult = spec->y_exp_add = 0; spec->has_y_expand = 1;
@@ -1381,8 +1836,12 @@ static int parse_term(P *p, PlotSpec *spec) {
         skip_ws(p);
         if (*p->s != '~') return fail(p, "facet_wrap() expects a formula: facet_wrap(~var)", "");
         p->s++;
-        spec->facet_var = ident(p);
-        if (!spec->facet_var) return fail(p, "expected a column name after ~", "");
+        spec->facet_var = colname(p);
+        if (!spec->facet_var) return *p->err ? -1 : fail(p, "expected a column name after ~", "");
+        skip_ws(p);
+        if (*p->s == '+' || *p->s == '~')
+            return fail(p, "facet_wrap() takes one variable; facet_grid()/two-way "
+                        "facets are not implemented", "");
         skip_ws(p);
         while (*p->s == ',') {   /* levels=c(...) panel order, scales= free axes */
             p->s++;
@@ -1447,10 +1906,23 @@ static int parse_term(P *p, PlotSpec *spec) {
             if (expect(p, '=')) return fail(p, "bad theme() argument", "");
             skip_ws(p);
             if (!strcmp(key, "legend.position")) {
-                char *v = *p->s == '"' ? string_lit(p) : ident(p);
-                if (!v || strcmp(v, "inside"))
-                    return fail(p, "theme(legend.position=) supports only "
-                                "\"inside\"; margins are the default", "");
+                char *v = word(p);
+                if (!v) return fail(p, "theme(legend.position=) expects \"inside\" or \"none\"", "");
+                if (!strcmp(v, "none")) {          /* the commonest ggplot2 legend line */
+                    free(v);
+                    spec->no_legend = spec->no_legend_size = spec->no_legend_shape = 1;
+                    skip_ws(p);
+                    if (*p->s == ',') { p->s++; skip_ws(p); }
+                    continue;
+                }
+                if (strcmp(v, "inside")) {
+                    char msg[CP_ERRLEN];
+                    snprintf(msg, sizeof msg, "theme(legend.position=\"%s\") is not "
+                             "implemented: only \"inside\" and \"none\" are (the legend "
+                             "sits in the right margin otherwise); to drop one guide use "
+                             "guides(colour=\"none\") or --no-legend", v);
+                    return fail(p, "%s", msg);
+                }
                 free(v);
                 spec->legend_inside = 1;
                 if (spec->leg_ix == 0 && spec->leg_iy == 0) {
@@ -1531,8 +2003,10 @@ static int parse_term(P *p, PlotSpec *spec) {
             if (key && *p->s == '=') p->s++;
             else { p->s = save; free(key); key = NULL; }
             skip_ws(p);
-            if (!strncmp(p->s, "aes", 3) || (key && !strcmp(key, "mapping"))) {
-                if (!strncmp(p->s, "aes", 3)) p->s += 3;
+            int is_aes = !strncmp(p->s, "aes", 3)
+                       && (p->s[3] == '(' || isspace((unsigned char)p->s[3]));
+            if (is_aes || (key && !strcmp(key, "mapping"))) {
+                if (is_aes) p->s += 3;
                 if (expect(p, '(')) { free(key); return -1; }
                 if (parse_aes(p, spec)) { free(key); return -1; }
             } else {
@@ -1584,13 +2058,24 @@ static int parse_term(P *p, PlotSpec *spec) {
         while (*p->s != ')') {
             char *key = ident(p);
             if (!key || expect(p, '=')) return fail(p, "bad guides() argument", "");
-            int ok = !strcmp(key, "colour") || !strcmp(key, "color")
-                  || !strcmp(key, "fill") || !strcmp(key, "size");
-            if (!ok) { fail(p, "guides() supports colour=, color=, fill=, size=", ""); free(key); return -1; }
-            free(key);
+            /* each aesthetic has its own guide; "none" on one used to drop
+             * them all, and guide_legend() options only reach the colour one */
+            int is_col = !strcmp(key, "colour") || !strcmp(key, "color") || !strcmp(key, "fill");
+            int is_size = !strcmp(key, "size"), is_shape = !strcmp(key, "shape");
+            if (!is_col && !is_size && !is_shape) {
+                fail(p, "guides() supports colour=, color=, fill=, size=, shape=", "");
+                free(key); return -1;
+            }
             skip_ws(p);
-            char *v = *p->s == '"' ? string_lit(p) : ident(p);  /* "none" / guide_legend */
-            if (!v) return fail(p, "guides() values must be \"none\" or guide_legend(...)", "");
+            char *v = word(p);                       /* "none" / guide_legend */
+            if (!v) { free(key); return fail(p, "guides() values must be \"none\" or guide_legend(...)", ""); }
+            if (!strcmp(v, "guide_legend") && !is_col) {
+                free(v);
+                fail(p, "guides(%s=guide_legend(...)): guide_legend() options apply to "
+                        "the colour/fill legend only; \"none\" is the one setting the "
+                        "size/shape guides take", key);
+                free(key); return -1;
+            }
             if (!strcmp(v, "guide_legend")) {
                 /* guide_legend(ncol=N) / (nrow=N): fold a long discrete
                  * legend over columns, column-major as in ggplot2. nrow=
@@ -1605,15 +2090,20 @@ static int parse_term(P *p, PlotSpec *spec) {
                 while (*p->s != ')') {
                     char *gk = ident(p);
                     if (!gk || expect(p, '=')) return fail(p, "bad guide_legend() argument", "");
-                    char *end;
-                    double n2 = strtod(p->s, &end);
-                    if (end == p->s || n2 < 1 || n2 != (int)n2)
-                        return fail(p, "guide_legend %s= expects a positive integer", gk);
-                    p->s = end;
-                    if (!strcmp(gk, "ncol")) spec->legend_ncol = (int)n2;
-                    else if (!strcmp(gk, "nrow")) spec->legend_nrow = (int)n2;
-                    else return fail(p, "guide_legend option `%s` not implemented "
-                                     "(ncol=, nrow=)", gk);
+                    skip_ws(p);
+                    if (!strcmp(gk, "reverse")) {
+                        if (parse_bool(p, &spec->legend_reverse))
+                            return fail(p, "reverse= expects TRUE or FALSE", "");
+                    } else if (!strcmp(gk, "ncol") || !strcmp(gk, "nrow")) {
+                        char *end;
+                        double n2 = strtod(p->s, &end);
+                        if (end == p->s || n2 < 1 || n2 != (int)n2)
+                            return fail(p, "guide_legend %s= expects a positive integer", gk);
+                        p->s = end;
+                        if (gk[1] == 'c') spec->legend_ncol = (int)n2;
+                        else spec->legend_nrow = (int)n2;
+                    } else return fail(p, "guide_legend option `%s` not implemented "
+                                     "(ncol=, nrow=, reverse=)", gk);
                     skip_ws(p);
                     if (*p->s == ',') { p->s++; skip_ws(p); }
                 }
@@ -1622,26 +2112,47 @@ static int parse_term(P *p, PlotSpec *spec) {
                     return fail(p, "guide_legend: give ncol= or nrow=, not both", "");
             } else if (!strcmp(v, "none")) {
                 free(v);
-                spec->no_legend = 1;
+                if (is_col) spec->no_legend = 1;
+                else if (is_size) spec->no_legend_size = 1;
+                else spec->no_legend_shape = 1;
             } else {
-                free(v);
-                return fail(p, "guides() supports \"none\" or guide_legend(ncol=/nrow=)", "");
+                free(v); free(key);
+                return fail(p, "guides() supports \"none\" or guide_legend(ncol=/nrow=/reverse=)", "");
             }
+            free(key);
             skip_ws(p);
             if (*p->s == ',') { p->s++; skip_ws(p); }
         }
         return expect(p, ')');
     }
-    return fail(p, "`%s()` is not implemented; supported: aes(), geom_point(), "
-                   "geom_jitter(), geom_line(), geom_col(), geom_histogram(), geom_boxplot(), geom_bar(), "
-                   "geom_density(), geom_tile()/geom_raster(), geom_segment(), geom_rect(), "
-                   "geom_hline(), geom_vline(), geom_abline(), "
-                   "geom_text()/geom_text_repel(), geom_label()/geom_label_repel(), "
-                   "labs()/xlab()/ylab()/ggtitle(), "
-                   "facet_wrap(~var[, levels=c(...)]), coord_flip(), scale_x_log10()/scale_x_log2(), scale_y_log10()/scale_y_log2(), scale_*_continuous(), xlim(), ylim(), "
-                   "scale_*_manual(), theme_bw()/theme_minimal()/theme_classic()/..., guides(colour=\"none\"), "
-                   "heatmap(), annotation(), legend(), highlight(), scale_fill_*(), "
-                   "region()/regions(), coverage(), interval(), genes(), arcs(), matrix(), cytoband()", name);
+    /* a few near-misses get a pointer instead of the whole menu */
+    if (!strcmp(name, "facet_grid"))
+        return fail(p, "facet_grid() is not implemented; facet_wrap(~var[, ncol=]) is", "");
+    if (!strcmp(name, "geom_path") || !strcmp(name, "geom_step") || !strcmp(name, "geom_area")
+        || !strcmp(name, "geom_ribbon") || !strcmp(name, "geom_violin") || !strcmp(name, "geom_crossbar")
+        || !strcmp(name, "geom_pointrange") || !strcmp(name, "geom_bin2d") || !strcmp(name, "geom_hex")
+        || !strcmp(name, "geom_polygon") || !strcmp(name, "geom_dotplot") || !strcmp(name, "geom_rug")
+        || !strcmp(name, "geom_freqpoly") || !strcmp(name, "geom_curve") || !strcmp(name, "geom_count"))
+        return fail(p, "%s() is not implemented (see the geom list in --help)", name);
+    if (!strcmp(name, "scale_colour_gradientn") || !strcmp(name, "scale_color_gradientn")
+        || !strcmp(name, "scale_fill_gradientn"))
+        return fail(p, "%s() is not implemented; use gradient2() (three stops) or a "
+                    "named ramp (viridis, magma, ..., scale_*_distiller(palette=))", name);
+    if (!strcmp(name, "theme_set") || !strcmp(name, "library") || !strcmp(name, "print")
+        || !strcmp(name, "dev.off") || !strcmp(name, "pdf") || !strcmp(name, "png"))
+        return fail(p, "%s() is R session plumbing, not part of a plot; the spec is "
+                    "`data + aes() + geom_*()` and the output is the CLI argument", name);
+    return fail(p, "`%s()` is not implemented; supported: "
+                   "aes(), ggplot(), ggsave(); geom_point/jitter/line/smooth/col/bar/histogram/"
+                   "boxplot/density/tile/raster/segment/rect/hline/vline/abline/errorbar/linerange/"
+                   "text/label/text_repel/label_repel(), annotate(); labs()/xlab()/ylab()/ggtitle(); "
+                   "facet_wrap(~var); coord_flip/polar/cartesian(); scale_x|y_log10/log2/continuous/"
+                   "discrete(), xlim(), ylim(), scale_x_genome(); scale_colour|fill_manual/brewer/"
+                   "distiller/identity/gradient/gradient2/viridis/magma/...(); theme_bw/minimal/"
+                   "classic/...(), theme(legend.position=), guides(); heatmap(), annotation(), "
+                   "legend(), dendrogram(), highlight(); region()/regions(), coverage(), interval(), "
+                   "genes(), arcs(), matrix(), cytoband(), ideogram(); geom_tree/tiplab/nodelab/"
+                   "tippoint/nodepoint(); chord()", name);
 }
 
 int dsl_parse(const char *src, PlotSpec *spec, char *err) {
@@ -1650,6 +2161,7 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
     /* <0 means "decide from the measured labels"; 0 is a caller asking for
      * horizontal, which is a different thing and must survive. */
     spec->x_angle = spec->y_angle = -1;
+    spec->chord_gap = -1;                        /* unset; gap=0 is a real request */
     spec->fill.kind = FILL_VIRIDIS;              /* default heatmap fill */
     /* default theme = THEME_GRAY (enum 0, the memset default) */
 
@@ -1657,16 +2169,22 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
      * mode starts with region()/coverage() — no top-level data file) */
     skip_ws(&p);
     const char *s = p.s;
-    while (*p.s && *p.s != '+' && !isspace((unsigned char)*p.s)) {
-        if (*p.s == '(') break;
-        p.s++;
-    }
-    if (*p.s == '(') {                 /* function-first: no data file */
-        p.s = s;
-        if (parse_term(&p, spec)) return -1;
-    } else {
-        spec->data_path = strndup(s, p.s - s);
+    if (*p.s == '"' || *p.s == '\'') {   /* "my data.csv" + ...: a path with spaces */
+        spec->data_path = string_lit(&p);
+        if (!spec->data_path) return fail(&p, "unterminated quoted data path at start of spec", "");
         if (!*spec->data_path) return fail(&p, "missing data file at start of spec", "");
+    } else {
+        while (*p.s && *p.s != '+' && !isspace((unsigned char)*p.s)) {
+            if (*p.s == '(') break;
+            p.s++;
+        }
+        if (*p.s == '(') {                 /* function-first: no data file */
+            p.s = s;
+            if (parse_term(&p, spec)) return -1;
+        } else {
+            spec->data_path = strndup(s, p.s - s);
+            if (!*spec->data_path) return fail(&p, "missing data file at start of spec", "");
+        }
     }
 
     for (;;) {
@@ -1676,38 +2194,130 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
         if (parse_term(&p, spec)) return -1;
     }
 
+    int is_hm = spec->nhobjs > 0 && !spec->nlayers && !spec->x.col && !spec->facet_var;
+    int is_trk = spec->ntracks > 0;
     /* aes(fill=) is stored in spec->colour (fill and colour are one aesthetic
      * here), but scale_fill_*() writes spec->fill, which only heatmap mode
      * reads. In grammar mode that made every scale_fill_gradient/viridis/jet a
      * silent no-op: the spec parsed, the run succeeded, and the default ramp
      * came out. Alias it onto the colour scale instead. scale_colour_*() still
      * wins if both are given. */
-    if (spec->nhobjs == 0 && spec->ntracks == 0
-        && spec->has_fill && !spec->has_colour_scale) {
+    if (!is_hm && !is_trk && spec->has_fill && !spec->has_colour_scale) {
         spec->colour_scale = spec->fill;
         spec->has_colour_scale = 1;
     }
+    /* ... and the mirror image in heatmap mode: scale_colour_gradient2() on a
+     * heatmap() parsed and changed nothing, because heatmap.c reads only the
+     * fill scale. One aesthetic, so alias the other way there. */
+    if (is_hm && spec->has_colour_scale && !spec->has_fill) {
+        spec->fill = spec->colour_scale;
+        spec->has_fill = 1;
+    }
     /* labs(fill=) titles that same aesthetic, so honour it when labs(colour=)
      * was not given. */
-    if (spec->nhobjs == 0 && spec->ntracks == 0
-        && spec->lab_fill && !spec->lab_colour)
+    if (!is_hm && !is_trk && spec->lab_fill && !spec->lab_colour)
         spec->lab_colour = spec->lab_fill;
 
-    if (spec->nhls > 0 && spec->nhobjs == 0)
-        return fail(&p, "highlight() marks a heatmap() cell and needs heatmap mode", "");
+    /* ---- the range geoms and the ymin alias ----
+     * aes(ymin=) used to alias y (the rect-corner spelling). It is its own
+     * aesthetic now (geom_errorbar needs y AND ymin distinct); a spec with
+     * ymin= and no y= keeps the old meaning -- UNLESS a range geom is present,
+     * where ggplot's canonical aes(x, ymin=lo, ymax=hi) + geom_errorbar() has
+     * no y at all. Then y takes the same column as ymin: the renderer needs a
+     * y for its row filter and range, the rows it would drop (NA ymin) have
+     * no bar anyway, and ggplot titles that axis by the first y-family
+     * aesthetic, which is ymin. */
+    int nrange = 0, nother = 0;
+    for (int i = 0; i < spec->nlayers; i++) {
+        GeomType t = spec->layers[i].type;
+        if (t == GEOM_ERRORBAR || t == GEOM_LINERANGE) nrange++;
+        else if (t != GEOM_HLINE && t != GEOM_VLINE && t != GEOM_ABLINE) nother++;
+    }
+    if (!spec->y.col && spec->ymin.col) {
+        if (nrange && !nother) spec->y = spec->ymin;
+        else if (nrange)
+            return fail(&p, "geom_errorbar()/geom_linerange() beside another geom "
+                        "need aes(y=) for that geom (aes(x, y=mean, ymin=lo, ymax=hi))", "");
+        else {
+            spec->y = spec->ymin;
+            memset(&spec->ymin, 0, sizeof spec->ymin);
+        }
+    }
+
+    /* ---- mode mixing ---- */
+    int any_tree = spec->tree_mode || spec->tree_tiplab || spec->tree_nodelab
+                || spec->tree_nodepoint || spec->tree_tippoint;
+    int any_grammar = spec->nlayers || spec->x.col || spec->facet_var;
+    if (spec->chord_mode) {
+        if (any_grammar || spec->nhobjs || spec->ntracks || any_tree || spec->polar
+            || spec->nannos || spec->coord_flip)
+            return fail(&p, "chord() is its own mode and cannot be mixed with "
+                        "aes()/geom_*, facet_wrap(), coord_*(), heatmap(), tracks, "
+                        "trees or annotate()", "");
+        if (spec->theme || spec->base_line_size > 0)
+            return fail(&p, "theme_*() has no effect on a chord diagram (no panel, "
+                        "no axes) and is refused rather than ignored", "");
+        if (spec->lab_x || spec->lab_y || spec->lab_colour || spec->lab_fill
+            || spec->lab_subtitle || spec->lab_caption)
+            return fail(&p, "chord() draws no axes or legend; only labs(title=) applies", "");
+        if (spec->has_xlim || spec->has_ylim || spec->log_x || spec->log_y
+            || spec->has_colour_scale || spec->has_fill || spec->no_legend
+            || spec->legend_inside)
+            return fail(&p, "chord() takes no scales or guides beyond "
+                        "scale_*_manual(values=) for the sector colours", "");
+        return 0;                                /* chord mode: nothing else to check */
+    }
+    if (any_tree && (spec->nhobjs || spec->ntracks || any_grammar || spec->polar
+                     || spec->nannos || spec->coord_flip || spec->nhls))
+        return fail(&p, spec->tree_mode
+                    ? "geom_tree() is its own mode and cannot be mixed with aes()/geom_*, "
+                      "heatmap(), the track verbs, coord_*() or annotate()"
+                    : "the tree geoms (geom_tiplab() etc.) belong to geom_tree() and "
+                      "cannot be mixed with aes()/geom_*, heatmap() or the track verbs", "");
+    /* highlight() pairs its form with its mode: the ("row","col") cell form
+     * is heatmap()'s, the row=/region= and file forms are matrix() track's.
+     * A form in the wrong mode renders nothing it could mean, so it errors. */
+    for (int i = 0; i < spec->nhls; i++) {
+        const CellHighlight *h = &spec->hls[i];
+        int trackform = h->file || h->region;
+        if (trackform && spec->ntracks == 0)
+            return fail(&p, "highlight(row=, region=) and highlight(\"boxes.tsv\") box a "
+                        "matrix() track and need track mode; a heatmap() cell is "
+                        "highlight(\"row\",\"col\")", "");
+        if (!trackform && spec->nhobjs == 0)
+            return fail(&p, spec->ntracks
+                        ? "highlight(\"row\",\"col\") boxes a heatmap() cell; on a matrix() "
+                          "track write highlight(name=, row=, region=\"chr:beg-end\")"
+                        : "highlight() marks a heatmap() cell and needs heatmap mode", "");
+    }
+    if (spec->ntracks > 0 && spec->nhls > 0) {
+        int nmat = 0;
+        for (int i = 0; i < spec->ntracks; i++) nmat += spec->tobjs[i].type == TRK_MATRIX;
+        if (nmat == 0)
+            return fail(&p, "highlight() on the track browser boxes a matrix() track; "
+                        "there is none in this spec", "");
+    }
     if (spec->polar && spec->coord_flip)
         return fail(&p, "coord_polar() and coord_flip() contradict each other", "");
-    if (spec->nannos > 0 && spec->nlayers == 0 && !spec->x.col)
+    if (spec->nannos > 0 && !any_grammar)
         return fail(&p, "annotate() places a mark on a grammar panel and needs "
                     "aes()/geom_*", "");
 
     if (spec->ntracks > 0) {           /* track (locus-browser) mode */
-        if (spec->nlayers || spec->nhobjs || spec->x.col)
+        if (any_grammar || spec->nhobjs)
             return fail(&p, "track functions cannot be mixed with grammar/heatmap", "");
+        if (spec->polar || spec->coord_flip)
+            return fail(&p, "coord_polar()/coord_flip() do not apply to the track browser", "");
+        /* the preset itself (panel, grid, strips) has nothing to act on here,
+         * but base_line_size= does: it scales the track frames and ticks
+         * through cp_line_scale, so theme_*(base_line_size=) is honoured */
+        if (spec->theme && !(spec->base_line_size > 0))
+            return fail(&p, "theme_*() presets have no effect on the track browser; "
+                        "only theme_*(base_line_size=) applies (frame and tick width)", "");
         return 0;
     }
 
-    if (spec->nhobjs > 0 && (spec->nlayers || spec->x.col || spec->facet_var)) {
+    if (spec->nhobjs > 0 && any_grammar) {
         /* Grammar mode + annotation(): a categorical metadata band under the
          * panel, keyed by x category, with its own palette and legend. Only
          * annotation() crosses this line — heatmap()/legend()/dendrogram()
@@ -1724,10 +2334,14 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
                               "used with aes()/geom_*; in grammar mode the legend is "
                               "automatic — suppress it with guides(colour=\"none\")"
                             : "heatmap() cannot be mixed with aes()/geom_*/facet_wrap()", "");
-            if (o->place.kind != PL_FULL)
+            if (o->place.given)
                 return fail(&p, "annotation() under a grammar panel always draws "
                             "beneath it; placements (left_of/right_of/...) are "
                             "heatmap-mode", "");
+            /* a 2nd+ band inherits hm_new's TOP_OF default (a heatmap-mode
+             * convention); under a grammar panel every band is a full-width
+             * strip, so normalise before render.c looks */
+            ((HMObj *)o)->place.kind = PL_FULL;
             if (!o->data)
                 return fail(&p, "annotation() needs a data file: "
                             "annotation(\"meta.tsv\"[, column=\"...\"])", "");
@@ -1749,16 +2363,23 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
         }
         if (spec->hobjs[0].type != HM_HEATMAP)
             return fail(&p, "the first placed object must be a heatmap()", "");
+        if (spec->polar || spec->coord_flip)
+            return fail(&p, "coord_polar()/coord_flip() do not apply to heatmap mode "
+                        "(cluster=diagonal/symmetric and placements set the layout)", "");
+        /* as for tracks: the preset is inert (box=/grid= frame the cells) but
+         * base_line_size= scales the frames through cp_line_scale */
+        if (spec->theme && !(spec->base_line_size > 0))
+            return fail(&p, "theme_*() presets have no effect in heatmap mode (box=/grid= "
+                        "frame the cells); only theme_*(base_line_size=) applies", "");
         return 0;
     }
     if (spec->tree_mode) {          /* tree mode: the topology is the data */
-        if (spec->nlayers || spec->x.col || spec->nhobjs || spec->ntracks)
-            return fail(&p, "geom_tree() cannot be mixed with aes()/geom_*, "
-                        "heatmap() or the track verbs", "");
+        if (spec->theme || spec->base_line_size > 0)
+            return fail(&p, "theme_*() has no effect on a tree (no panel chrome) and "
+                        "is refused rather than ignored", "");
         return 0;
     }
-    if (spec->tree_tiplab || spec->tree_nodelab
-        || spec->tree_nodepoint || spec->tree_tippoint)
+    if (any_tree)
         return fail(&p, "the tree geoms need a geom_tree()", "");
     for (int i = 0; i < spec->nlayers; i++)
         if (spec->layers[i].type == GEOM_SMOOTH && !spec->layers[i].se_given)
@@ -1780,10 +2401,47 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
     if (nstat && spec->y.col)
         return fail(&p, "geom_histogram()/geom_bar()/geom_density() compute y; do not map y", "");
     if (!nstat && !spec->y.col)
-        return fail(&p, "aes() must map y", "");
+        return fail(&p, nrange ? "geom_errorbar()/geom_linerange() need aes(ymin=, ymax=)"
+                    : "aes() must map y", "");
     for (int i = 0; i < spec->nlayers; i++)
         if ((spec->layers[i].type == GEOM_TEXT || spec->layers[i].type == GEOM_LABEL)
             && !spec->label.col)
             return fail(&p, "geom_text()/geom_label() need aes(label=...)", "");
+
+    /* fill= and colour= are one aesthetic here, so on a geom that only
+     * strokes (points, lines) fill= paints the stroke, and on one that only
+     * fills (bars, tiles) colour= paints the fill. ggplot2 would draw the
+     * other thing (a hollow point, an outline). Say so on stderr rather
+     * than reinterpret silently; the figure is still what a reader expects. */
+    if (spec->colour.col && spec->nlayers - nref > 0) {
+        int stroke = 0, area = 0;
+        for (int i = 0; i < spec->nlayers; i++) {
+            GeomType t = spec->layers[i].type;
+            if (t == GEOM_POINT || t == GEOM_JITTER || t == GEOM_LINE || t == GEOM_SMOOTH
+                || t == GEOM_TEXT || t == GEOM_LABEL || t == GEOM_SEGMENT
+                || t == GEOM_ERRORBAR || t == GEOM_LINERANGE || t == GEOM_DENSITY) stroke++;
+            else if (t == GEOM_COL || t == GEOM_BAR || t == GEOM_HISTOGRAM
+                     || t == GEOM_TILE || t == GEOM_RECT) area++;
+        }
+        const char *g0 = NULL;
+        for (int i = 0; i < spec->nlayers && !g0; i++) {
+            GeomType t = spec->layers[i].type;
+            if (t == GEOM_HLINE || t == GEOM_VLINE || t == GEOM_ABLINE || t == GEOM_BOXPLOT) continue;
+            g0 = t == GEOM_POINT ? "geom_point" : t == GEOM_JITTER ? "geom_jitter"
+               : t == GEOM_LINE ? "geom_line" : t == GEOM_SMOOTH ? "geom_smooth"
+               : t == GEOM_TEXT ? "geom_text" : t == GEOM_LABEL ? "geom_label"
+               : t == GEOM_SEGMENT ? "geom_segment" : t == GEOM_ERRORBAR ? "geom_errorbar"
+               : t == GEOM_LINERANGE ? "geom_linerange" : t == GEOM_DENSITY ? "geom_density"
+               : t == GEOM_COL ? "geom_col" : t == GEOM_BAR ? "geom_bar"
+               : t == GEOM_HISTOGRAM ? "geom_histogram" : t == GEOM_TILE ? "geom_tile"
+               : t == GEOM_RECT ? "geom_rect" : NULL;
+        }
+        if (g0 && spec->colour.is_fill && stroke && !area)
+            fprintf(stderr, "cinderplot: warning: aes(fill=) on %s() is drawn as "
+                    "colour= (the mark has no separate fill)\n", g0);
+        else if (g0 && !spec->colour.is_fill && area && !stroke)
+            fprintf(stderr, "cinderplot: warning: aes(colour=) on %s() is drawn as "
+                    "fill= (the bars/cells are filled, not outlined)\n", g0);
+    }
     return 0;
 }

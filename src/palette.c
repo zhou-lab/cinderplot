@@ -205,10 +205,19 @@ Col fill_map(const FillScale *fs, double t) {
 Col fill_map_value(const FillScale *fs, double v, double dmin, double dmax) {
     double t;
     if (fs->kind == FILL_GRADIENT2) {
-        /* midpoint maps to t = 0.5 (ggplot scale_fill_gradient2) */
+        /* midpoint maps to t = 0.5 (ggplot scale_fill_gradient2), each half
+         * of the range stretched over its half of the ramp. The midpoint
+         * itself is the mid colour whatever the range: a non-negative matrix
+         * under midpoint=0 used to paint its zeros the LOW colour because the
+         * empty low half was short-circuited to t = 0. Out-of-range values
+         * (limits=) squish to the nearer end first, which on a one-sided
+         * range is the end that exists. */
         double m = fs->midpoint;
-        if (v <= m) t = dmin >= m ? 0 : 0.5 * (v - dmin) / (m - dmin);
-        else        t = dmax <= m ? 1 : 0.5 + 0.5 * (v - m) / (dmax - m);
+        if (v < dmin) v = dmin;
+        if (v > dmax) v = dmax;
+        if (v == m)     t = 0.5;
+        else if (v < m) t = 0.5 * (v - dmin) / (m - dmin);
+        else            t = 0.5 + 0.5 * (v - m) / (dmax - m);
     } else {
         t = dmax > dmin ? (v - dmin) / (dmax - dmin) : 0.5;
     }
@@ -223,13 +232,23 @@ int parse_color(const char *s, Col *out) {
         {"gray",190,190,190}, {"darkblue",0,0,139}, {"darkred",139,0,0},
         {"darkgreen",0,100,0}, {"steelblue",70,130,180},
     };
-    if (s[0] == '#' && strlen(s) == 7) {
-        unsigned int r, g, b;
-        if (sscanf(s + 1, "%2x%2x%2x", &r, &g, &b) == 3) {
-            *out = C((int)r, (int)g, (int)b);
-            return 0;
+    /* #RRGGBB, or the #RGB shorthand (each digit doubled, as in CSS). Every
+     * digit is checked by hand: sscanf's %2x also takes a sign, a 0x prefix
+     * and leading blanks, so "#+f0000" used to parse as a colour. */
+    if (s[0] == '#') {
+        size_t len = strlen(s) - 1;
+        if (len != 6 && len != 3) return -1;
+        int d[6];
+        for (size_t i = 0; i < len; i++) {
+            char c = s[i + 1];
+            d[i] = c >= '0' && c <= '9' ? c - '0'
+                 : c >= 'a' && c <= 'f' ? c - 'a' + 10
+                 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+            if (d[i] < 0) return -1;
         }
-        return -1;
+        if (len == 3) *out = C(d[0] * 17, d[1] * 17, d[2] * 17);
+        else *out = C(d[0] * 16 + d[1], d[2] * 16 + d[3], d[4] * 16 + d[5]);
+        return 0;
     }
     /* greyNN / grayNN: NN in 0..100 (ggplot grey ramp) */
     if (!strncmp(s, "grey", 4) || !strncmp(s, "gray", 4)) {

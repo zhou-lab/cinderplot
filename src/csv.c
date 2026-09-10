@@ -135,12 +135,16 @@ DataFrame *df_read_csv(const char *path, char *err) {
         if (f != stdin) fclose(f);
     }
 
+    /* Excel writes a UTF-8 byte-order mark; left in, it became part of the
+     * first column's name and every aes(x=...) on it failed "not found". */
+    char *p = buf;
+    if (!strncmp(p, "\xEF\xBB\xBF", 3)) p += 3;
+
     /* sniff the delimiter: tab in the first line => TSV, else comma */
     char delim = ',';
-    for (const char *q = buf; *q && *q != '\n'; q++)
+    for (const char *q = p; *q && *q != '\n'; q++)
         if (*q == '\t') { delim = '\t'; break; }
 
-    char *p = buf;
     StrVec header = {0};
     int hn = split_record(&p, &header, delim);
     if (hn < 0) {
@@ -234,19 +238,37 @@ DataFrame *df_read_csv(const char *path, char *err) {
          * convert. A string column bails at its first cell, so the speculative
          * allocation is cheap. */
         col->num = cp_xmalloc((size_t)nrow * sizeof(double));
-        int numeric = 1;
+        int numeric = 1, bad_r = -1;
         for (int r = 0; r < nrow; r++) {
             const char *s = cells[c].v[r];
             if (is_na(s)) { col->num[r] = NAN; continue; }
             char *end;
             double d = strtod(s, &end);
-            if (end == s || *end) { numeric = 0; break; }
+            if (end == s || *end) { numeric = 0; bad_r = r; break; }
             col->num[r] = d;
         }
         if (numeric) {
             col->type = COL_NUM;
             free(cells[c].v);           /* the slices are no longer referenced */
         } else {
+            /* A column that is numbers but for a stray `N/A` or `1_000` types
+             * as text, and the failure then surfaces far away ("a discrete y
+             * is supported only with geom_tile()") with no row to look at.
+             * Say which cell did it when the column is otherwise numeric.
+             * The scan stops once a tenth of the cells have failed, so a
+             * genuine text column costs about nrow/10 extra strtod calls. */
+            int nbad = 0, limit = nrow / 10;
+            if (nrow >= 5)
+                for (int q = 0; q < nrow && nbad <= limit; q++) {
+                    const char *t = cells[c].v[q];
+                    if (is_na(t)) continue;
+                    char *e2; strtod(t, &e2);
+                    if (e2 == t || *e2) nbad++;
+                }
+            if (nrow >= 5 && nbad <= limit)
+                fprintf(stderr, "cinderplot: warning: column `%s` is treated as text "
+                        "because row %d is \"%s\"\n", col->name, bad_r + rowbase,
+                        cells[c].v[bad_r]);
             free(col->num);
             col->num = NULL;
             col->type = COL_STR;

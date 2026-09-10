@@ -45,11 +45,21 @@ static double leg_est_w(cairo_t *cr, char **lv, int k, int nc) {
 
 static GTable *build_legend(cairo_t *cr, const Theme *th, const char *title, const Factor *f,
                             const Col *pal, int haspoint, int hasline, int hasbox, int hastext,
-                            const int *shapes, int ncol) {
-    GTable *t = cp_xcalloc(1, sizeof(GTable));
+                            const int *shapes, int ncol, int reverse, char *err) {
     if (ncol < 1) ncol = 1;
     if (ncol > f->nlev) ncol = f->nlev;
     int rows = (f->nlev + ncol - 1) / ncol;
+    /* The table takes 4 grid columns per legend column and 2 rows per entry
+     * row out of GT_MAXDIM each; a fold past that wrote off the end of colw
+     * (guide_legend(nrow=1) on a 100-level factor did). Refuse it by name. */
+    if (4 * ncol - 1 > GT_MAXDIM || 2 + 2 * rows - 1 > GT_MAXDIM) {
+        snprintf(err, CP_ERRLEN, "legend `%s` with %d levels folded to %d "
+                 "column%s and %d row%s exceeds the layout limit; use "
+                 "guide_legend(nrow=/ncol=) smaller", title ? title : "",
+                 f->nlev, ncol, ncol == 1 ? "" : "s", rows, rows == 1 ? "" : "s");
+        return NULL;
+    }
+    GTable *t = cp_xcalloc(1, sizeof(GTable));
     /* column-major fill (ggplot guide_legend byrow=FALSE): entry i sits in
      * column i/rows, row i%rows. Each column is [key][gap][labels-of-that-
      * column's-width], with a gutter between columns. */
@@ -57,7 +67,8 @@ static GTable *build_legend(cairo_t *cr, const Theme *th, const char *title, con
     double total = 0;
     for (int c = 0; c < ncol; c++) {
         lw[c] = 0;
-        for (int i = c * rows; i < (c + 1) * rows && i < f->nlev; i++) {
+        for (int di = c * rows; di < (c + 1) * rows && di < f->nlev; di++) {
+            int i = reverse ? f->nlev - 1 - di : di;
             double w = text_w(cr, SZ_AXIS_TEXT, f->levels[i]);
             if (w > lw[c]) lw[c] = w;
         }
@@ -90,8 +101,11 @@ static GTable *build_legend(cairo_t *cr, const Theme *th, const char *title, con
         g->tx = 0; g->ty = 1; g->hj = 0; g->va = V_TOP;
     }
     static const double half = 0.5;
-    for (int i = 0; i < f->nlev; i++) {
-        int r = 2 + 2 * (i % rows), kc = 4 * (i / rows);
+    for (int di = 0; di < f->nlev; di++) {
+        /* guide_legend(reverse=TRUE): flip the DISPLAY order only — draw
+         * order and colours stay tied to the factor levels */
+        int i = reverse ? f->nlev - 1 - di : di;
+        int r = 2 + 2 * (di % rows), kc = 4 * (di / rows);
         if (th->key_bg_on) { g = gt_add(t, G_RECT, r, kc, r, kc); g->col = th->key_bg; }
         if (hasbox) {
             g = gt_add(t, G_RECT, r, kc, r, kc);
@@ -347,6 +361,16 @@ static int cmp_pt_x(const void *a, const void *b) {
     return d < 0 ? -1 : d > 0 ? 1 : 0;
 }
 
+/* (panel, x, row) key for stacking duplicated geom_col x values: rows that
+ * share a bar sort together, in input order within the bar */
+typedef struct { int p; double x; int r; } StackKey;
+static int cmp_stackkey(const void *a, const void *b) {
+    const StackKey *ka = a, *kb = b;
+    if (ka->p != kb->p) return ka->p < kb->p ? -1 : 1;
+    if (ka->x != kb->x) return ka->x < kb->x ? -1 : 1;
+    return ka->r < kb->r ? -1 : ka->r > kb->r ? 1 : 0;
+}
+
 static int cmp_double(const void *a, const void *b) {
     double av = *(const double *)a, bv = *(const double *)b;
     return av < bv ? -1 : av > bv ? 1 : 0;
@@ -514,6 +538,128 @@ typedef struct {
     int shared;                          /* 1 = the fixed-scale instance */
 } PanelScale;
 
+/* Breaks and labels for one continuous axis over its expanded range [lo, hi]
+ * (transformed space): the user's breaks=/labels= when given, else the
+ * extended-Wilkinson ladder, or the powers on a log axis. One routine for the
+ * shared pass and the per-panel free-scale pass, and for linear and log axes
+ * alike -- breaks=/labels= used to be silently ignored on a log axis. br and
+ * labs hold MAX_BREAKS entries; on a log axis a given break is placed at its
+ * log and labelled with its plain value, so breaks=c(1,10,100) read 1 10 100. */
+static int axis_breaks(int logb, double lo, double hi, int nuser, const double *ubr,
+                       int nulab, char *const *ulab, int pct, char axis,
+                       double *br, char **labs) {
+    if (!nuser && logb) return log_breaks(logb, lo, hi, br, labs, 16);
+    int nb, keep[MAX_BREAKS];                 /* original index, so labels= stays paired */
+    double vals[MAX_BREAKS];                  /* data-space value of each kept break */
+    if (nuser) {
+        nb = nuser;
+        for (int i = 0; i < nb; i++) br[i] = cp_logt(logb, ubr[i]);
+    } else nb = extended_breaks(lo, hi, 5, br, 16);
+    int n = 0;
+    for (int i = 0; i < nb; i++)
+        if (br[i] >= lo && br[i] <= hi) {
+            keep[n] = i; vals[n] = nuser ? ubr[i] : br[i]; br[n++] = br[i];
+        }
+    /* An explicit break outside the range is dropped, as in ggplot2 -- but
+     * dropping every one leaves the axis silently unlabelled, which reads
+     * as a bug in the figure rather than in the call. */
+    if (nuser && n == 0)
+        fprintf(stderr, "cinderplot: warning: every %c break given lies outside "
+                "the data range [%g, %g]; the axis has no labels\n", axis,
+                logb ? pow(logb, lo) : lo, logb ? pow(logb, hi) : hi);
+    int dec = axis_decimals(vals, n), pdec = dec - 2 < 0 ? 0 : dec - 2;
+    for (int i = 0; i < n; i++) {
+        if (nulab) {                          /* labels=c(...): the given text */
+            labs[i] = cp_xstrdup(ulab[keep[i]]);
+            continue;
+        }
+        labs[i] = cp_xmalloc(32);
+        if (pct) snprintf(labs[i], 32, "%.*f%%", pdec, vals[i] * 100);
+        else fmt_break(vals[i], dec, labs[i], 32);
+    }
+    return n;
+}
+
+/* ---- range training, shared by the fixed pass and the per-panel free pass ----
+ * Under facet_wrap(scales="free_*") each panel trains its own range, and the
+ * copy of this logic it used had drifted: it lost the errorbar lower bound and
+ * every reference line, so geom_hline() simply vanished under free_y. One set
+ * of routines, called with p = -1 for the whole data and p >= 0 for one
+ * panel's rows, so the two passes cannot disagree again. Transformed space
+ * throughout; the endpoint columns may hold NaN (the geoms skip those). */
+static void train_rows_x(const PlotSpec *spec, const DataFrame *df, const int *use,
+                         const Factor *ff, int p, const Column *xc, const Column *xec,
+                         double *lo, double *hi) {
+    for (int r = 0; r < df->nrow; r++) {
+        if (!use[r] || (p >= 0 && ff->idx[r] != p)) continue;
+        double t = cp_logt(spec->log_x, xc->num[r]);
+        if (t < *lo) *lo = t;
+        if (t > *hi) *hi = t;
+        if (xec && !isnan(xec->num[r])) {       /* segment/rect end extends x */
+            double te = cp_logt(spec->log_x, xec->num[r]);
+            if (te < *lo) *lo = te;
+            if (te > *hi) *hi = te;
+        }
+    }
+}
+static void train_rows_y(const PlotSpec *spec, const DataFrame *df, const int *use,
+                         const Factor *ff, int p, const Column *yc, const Column *yec,
+                         const Column *yminc, double *lo, double *hi) {
+    for (int r = 0; r < df->nrow; r++) {
+        if (!use[r] || (p >= 0 && ff->idx[r] != p)) continue;
+        double t = cp_logt(spec->log_y, yc->num[r]);
+        if (t < *lo) *lo = t;
+        if (t > *hi) *hi = t;
+        if (yec && !isnan(yec->num[r])) {       /* segment end / errorbar top */
+            double te = cp_logt(spec->log_y, yec->num[r]);
+            if (te < *lo) *lo = te;
+            if (te > *hi) *hi = te;
+        }
+        if (yminc && !isnan(yminc->num[r])) {   /* errorbar lower bound */
+            double te = cp_logt(spec->log_y, yminc->num[r]);
+            if (te < *lo) *lo = te;
+            if (te > *hi) *hi = te;
+        }
+    }
+}
+/* Reference lines expand the panel to include their intercept (ggplot).
+ * train_x / train_y say which axis this call trains; txmin/txmax are NULL
+ * when x is discrete or genomic, which is what switches abline off (it reads
+ * the x range -- possibly the shared, fixed one -- to place its endpoints,
+ * and trains y). Returns the number of intercepts dropped for having no
+ * place on a log axis -- a value <= 0 used to poison the scale to -inf. */
+static int train_ref_lines(const PlotSpec *spec, int train_x, int train_y,
+                           double *txmin, double *txmax, double *tymin, double *tymax) {
+    int drop = 0;
+    for (int li = 0; li < spec->nlayers; li++) {
+        const Layer *L = &spec->layers[li];
+        if (L->type == GEOM_HLINE && L->has_intercept && train_y) {
+            double t = cp_logt(spec->log_y, L->intercept);
+            if (!isfinite(t)) { drop++; continue; }
+            if (t < *tymin) *tymin = t;
+            if (t > *tymax) *tymax = t;
+        } else if (L->type == GEOM_VLINE && L->has_intercept && train_x && txmin) {
+            double t = cp_logt(spec->log_x, L->intercept);
+            if (!isfinite(t)) { drop++; continue; }
+            if (t < *txmin) *txmin = t;
+            if (t > *txmax) *txmax = t;
+        } else if (L->type == GEOM_ABLINE && train_y && txmin) {
+            /* ggplot draws abline in TRANSFORMED space (y' = a + b x' with
+             * x', y' the log values on a log axis), so the line is straight
+             * on the page and its endpoints are always finite. Un-
+             * transforming with pow(10, ...) here used to blow a log2 axis up
+             * to 10^10 and bend the line on a log10 one. */
+            double ex[2] = { *txmin, *txmax };
+            for (int k = 0; k < 2; k++) {
+                double yv = L->intercept + L->slope * ex[k];
+                if (yv < *tymin) *tymin = yv;
+                if (yv > *tymax) *tymax = yv;
+            }
+        }
+    }
+    return drop;
+}
+
 int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 double w_pt, double h_pt, char *err) {
     /* ---- layer summary ---- */
@@ -627,6 +773,24 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     if (spec->yend.col) {
         yec = df_col(df, spec->yend.col);
         if (!yec) { snprintf(err, CP_ERRLEN, "column `%s` not found", spec->yend.col); return -1; }
+    }
+    const Column *yminc = NULL;
+    if (spec->ymin.col) {
+        yminc = df_col(df, spec->ymin.col);
+        if (!yminc) { snprintf(err, CP_ERRLEN, "column `%s` not found", spec->ymin.col); return -1; }
+        if (yminc->type != COL_NUM) {
+            snprintf(err, CP_ERRLEN, "ymin column `%s` must be numeric", spec->ymin.col);
+            return -1;
+        }
+    }
+    int hasrange = 0;
+    for (int i = 0; i < spec->nlayers; i++)
+        if (spec->layers[i].type == GEOM_ERRORBAR
+            || spec->layers[i].type == GEOM_LINERANGE) hasrange = 1;
+    if (hasrange && (!yminc || !spec->yend.col)) {
+        snprintf(err, CP_ERRLEN, "geom_errorbar()/geom_linerange() need "
+                 "aes(ymin=, ymax=)");
+        return -1;
     }
     if (xec && xec->type != COL_NUM) {
         snprintf(err, CP_ERRLEN, "xend column `%s` must be numeric", spec->xend.col);
@@ -809,20 +973,44 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                          "coordinates (pie/rose bars) are not implemented");
                 return -1;
             }
+        /* the radar drawing colours by the discrete series only; a
+         * continuous colour, shape or size built its legend and was then
+         * ignored on the marks */
+        if (cont_col || shf || szc) {
+            snprintf(err, CP_ERRLEN, "coord_polar(): %s mappings are not "
+                     "implemented (only geom_line()/geom_point() with a "
+                     "discrete colour)", cont_col ? "continuous colour="
+                     : shf ? "shape=" : "size=");
+            return -1;
+        }
     }
-    /* ---- usable rows (NA and log-domain filtering) ---- */
+    /* ---- usable rows (NA and log-domain filtering) ----
+     * Inf counts as missing (isfinite, not !isnan): R writes Inf, strtod
+     * reads it, and one such cell used to blank the whole panel by training
+     * the scale to infinity. NaN in the optional endpoint columns (xend,
+     * yend, ymin) is left to the geoms, which skip it. */
     int *use = cp_xmalloc(df->nrow * sizeof(int)), nuse = 0, d_na = 0, d_log = 0;
     for (int r = 0; r < df->nrow; r++) {
         int xok = disc_x ? (xf->idx[r] >= 0)
-                : genome_x ? (roff[r] >= 0 && !isnan(xc->num[r]))
-                : !isnan(xc->num[r]);
-        int ok = xok && (!yc || (disc_y ? yf->idx[r] >= 0 : !isnan(yc->num[r])))
+                : genome_x ? (roff[r] >= 0 && isfinite(xc->num[r]))
+                : isfinite(xc->num[r]);
+        int ok = xok && (!yc || (disc_y ? yf->idx[r] >= 0 : isfinite(yc->num[r])))
               && (!cf || cf->idx[r] >= 0) && (!shf || shf->idx[r] >= 0)
               && (!cont_col || isfinite(colc->num[r]))
               && (!ff || ff->idx[r] >= 0)
-              && (!szc || !isnan(szc->num[r]));
+              && (!szc || isfinite(szc->num[r]))
+              && (!xec || !isinf(xec->num[r]))
+              && (!yec || !isinf(yec->num[r]))
+              && (!yminc || !isinf(yminc->num[r]));
         if (!ok) d_na++;
-        else if ((spec->log_x && xc->num[r] <= 0) || (spec->log_y && yc && yc->num[r] <= 0)) {
+        /* every value the row puts on a log axis has to be positive, the
+         * endpoints included: an errorbar reaching down to 0 on a log y used
+         * to train the axis to -inf and empty the panel. ggplot drops the row
+         * (NaN <= 0 is false, so a missing endpoint still passes). */
+        else if ((spec->log_x && (xc->num[r] <= 0 || (xec && xec->num[r] <= 0)))
+                 || (spec->log_y && ((yc && yc->num[r] <= 0)
+                                     || (yec && yec->num[r] <= 0)
+                                     || (yminc && yminc->num[r] <= 0)))) {
             ok = 0; d_log++;
         }
         use[r] = ok;
@@ -945,6 +1133,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
      * edge. Region-highlight bands (no y extent in the file) never trained
      * the scales and still do not. */
     double lxmin = 1e300, lxmax = -1e300, lymin = 1e300, lymax = -1e300;
+    /* reference values (rect layer rows, annotate() marks, hline intercepts)
+     * that cannot sit on a log axis are dropped and reported once, as ggplot
+     * does; one of them used to poison the whole scale to -inf */
+    int d_ref = 0;
     for (int li = 0; li < spec->nlayers; li++) {
         const Layer *L = &spec->layers[li];
         if (L->type != GEOM_RECT || !L->data || genome_x) continue;
@@ -963,9 +1155,12 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 || isnan(c_y->num[r2]) || isnan(c_ye->num[r2])) continue;
             double ta = cp_logt(spec->log_x, c_x->num[r2]);
             double tb = cp_logt(spec->log_x, c_xe->num[r2]);
+            double ua = TY(c_y->num[r2]), ub = TY(c_ye->num[r2]);
+            if (!isfinite(ta) || !isfinite(tb) || !isfinite(ua) || !isfinite(ub)) {
+                d_ref++; continue;
+            }
             if (fmin(ta, tb) < lxmin) lxmin = fmin(ta, tb);
             if (fmax(ta, tb) > lxmax) lxmax = fmax(ta, tb);
-            double ua = TY(c_y->num[r2]), ub = TY(c_ye->num[r2]);
             if (fmin(ua, ub) < lymin) lymin = fmin(ua, ub);
             if (fmax(ua, ub) > lymax) lymax = fmax(ua, ub);
         }
@@ -980,12 +1175,12 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         double xs[2] = { an->x, an->has_xend ? an->xend : an->x };
         double ys2[2] = { an->y, an->has_yend ? an->yend : an->y };
         for (int k = 0; k < 2; k++) {
+            double t = cp_logt(spec->log_x, xs[k]), u = TY(ys2[k]);
+            if (!isfinite(t) || !isfinite(u)) { d_ref++; continue; }
             if (!genome_x) {
-                double t = cp_logt(spec->log_x, xs[k]);
                 if (t < lxmin) lxmin = t;
                 if (t > lxmax) lxmax = t;
             }
-            double u = TY(ys2[k]);
             if (u < lymin) lymin = u;
             if (u > lymax) lymax = u;
         }
@@ -999,49 +1194,74 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         txmin = 0; txmax = gs->total;
     } else {
         txmin = 1e300; txmax = -1e300;
-        for (int r = 0; r < df->nrow; r++) {
-            if (!use[r]) continue;
-            double t = TXR(r);
-            if (t < txmin) txmin = t;
-            if (t > txmax) txmax = t;
-            if (xec && !isnan(xec->num[r])) {   /* segment end extends x range */
-                double te = cp_logt(spec->log_x, xec->num[r]);
-                if (te < txmin) txmin = te;
-                if (te > txmax) txmax = te;
-            }
-        }
+        train_rows_x(spec, df, use, ff, -1, xc, xec, &txmin, &txmax);
         if (lxmin < txmin) txmin = lxmin;       /* 4-corner rect layer files */
         if (lxmax > txmax) txmax = lxmax;
         if (txmax == txmin) { txmin -= 0.5; txmax += 0.5; }
     }
 
     /* ---- stat_bin for histogram layers (bins on the transformed scale,
-     * ggplot's default alignment: boundary = width/2) ---- */
-    typedef struct { int nbins; double start, width; int *counts; int max; } Hist;
+     * ggplot's default alignment: boundary = width/2) ----
+     * ggplot's bin_breaks_bins, verified via ggplot_build: width =
+     * range/(bins-1) (or the whole range for bins=1, 0.1 for no range), the
+     * edges on the lattice (k + 1/2) * width, the first edge the last such
+     * point at or below the minimum, and the last edge the first past the
+     * maximum -- so the number of bins is `bins`, or one fewer when the
+     * minimum sits exactly on an edge. Bins are right-closed (a, b] with the
+     * lowest edge inclusive, which is where integer data on the edges goes
+     * in ggplot; left-closed bins counted every such value one bin over.
+     * Under free_x each panel bins its own range, as ggplot does; the
+     * x-scale is then trained on the edges (below), so the outer bars are
+     * never clipped by a panel trained on the data alone. */
+    typedef struct { int nbins; double *start, *width; int *nb, *counts; int max; } Hist;
     Hist hist[MAX_LAYERS];
     memset(hist, 0, sizeof hist);
+    int hist_free_x = ff && spec->free_x && !disc_x && !genome_x;
     for (int li = 0; li < spec->nlayers; li++) {
         if (spec->layers[li].type != GEOM_HISTOGRAM) continue;
-        /* ggplot default binning (verified via ggplot_build): width =
-         * range/(bins-1), first bin centered on the data minimum, exactly
-         * `bins` bins spanning [min - w/2, max + w/2] */
         Hist *hs = &hist[li];
         int bins = spec->layers[li].bins;
-        hs->width = bins > 1 ? (txmax - txmin) / (bins - 1) : (txmax - txmin);
-        if (hs->width <= 0) hs->width = 1;
-        hs->start = txmin - hs->width / 2;
-        hs->nbins = bins;
+        hs->nbins = bins;                       /* per-panel stride */
+        hs->start = cp_xmalloc(npan * sizeof(double));
+        hs->width = cp_xmalloc(npan * sizeof(double));
+        hs->nb = cp_xmalloc(npan * sizeof(int));
         hs->counts = cp_xcalloc((size_t)npan * hs->nbins, sizeof(int));
+        for (int p = 0; p < npan; p++) {
+            double lo = txmin, hi = txmax;
+            if (hist_free_x) {
+                lo = 1e300; hi = -1e300;
+                for (int r = 0; r < df->nrow; r++) {
+                    if (!use[r] || ff->idx[r] != p) continue;
+                    double t = TXR(r);
+                    if (t < lo) lo = t;
+                    if (t > hi) hi = t;
+                }
+                if (lo > hi) lo = hi = 0;       /* empty panel */
+            }
+            double w = hi <= lo ? 0.1 : bins > 1 ? (hi - lo) / (bins - 1) : hi - lo;
+            double boundary = bins > 1 || hi <= lo ? w / 2 : lo;
+            double origin = boundary + floor((lo - boundary) / w) * w;
+            int nb = (int)floor((hi - origin) / w + 1 - 1e-8);
+            if (nb < 1) nb = 1;
+            if (nb > bins) nb = bins;
+            hs->start[p] = origin; hs->width[p] = w; hs->nb[p] = nb;
+        }
         for (int r = 0; r < df->nrow; r++) {
             if (!use[r]) continue;
             int p = ff ? ff->idx[r] : 0;
-            int bin = (int)((TXR(r) - hs->start) / hs->width);
+            double w = hs->width[p], fuzz = 1e-8 * w;
+            int bin = (int)ceil((TXR(r) - hs->start[p] - fuzz) / w) - 1;
             if (bin < 0) bin = 0;
-            if (bin >= hs->nbins) bin = hs->nbins - 1;
+            if (bin >= hs->nb[p]) bin = hs->nb[p] - 1;
             hs->counts[p * hs->nbins + bin]++;
         }
         for (int i = 0; i < npan * hs->nbins; i++)
             if (hs->counts[i] > hs->max) hs->max = hs->counts[i];
+        if (!hist_free_x) {                     /* bin edges train the x scale */
+            double lo = hs->start[0], hi = hs->start[0] + hs->nb[0] * hs->width[0];
+            if (lo < txmin) txmin = lo;
+            if (hi > txmax) txmax = hi;
+        }
     }
 
     /* ---- stat_count for geom_bar: counts per (panel, x-category, group) ---- */
@@ -1093,6 +1313,37 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 if (total > colstack_max[p]) colstack_max[p] = total;
             }
     }
+    /* Without a discrete fill, duplicated x values still stack: ggplot's
+     * default position for geom_col is stack, so A=1 and A=2 read as A=3,
+     * not as two bars painted over each other with the taller one showing.
+     * Each row's offset is fixed here in row order (ggplot's stacking order);
+     * negatives stack downward from 0, as position_stack does. A unique x
+     * gets offset 0 and draws exactly as before. */
+    double *coloff = NULL, *colstack_min = NULL;
+    if (hascol && !cf) {
+        coloff = cp_xcalloc(df->nrow, sizeof(double));
+        colstack_max = cp_xcalloc(npan, sizeof(double));
+        colstack_min = cp_xcalloc(npan, sizeof(double));
+        StackKey *keys = cp_xmalloc((nuse ? nuse : 1) * sizeof(StackKey));
+        int nk = 0;
+        for (int r = 0; r < df->nrow; r++)
+            if (use[r]) keys[nk++] = (StackKey){ ff ? ff->idx[r] : 0, TXR(r), r };
+        qsort(keys, nk, sizeof(StackKey), cmp_stackkey);
+        double up = 0, down = 0;
+        for (int i = 0; i < nk; i++) {
+            if (i == 0 || keys[i].p != keys[i-1].p || keys[i].x != keys[i-1].x)
+                up = down = 0;
+            double v = yc->num[keys[i].r];
+            if (v >= 0) {
+                coloff[keys[i].r] = up; up += v;
+                if (up > colstack_max[keys[i].p]) colstack_max[keys[i].p] = up;
+            } else {
+                coloff[keys[i].r] = down; down += v;
+                if (down < colstack_min[keys[i].p]) colstack_min[keys[i].p] = down;
+            }
+        }
+        free(keys);
+    }
 
     /* ---- stat_density: Gaussian KDE per (panel, colour group), bandwidth
      * nrd0 (Silverman), evaluated at DENS_N points over [min-3bw, max+3bw]
@@ -1135,7 +1386,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 double sd = sqrt(var);
                 qsort(buf, n, sizeof(double), cmp_double);
                 double iqr = quantile7(buf, n, 0.75) - quantile7(buf, n, 0.25);
-                double lo = fmin(sd, iqr / 1.349);          /* R's bw.nrd0 */
+                double lo = fmin(sd, iqr / 1.34);           /* R's bw.nrd0 (1.34, not 1.349) */
                 if (lo <= 0) lo = sd > 0 ? sd : (fabs(buf[0]) > 0 ? fabs(buf[0]) : 1);
                 double bw = (densl->bw > 0 ? densl->bw : 0.9 * lo * pow((double)n, -0.2))
                           * densl->adjust;               /* bw= override, x adjust= */
@@ -1174,26 +1425,22 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     } else if (hasdens) {
         tymin = 0; tymax = dens_max;
     } else {
-        for (int r = 0; r < df->nrow; r++) {
-            if (!use[r]) continue;
-            double t = disc_y ? YVAL(r) : TY(yc->num[r]);
-            if (t < tymin) tymin = t;
-            if (t > tymax) tymax = t;
-            if (yec && !isnan(yec->num[r])) {   /* segment end extends y range */
-                double te = TY(yec->num[r]);
-                if (te < tymin) tymin = te;
-                if (te > tymax) tymax = te;
-            }
-        }
+        /* a discrete y sits at 1..k; its range below is never read (the
+         * expansion works from the level count), it just has to be sane */
+        if (disc_y) { tymin = 1; tymax = yf->nlev; }
+        else train_rows_y(spec, df, use, ff, -1, yc, yec, yminc, &tymin, &tymax);
         if (lymin < tymin) tymin = lymin;       /* 4-corner rect layer files */
         if (lymax > tymax) tymax = lymax;
-        if (colsum) {                           /* stacked totals set the top */
+        if (colstack_max) {                     /* stacked totals set the top */
             double mx = 0;
             for (int p = 0; p < npan; p++)
                 if (colstack_max[p] > mx) mx = colstack_max[p];
             double t = TY(mx);
             if (t > tymax) tymax = t;
         }
+        if (colstack_min && !spec->log_y)       /* ... and the bottom */
+            for (int p = 0; p < npan; p++)
+                if (colstack_min[p] < tymin) tymin = colstack_min[p];
         if (hascol && !spec->log_y) {           /* bars are anchored at 0 */
             if (tymin > 0) tymin = 0;
             if (tymax < 0) tymax = 0;
@@ -1201,42 +1448,47 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     }
     if (tymax == tymin) { tymin -= 0.5; tymax += 0.5; }
 
-    /* reference lines expand the panel to include their intercept (ggplot) */
-    for (int li = 0; li < spec->nlayers; li++) {
-        const Layer *L = &spec->layers[li];
-        if (L->type == GEOM_HLINE && L->has_intercept) {
-            double t = TY(L->intercept);
-            if (t < tymin) tymin = t;
-            if (t > tymax) tymax = t;
-        } else if (L->type == GEOM_VLINE && L->has_intercept && !disc_x && !genome_x) {
-            /* Same guard hline has: a value <= 0 has no place on a log axis, and
-             * feeding its NaN into the comparisons below only works by accident
-             * of IEEE semantics. */
-            double t = spec->log_x ? (L->intercept > 0
-                                      ? cp_logt(spec->log_x, L->intercept) : NAN)
-                                   : L->intercept;
-            if (isfinite(t)) {
-                if (t < txmin) txmin = t;
-                if (t > txmax) txmax = t;
-            }
-        } else if (L->type == GEOM_ABLINE && !disc_x && !genome_x) {
-            /* ggplot trains on the line's endpoints, so a slope that leaves the
-             * data range still shows where it crosses. Its siblings above have
-             * always done this; abline was simply missed. */
-            double ex[2] = { txmin, txmax };
-            for (int k = 0; k < 2; k++) {
-                double xd = spec->log_x ? pow(10, ex[k]) : ex[k];
-                double yv = TY(L->intercept + L->slope * xd);
-                if (!isfinite(yv)) continue;
-                if (yv < tymin) tymin = yv;
-                if (yv > tymax) tymax = yv;
-            }
-        }
-    }
+    /* reference lines (hline/vline/abline) widen the trained ranges */
+    d_ref += train_ref_lines(spec, 1, !disc_y,
+                             (disc_x || genome_x) ? NULL : &txmin,
+                             (disc_x || genome_x) ? NULL : &txmax, &tymin, &tymax);
+    if (d_ref)
+        fprintf(stderr, "cinderplot: warning: dropped %d reference value%s with "
+                "no place on a log axis (not positive)\n", d_ref, d_ref == 1 ? "" : "s");
 
     /* user axis limits (xlim/ylim or scale_*_log10(limits=)): override the
      * data-driven range with the requested domain (log10-transformed when the
      * axis is log). Default expansion is applied below as usual. */
+    /* A limit or break list on a discrete axis has no data-space to apply
+     * to; it used to parse, run and do nothing. Reversed limits would need a
+     * reversed axis, which is not implemented -- say so rather than report
+     * the collapsed range as an expand= problem. */
+    if ((spec->has_xlim || spec->n_x_breaks || spec->n_x_break_labs) && disc_x) {
+        snprintf(err, CP_ERRLEN, "%s on a discrete x axis is not implemented",
+                 spec->has_xlim ? "xlim()/limits=" : "breaks=/labels=");
+        return -1;
+    }
+    if ((spec->has_xlim || spec->n_x_breaks || spec->n_x_break_labs) && genome_x) {
+        snprintf(err, CP_ERRLEN, "%s is not implemented with scale_x_genome(); "
+                 "use regions() for a window",
+                 spec->has_xlim ? "xlim()/limits=" : "breaks=/labels=");
+        return -1;
+    }
+    if ((spec->has_ylim || spec->n_y_breaks || spec->n_y_break_labs) && disc_y) {
+        snprintf(err, CP_ERRLEN, "%s on a discrete y axis is not implemented",
+                 spec->has_ylim ? "ylim()/limits=" : "breaks=/labels=");
+        return -1;
+    }
+    if (spec->has_xlim && !(spec->xlim_lo < spec->xlim_hi)) {
+        snprintf(err, CP_ERRLEN, "xlim(): lo must be < hi (got %g, %g); reversed "
+                 "axes are not implemented", spec->xlim_lo, spec->xlim_hi);
+        return -1;
+    }
+    if (spec->has_ylim && !(spec->ylim_lo < spec->ylim_hi)) {
+        snprintf(err, CP_ERRLEN, "ylim(): lo must be < hi (got %g, %g); reversed "
+                 "axes are not implemented", spec->ylim_lo, spec->ylim_hi);
+        return -1;
+    }
     if (spec->log_x && spec->has_xlim && (spec->xlim_lo <= 0 || spec->xlim_hi <= 0)) {
         snprintf(err, CP_ERRLEN, "x limits must be positive on a log axis, got "
                  "[%g, %g]", spec->xlim_lo, spec->xlim_hi);
@@ -1309,7 +1561,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         y0 = tymin - e; y1 = tymax + e;
     }
     if (x1 <= x0 || y1 <= y0) {
-        snprintf(err, CP_ERRLEN, "expand= collapsed an axis to nothing");
+        int ex = x1 <= x0 ? spec->has_x_expand : spec->has_y_expand;
+        snprintf(err, CP_ERRLEN, ex ? "expand= collapsed the %c axis to nothing"
+                                    : "the %c axis collapsed to nothing", x1 <= x0 ? 'x' : 'y');
         return -1;
     }
     /* reserve the bottom `ideo_npc` of the panel for the ideogram track */
@@ -1349,75 +1603,26 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             if (!strncmp(nm, "chr", 3)) nm += 3;   /* compact: chr1 -> 1 */
             gax_lab[i] = cp_xstrdup(nm);
         }
-    } else if (spec->log_x) {
-        nxbr = log_breaks(spec->log_x, x0, x1, xbr, xlabs, 16);
     } else {
-        int nb; 
-        if (spec->n_x_breaks) {          /* scale_x_continuous(breaks=c(...)) */
-            nb = spec->n_x_breaks;
-            for (int i = 0; i < nb; i++)
-                xbr[i] = cp_logt(spec->log_x, spec->x_breaks[i]);
-        } else nb = extended_breaks(x0, x1, 5, xbr, 16);
-        int n = 0, keep[MAX_BREAKS];             /* original index, so labels= stays paired */
-        for (int i = 0; i < nb; i++)
-            if (xbr[i] >= x0 && xbr[i] <= x1) { keep[n] = i; xbr[n++] = xbr[i]; }
-        /* An explicit break outside the range is dropped, as in ggplot2 -- but
-         * dropping every one leaves the axis silently unlabelled, which reads
-         * as a bug in the figure rather than in the call. */
-        if (spec->n_x_breaks && n == 0)
-            fprintf(stderr, "cinderplot: warning: every x break given lies outside "
-                    "the data range [%g, %g]; the axis has no labels\n",
-                    x0, x1);
-        nxbr = n;
-        int dec = axis_decimals(xbr, nxbr), pdec = dec - 2 < 0 ? 0 : dec - 2;
-        for (int i = 0; i < nxbr; i++) {
-            if (spec->n_x_break_labs) {  /* labels=c(...): the given text */
-                xlabs[i] = cp_xstrdup(spec->x_break_labs[keep[i]]);
-                continue;
-            }
-            xlabs[i] = cp_xmalloc(32);
-            if (spec->x_pct) snprintf(xlabs[i], 32, "%.*f%%", pdec, xbr[i] * 100);
-            else fmt_break(xbr[i], dec, xlabs[i], 32);
-        }
+        nxbr = axis_breaks(spec->log_x, x0, x1, spec->n_x_breaks, spec->x_breaks,
+                           spec->n_x_break_labs, spec->x_break_labs, spec->x_pct,
+                           'x', xbr, xlabs);
     }
     if (disc_y) {                          /* one break per category, level labels */
         nybr = yf->nlev;
         for (int i = 0; i < nybr; i++) { ybr[i] = i + 1; ylabs[i] = cp_xstrdup(yf->levels[i]); }
-    } else if (spec->log_y) {
-        nybr = log_breaks(spec->log_y, y0, y1, ybr, ylabs, 16);
     } else {
-        int nb;
-        if (spec->n_y_breaks) {          /* scale_y_continuous(breaks=c(...)) */
-            nb = spec->n_y_breaks;
-            for (int i = 0; i < nb; i++)
-                ybr[i] = cp_logt(spec->log_y, spec->y_breaks[i]);
-        } else nb = extended_breaks(y0, y1, 5, ybr, 16);
-        int n = 0, keep[MAX_BREAKS];             /* original index, so labels= stays paired */
-        for (int i = 0; i < nb; i++)
-            if (ybr[i] >= y0 && ybr[i] <= y1) { keep[n] = i; ybr[n++] = ybr[i]; }
-        /* An explicit break outside the range is dropped, as in ggplot2 -- but
-         * dropping every one leaves the axis silently unlabelled, which reads
-         * as a bug in the figure rather than in the call. */
-        if (spec->n_y_breaks && n == 0)
-            fprintf(stderr, "cinderplot: warning: every y break given lies outside "
-                    "the data range [%g, %g]; the axis has no labels\n",
-                    y0, y1);
-        nybr = n;
-        int dec = axis_decimals(ybr, nybr), pdec = dec - 2 < 0 ? 0 : dec - 2;
-        for (int i = 0; i < nybr; i++) {
-            if (spec->n_y_break_labs) {  /* labels=c(...): the given text */
-                ylabs[i] = cp_xstrdup(spec->y_break_labs[keep[i]]);
-                continue;
-            }
-            ylabs[i] = cp_xmalloc(32);
-            if (spec->y_pct) snprintf(ylabs[i], 32, "%.*f%%", pdec, ybr[i] * 100);
-            else fmt_break(ybr[i], dec, ylabs[i], 32);
-        }
+        nybr = axis_breaks(spec->log_y, y0, y1, spec->n_y_breaks, spec->y_breaks,
+                           spec->n_y_break_labs, spec->y_break_labs, spec->y_pct,
+                           'y', ybr, ylabs);
     }
     double *xnpc = cp_xmalloc(nxbr * sizeof(double)), *ynpc = cp_xmalloc(nybr * sizeof(double));
     for (int i = 0; i < nxbr; i++) xnpc[i] = NPCX(xbr[i]);
     for (int i = 0; i < nybr; i++) ynpc[i] = NPCY(ybr[i]);
-    double xmin_br[32], ymin_br[32];
+    /* make_minors() writes up to nmaj + 1 entries, and breaks=c(...) may give
+     * MAX_BREAKS majors; the old 32-double stack buffers overran past 31 */
+    double *xmin_br = cp_xmalloc((MAX_BREAKS + 1) * sizeof(double));
+    double *ymin_br = cp_xmalloc((MAX_BREAKS + 1) * sizeof(double));
     int nxmin = (disc_x || genome_x) ? 0
               : spec->log_x ? log_minors(spec->log_x, x0, x1, xmin_br, 32)
               : make_minors(xbr, nxbr, x0, x1, xmin_br);
@@ -1466,6 +1671,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         for (int p = 0; p < npan; p++) {
             PanelScale *S = &ps[p];
             S->shared = 0;
+            /* the un-expanded ranges the reference lines train against: the
+             * shared ones unless this pass frees the axis (set below) */
+            double plo_x = txmin, phi_x = txmax, plo_y = tymin, phi_y = tymax;
             if (spec->free_x) {
                 if (disc_x) {
                     /* Keep the global level ORDER, drop the levels this panel
@@ -1491,18 +1699,21 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                              "construction (use regions() for several windows)");
                     return -1;
                 } else {
+                    /* the same rows, layer files and reference lines the
+                     * shared pass trains on, restricted to this panel */
                     double lo = 1e300, hi = -1e300;
-                    for (int r = 0; r < df->nrow; r++) {
-                        if (!use[r] || ff->idx[r] != p) continue;
-                        double t = TXR(r);
-                        if (t < lo) lo = t;
-                        if (t > hi) hi = t;
-                        if (xec && !isnan(xec->num[r])) {
-                            double te = cp_logt(spec->log_x, xec->num[r]);
-                            if (te < lo) lo = te;
-                            if (te > hi) hi = te;
+                    train_rows_x(spec, df, use, ff, p, xc, xec, &lo, &hi);
+                    if (lxmin < lo) lo = lxmin;      /* rect layer files, annotate() */
+                    if (lxmax > hi) hi = lxmax;
+                    for (int li = 0; li < spec->nlayers; li++)   /* histogram bin edges */
+                        if (spec->layers[li].type == GEOM_HISTOGRAM) {
+                            const Hist *hs = &hist[li];
+                            if (hs->start[p] < lo) lo = hs->start[p];
+                            if (hs->start[p] + hs->nb[p] * hs->width[p] > hi)
+                                hi = hs->start[p] + hs->nb[p] * hs->width[p];
                         }
-                    }
+                    train_ref_lines(spec, 1, 0, &lo, &hi, &plo_y, &phi_y);   /* vline */
+                    plo_x = lo; phi_x = hi;           /* abline reads the x range */
                     /* A panel can be empty: levels= may name a level the data
                      * never uses. Draw it blank rather than refusing -- naming
                      * it was deliberate. */
@@ -1572,24 +1783,22 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         lo = 0; hi = mx;
                     }
                     if (!nhist && !hasbar && !hasdens) {
-                        for (int r = 0; r < df->nrow; r++) {
-                            if (!use[r] || ff->idx[r] != p) continue;
-                            double t = TY(yc->num[r]);
-                            if (t < lo) lo = t;
-                            if (t > hi) hi = t;
-                            if (yec && !isnan(yec->num[r])) {
-                                double te = TY(yec->num[r]);
-                                if (te < lo) lo = te;
-                                if (te > hi) hi = te;
-                            }
-                        }
-                        if (colsum && TY(colstack_max[p]) > hi)
+                        train_rows_y(spec, df, use, ff, p, yc, yec, yminc, &lo, &hi);
+                        if (lymin < lo) lo = lymin;  /* rect layer files, annotate() */
+                        if (lymax > hi) hi = lymax;
+                        if (colstack_max && TY(colstack_max[p]) > hi)
                             hi = TY(colstack_max[p]);   /* stacked totals */
+                        if (colstack_min && !spec->log_y && colstack_min[p] < lo)
+                            lo = colstack_min[p];
                         if (hascol && !spec->log_y) {   /* bars anchor at 0 */
                             if (lo > 0) lo = 0;
                             if (hi < 0) hi = 0;
                         }
                     }
+                    /* hline/abline intercepts, against this panel's x range
+                     * when that is free too, else the shared one */
+                    train_ref_lines(spec, 0, 1, (disc_x || genome_x) ? NULL : &plo_x,
+                                    (disc_x || genome_x) ? NULL : &phi_x, &lo, &hi);
                     if (spec->has_ylim) {      /* as for x above */
                         lo = cp_logt(spec->log_y, spec->ylim_lo);
                         hi = cp_logt(spec->log_y, spec->ylim_hi);
@@ -1619,43 +1828,20 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                             S->xbr[S->xmap[l]] = S->xmap[l] + 1;
                             S->xlabs[S->xmap[l]] = cp_xstrdup(xf->levels[l]);
                         }
-                } else if (spec->log_x) {
-                    S->xbr = cp_xmalloc(16 * sizeof(double));
-                    S->xlabs = cp_xmalloc(16 * sizeof(char *));
-                    S->nxbr = log_breaks(spec->log_x, S->x0, S->x1, S->xbr, S->xlabs, 16);
                 } else {
                     /* breaks=/labels= apply per panel: each freed panel keeps
-                     * the given breaks that land inside ITS range (they used
-                     * to be silently ignored on a freed axis). */
+                     * the given breaks that land inside ITS range */
                     S->xbr = cp_xmalloc(MAX_BREAKS * sizeof(double));
                     S->xlabs = cp_xmalloc(MAX_BREAKS * sizeof(char *));
-                    int nb, keep[MAX_BREAKS];
-                    if (spec->n_x_breaks) {
-                        nb = spec->n_x_breaks;
-                        for (int i = 0; i < nb; i++)
-                            S->xbr[i] = cp_logt(spec->log_x, spec->x_breaks[i]);
-                    } else nb = extended_breaks(S->x0, S->x1, 5, S->xbr, 16);
-                    int k = 0;
-                    for (int i = 0; i < nb; i++)
-                        if (S->xbr[i] >= S->x0 && S->xbr[i] <= S->x1) {
-                            keep[k] = i; S->xbr[k++] = S->xbr[i];
-                        }
-                    S->nxbr = k;
-                    int dec = axis_decimals(S->xbr, S->nxbr), pdec = dec - 2 < 0 ? 0 : dec - 2;
-                    for (int i = 0; i < S->nxbr; i++) {
-                        if (spec->n_x_break_labs) {
-                            S->xlabs[i] = cp_xstrdup(spec->x_break_labs[keep[i]]);
-                            continue;
-                        }
-                        S->xlabs[i] = cp_xmalloc(32);
-                        if (spec->x_pct) snprintf(S->xlabs[i], 32, "%.*f%%", pdec, S->xbr[i] * 100);
-                        else fmt_break(S->xbr[i], dec, S->xlabs[i], 32);
-                    }
+                    S->nxbr = axis_breaks(spec->log_x, S->x0, S->x1, spec->n_x_breaks,
+                                          spec->x_breaks, spec->n_x_break_labs,
+                                          spec->x_break_labs, spec->x_pct, 'x',
+                                          S->xbr, S->xlabs);
                 }
                 S->xnpc = cp_xmalloc((S->nxbr + 1) * sizeof(double));
                 for (int i = 0; i < S->nxbr; i++)
                     S->xnpc[i] = (S->xbr[i] - S->x0) / (S->x1 - S->x0);
-                S->xmin_br = cp_xmalloc(32 * sizeof(double));
+                S->xmin_br = cp_xmalloc((MAX_BREAKS + 1) * sizeof(double));
                 S->nxmin = disc_x ? 0
                          : spec->log_x ? log_minors(spec->log_x, S->x0, S->x1, S->xmin_br, 32)
                          : make_minors(S->xbr, S->nxbr, S->x0, S->x1, S->xmin_br);
@@ -1679,41 +1865,18 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                             S->ybr[S->ymap[l]] = S->ymap[l] + 1;
                             S->ylabs[S->ymap[l]] = cp_xstrdup(yf->levels[l]);
                         }
-                } else if (spec->log_y) {
-                    S->ybr = cp_xmalloc(16 * sizeof(double));
-                    S->ylabs = cp_xmalloc(16 * sizeof(char *));
-                    S->nybr = log_breaks(spec->log_y, S->y0, S->y1, S->ybr, S->ylabs, 16);
                 } else {
-                    /* as for x: breaks=/labels= apply per freed panel */
                     S->ybr = cp_xmalloc(MAX_BREAKS * sizeof(double));
                     S->ylabs = cp_xmalloc(MAX_BREAKS * sizeof(char *));
-                    int nb, keep[MAX_BREAKS];
-                    if (spec->n_y_breaks) {
-                        nb = spec->n_y_breaks;
-                        for (int i = 0; i < nb; i++)
-                            S->ybr[i] = cp_logt(spec->log_y, spec->y_breaks[i]);
-                    } else nb = extended_breaks(S->y0, S->y1, 5, S->ybr, 16);
-                    int k = 0;
-                    for (int i = 0; i < nb; i++)
-                        if (S->ybr[i] >= S->y0 && S->ybr[i] <= S->y1) {
-                            keep[k] = i; S->ybr[k++] = S->ybr[i];
-                        }
-                    S->nybr = k;
-                    int dec = axis_decimals(S->ybr, S->nybr), pdec = dec - 2 < 0 ? 0 : dec - 2;
-                    for (int i = 0; i < S->nybr; i++) {
-                        if (spec->n_y_break_labs) {
-                            S->ylabs[i] = cp_xstrdup(spec->y_break_labs[keep[i]]);
-                            continue;
-                        }
-                        S->ylabs[i] = cp_xmalloc(32);
-                        if (spec->y_pct) snprintf(S->ylabs[i], 32, "%.*f%%", pdec, S->ybr[i] * 100);
-                        else fmt_break(S->ybr[i], dec, S->ylabs[i], 32);
-                    }
+                    S->nybr = axis_breaks(spec->log_y, S->y0, S->y1, spec->n_y_breaks,
+                                          spec->y_breaks, spec->n_y_break_labs,
+                                          spec->y_break_labs, spec->y_pct, 'y',
+                                          S->ybr, S->ylabs);
                 }
                 S->ynpc = cp_xmalloc((S->nybr + 1) * sizeof(double));
                 for (int i = 0; i < S->nybr; i++)
                     S->ynpc[i] = (S->ybr[i] - S->y0) / (S->y1 - S->y0);
-                S->ymin_br = cp_xmalloc(32 * sizeof(double));
+                S->ymin_br = cp_xmalloc((MAX_BREAKS + 1) * sizeof(double));
                 S->nymin = disc_y ? 0
                          : spec->log_y ? log_minors(spec->log_y, S->y0, S->y1, S->ymin_br, 32)
                          : make_minors(S->ybr, S->nybr, S->y0, S->y1, S->ymin_br);
@@ -1730,9 +1893,15 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         }
     }
 
-    /* ---- geom_col bar width: 0.9 x min gap between distinct x ---- */
+    /* ---- geom_col bar width: 0.9 x min gap between distinct x. The same
+     * 0.9 x resolution is ggplot's default errorbar cap (width=), so a cap on
+     * x = 0.1, 0.2, 0.3 no longer runs from edge to edge; the resolution of a
+     * discrete axis is 1. ---- */
     double colw = 0.9;
-    if (hascol) {
+    int haseb = 0;
+    for (int li = 0; li < spec->nlayers; li++)
+        if (spec->layers[li].type == GEOM_ERRORBAR) haseb = 1;
+    if (hascol || haseb) {
         double *xs = cp_xmalloc(nuse * sizeof(double));
         int nx = 0;
         for (int r = 0; r < df->nrow; r++)
@@ -1980,6 +2149,33 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         free(present); free(tmp);
     }
 
+    /* ---- the panel size the auto-fit below will choose, worked out here
+     * because a legend that would not fit those panels has to fold BEFORE it
+     * is built. The auto-fit block ("auto-fit the canvas") reads these same
+     * values, so the two cannot disagree. ---- */
+    double catpitch = labh * 1.15;          /* readable pitch for one category */
+    int maxx = 0, maxy = 0;
+    for (int p = 0; p < npan; p++) {
+        if (ps[p].nxlev > maxx) maxx = ps[p].nxlev;
+        if (ps[p].nylev > maxy) maxy = ps[p].nylev;
+    }
+    /* coord_flip() turns the category axis vertical, so the x categories
+     * then drive the panel HEIGHT; sizing the width from them left 40 bars
+     * overprinting in a 4in-tall panel */
+    int hcats = flip ? maxy : maxx, vcats = flip ? maxx : maxy;
+    double auto_panelw = hcats ? hcats * catpitch : 4.0 * 72;
+    double auto_panelh = vcats ? vcats * catpitch : 2.6 * 72;
+    double auto_h_raw = MARGIN * 2 + labh + TICK_LEN + TXT_GAP + baseh
+                      + (spec->lab_title ? font_h(cr, SZ_TITLE) : 0)
+                      + nrowp * (auto_panelh + striph + band_h) + (nrowp - 1) * PANEL_SPACE;
+    double auto_h = fmin(30.0 * 72, fmax(4.0 * 72, auto_h_raw));   /* the clamped canvas */
+    /* the rows the legend column does not span (it sits from the first strip
+     * to the last panel): title block, last band, axis rows and margins */
+    double leg_chrome_h = MARGIN + (spec->lab_title ? font_h(cr, SZ_TITLE) : 0)
+                        + (spec->lab_subtitle ? baseh : spec->lab_title ? HALF_LINE : 0)
+                        + band_h + TICK_LEN + TXT_GAP + labh + HALF_LINE / 2 + baseh
+                        + (spec->lab_caption ? fmax(MARGIN, labh) : MARGIN);
+
     Col *pal = NULL;
     GTable *leg = NULL;
     const char *col_title = spec->lab_colour ? spec->lab_colour : spec->colour.expr;
@@ -2077,25 +2273,47 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 const char *bt = spec->lab_colour ? spec->lab_colour
                                : ff->levels[p];
                 GTable *lg = build_legend(cr, th, bt, &pf, pc2,
-                                   haspoint, hasline || hasseg || hasdens,
+                                   haspoint, hasline || hasseg || hasdens || hasrange,
                                    hasbox || hasbar || hascol || hasrect || hastile,
-                                   hastext, NULL, nc2);
-                if (nrowp == 1) fc_leg[p] = lg;
+                                   hastext, NULL, nc2, spec->legend_reverse, err);
+                if (!lg) return -1;
+                /* inside the panels every block has its own panel to sit
+                 * in whatever the grid shape; only the margin placement
+                 * needs the single row */
+                if (nrowp == 1 || spec->legend_inside) fc_leg[p] = lg;
                 else guides[nguide++] = lg;
             }
         } else if (!spec->no_legend && !spec->identity_scale) {
             int nc2 = spec->legend_ncol ? spec->legend_ncol
                     : spec->legend_nrow
                     ? (cf->nlev + spec->legend_nrow - 1) / spec->legend_nrow : 1;
-            guides[nguide++] = build_legend(cr, th, col_title, cf, pal, haspoint,
-                               hasline || hasseg || hasdens,
+            if (!spec->legend_ncol && !spec->legend_nrow && h_pt <= 0) {
+                /* auto-fit: a legend up to a quarter taller than the figure
+                 * stretches it (a few extra rows read better than a second
+                 * column); past that it folds into as many columns as the
+                 * natural panel height holds, as free_colour blocks do. A
+                 * 32-level stack used to grow the canvas to 9in and still
+                 * clip its title. */
+                double pitch = KEY_SIZE + 0.4 * HALF_LINE;
+                double thead = col_title && *col_title ? baseh + HALF_LINE : 0;
+                double stack_h = thead + cf->nlev * pitch - 0.4 * HALF_LINE;
+                if (stack_h + leg_chrome_h > 1.25 * auto_h) {
+                    int rows_fit = (int)((auto_h - leg_chrome_h - thead + 0.4 * HALF_LINE) / pitch);
+                    if (rows_fit < 1) rows_fit = 1;
+                    nc2 = (cf->nlev + rows_fit - 1) / rows_fit;
+                }
+            }
+            GTable *lg = build_legend(cr, th, col_title, cf, pal, haspoint,
+                               hasline || hasseg || hasdens || hasrange,
                                hasbox || hasbar || hascol || hasrect || hastile,
-                               hastext, NULL, nc2);   /* bars/tiles key as filled boxes */
+                               hastext, NULL, nc2, spec->legend_reverse, err);
+            if (!lg) return -1;
+            guides[nguide++] = lg;
         }
     } else if (cont_col && !spec->no_legend) {
         guides[nguide++] = build_colorbar_legend(cr, th, col_title, &cscale, cdmin, cdmax);
     }
-    if (szc && !spec->no_legend) {               /* size legend: representative breaks */
+    if (szc && !spec->no_legend_size) {          /* size legend: representative breaks */
         double sbr[16]; int nsb = extended_breaks(szmin, szmax, 5, sbr, 16), nf = 0;
         for (int i = 0; i < nsb; i++) if (sbr[i] >= szmin && sbr[i] <= szmax) sbr[nf++] = sbr[i];
         if (nf == 0) { sbr[0] = szmin; sbr[1] = szmax; nf = szmax > szmin ? 2 : 1; }
@@ -2105,27 +2323,33 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         const char *sz_title = spec->size.expr;
         guides[nguide++] = build_size_legend(cr, th, sz_title, sbr, srad, nf, sdec);
     }
-    if (shf && !spec->no_legend) {
+    if (shf && !spec->no_legend_shape) {
         /* A shape legend keys the GLYPH, so its swatches are all one colour --
          * otherwise the reader reads a colour that means nothing. */
         Col *spal = cp_xmalloc(shf->nlev * sizeof(Col));
         int *sidx = cp_xmalloc(shf->nlev * sizeof(int));
         for (int i = 0; i < shf->nlev; i++) { spal[i] = C_BLACK; sidx[i] = i; }
         const char *sh_title = spec->shape.expr;
-        guides[nguide++] = build_legend(cr, th, sh_title, shf, spal, 1, 0, 0, 0, sidx, 1);
+        GTable *lg = build_legend(cr, th, sh_title, shf, spal, 1, 0, 0, 0, sidx, 1, 0, err);
+        if (!lg) return -1;
+        guides[nguide++] = lg;
     }
     for (int a = 0; a < nann; a++)               /* annotation band keys */
-        if (!spec->no_legend)
-            guides[nguide++] = build_legend(cr, th, anns[a].title, anns[a].f,
-                                            anns[a].apal, 0, 0, 1, 0, NULL, 1);
+        if (!spec->no_legend) {
+            GTable *lg = build_legend(cr, th, anns[a].title, anns[a].f,
+                                      anns[a].apal, 0, 0, 1, 0, NULL, 1, 0, err);
+            if (!lg) return -1;
+            guides[nguide++] = lg;
+        }
     if (nguide) leg = stack_guides(guides, nguide);
     GTable *inside_leg = NULL;
     if (spec->legend_inside && leg) {
         if (npan > 1) {
             snprintf(err, CP_ERRLEN, "theme(legend.position=\"inside\") with "
                      "facets needs scales=\"free_colour\" (each block goes "
-                     "inside its own panel); a single shared legend has no "
-                     "one panel to sit in");
+                     "inside its own panel); a single shared %s legend has no "
+                     "one panel to sit in", spec->free_colour ? "size/shape"
+                     : "");
             return -1;
         }
         inside_leg = leg;
@@ -2189,14 +2413,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
      * grow, but never shrink below the old default, and never touch a size the
      * caller asked for. */
     {
-        double catpitch = labh * 1.15;          /* readable pitch for one category */
-        int maxx = 0, maxy = 0;
-        for (int p = 0; p < npan; p++) {
-            if (ps[p].nxlev > maxx) maxx = ps[p].nxlev;
-            if (ps[p].nylev > maxy) maxy = ps[p].nylev;
-        }
         if (w_pt <= 0) {
-            double panelw = disc_x && maxx ? maxx * catpitch : 4.0 * 72;
+            double panelw = auto_panelw;
             /* a per-panel legend block wider than its panel widens the
              * column — the block is pinned under the panel and cannot
              * borrow a neighbour's space */
@@ -2207,14 +2425,12 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             w_pt = fmin(30.0 * 72, fmax(6.0 * 72, w_pt));
         }
         if (h_pt <= 0) {
-            double panelh = disc_y && maxy ? maxy * catpitch : 2.6 * 72;
-            double chrome = MARGIN * 2 + labh + TICK_LEN + TXT_GAP + baseh
-                          + (spec->lab_title ? font_h(cr, SZ_TITLE) : 0);
-            h_pt = chrome + nrowp * (panelh + striph + band_h)
-                 + (nrowp - 1) * PANEL_SPACE;
+            h_pt = auto_h_raw;
             /* a tall legend stack (many discrete levels) sizes the canvas
-             * too — it used to overflow the top and clip its first entries */
-            if (leg) h_pt = fmax(h_pt, gt_fixed_h(leg) + 4 * MARGIN);
+             * too: its column spans strips and panels only, so it needs its
+             * own height plus every row outside that span -- allowing just
+             * the margins left the title clipped off the top */
+            if (leg) h_pt = fmax(h_pt, gt_fixed_h(leg) + leg_chrome_h);
             h_pt += fc_leg_h;        /* per-panel legend row (free_colour) */
             h_pt = fmin(30.0 * 72, fmax(4.0 * 72, h_pt));
         }
@@ -2230,11 +2446,14 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     ff && fc_leg_wp >= 0 ? ff->levels[fc_leg_wp] : "widest",
                     fc_leg_w / 72, colw2 / 72);
     }
-    if (leg && gt_fixed_h(leg) > h_pt)
+    /* the legend's cell is the figure less the rows above and below it;
+     * a couple of half-lines of overhang into the margins is tolerated */
+    if (leg && gt_fixed_h(leg) > h_pt - leg_chrome_h + 2 * HALF_LINE)
         fprintf(stderr, "cinderplot: warning: the legend stack needs %.1fin of "
-                "a %.1fin figure and will clip; give a taller --size, drop it "
-                "with guides(colour=\"none\"), or reduce the levels\n",
-                gt_fixed_h(leg) / 72, h_pt / 72);
+                "a %.1fin figure and will clip; give a taller --size, fold it "
+                "with guide_legend(ncol=), drop it with guides(colour=\"none\"), "
+                "or reduce the levels\n",
+                (gt_fixed_h(leg) + leg_chrome_h) / 72, h_pt / 72);
 
     if (autosize) {          /* size settled: open the real surface */
         cairo_destroy(cr); cairo_surface_destroy(msurf);
@@ -2291,6 +2510,28 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         }
         double rad = bang * M_PI / 180.0;
         blab_h = wmax * sin(rad) + labh * cos(rad);
+    }
+    /* Cheap clipping warnings (no wrapping is attempted): a long title runs
+     * off the canvas edge, and leaned-over category labels can eat the panel
+     * they label. Both render silently otherwise. */
+    if (blab_h > 0.25 * h_pt)
+        fprintf(stderr, "cinderplot: warning: the rotated %s tick labels take "
+                "%.0f%% of the figure height; consider coord_flip(), shorter "
+                "labels, or a taller --size\n", flip ? "y" : "x",
+                100 * blab_h / h_pt);
+    {
+        const char *wide[3] = { spec->lab_title, spec->lab_subtitle, bottom_title };
+        const double wsz[3] = { SZ_TITLE, SZ_BASE, SZ_BASE };
+        for (int i = 0; i < 3; i++)
+            if (wide[i] && text_w(cr, wsz[i], wide[i]) > w_pt - 2 * MARGIN)
+                fprintf(stderr, "cinderplot: warning: the %s \"%s\" is wider than "
+                        "the %.1fin canvas and will be clipped; shorten it or give "
+                        "a wider --size\n", i == 0 ? "title" : i == 1 ? "subtitle"
+                        : "x axis title", wide[i], w_pt / 72);
+        if (left_title && text_w(cr, SZ_BASE, left_title) > h_pt - 2 * MARGIN)
+            fprintf(stderr, "cinderplot: warning: the y axis title \"%s\" is taller "
+                    "than the %.1fin canvas and will be clipped; shorten it or give "
+                    "a taller --size\n", left_title, h_pt / 72);
     }
 
     int bfree_l = flip ? spec->free_y : spec->free_x;
@@ -2546,20 +2787,25 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             if (gt == GEOM_HISTOGRAM) {
                 Hist *hs = &hist[li];
                 double base = spec->log_y ? 0.0 : NPCY(0.0);
-                for (int b = 0; b < hs->nbins; b++) {
+                for (int b = 0; b < hs->nb[p]; b++) {
                     int cnt = hs->counts[p * hs->nbins + b];
                     if (!cnt) continue;
                     g = gt_add(T, G_RECT, R, C, R, C);
-                    g->col = panelfill && panelfill[p] >= 0 ? pal[panelfill[p]]
-                           : spec->layers[li].has_color ? spec->layers[li].color
+                    g->col = spec->layers[li].has_color ? spec->layers[li].color
+                           : panelfill && panelfill[p] >= 0 ? pal[panelfill[p]]
                            : C_BAR;
                     g->sub = 1; g->clip = 1;
-                    g->x0 = NPCX(hs->start + b * hs->width);
-                    g->x1 = NPCX(hs->start + (b + 1) * hs->width);
+                    g->x0 = NPCX(hs->start[p] + b * hs->width[p]);
+                    g->x1 = NPCX(hs->start[p] + (b + 1) * hs->width[p]);
                     g->y0 = base;
                     g->y1 = NPCY(cp_logt(spec->log_y, (double)cnt));
                 }
             } else if (gt == GEOM_DENSITY) {
+                if (cont_col && !spec->layers[li].has_color) {   /* as geom_line */
+                    snprintf(err, CP_ERRLEN, "continuous colour= on geom_density() "
+                             "is not implemented; use factor()");
+                    return -1;
+                }
                 int di = li2di[li];
                 for (int gg = 0; gg < densg; gg++) {
                     size_t bse = ((size_t)((di * npan + p) * densg + gg)) * DENS_N;
@@ -2602,7 +2848,11 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 double base = spec->log_y ? 0.0 : NPCY(0.0);
                 for (int r = 0; r < df->nrow; r++) {
                     if (!use[r] || (ff && ff->idx[r] != p)) continue;
-                    double tx = TXR(r), ty = TY(yc->num[r]);
+                    /* rows sharing an x stack: this one starts where the
+                     * earlier rows of its bar ended (coloff, 0 for a unique x) */
+                    double tx = TXR(r), off = coloff ? coloff[r] : 0;
+                    double ya = off == 0 ? base : NPCY(TY(off));
+                    double yb = NPCY(TY(off + yc->num[r]));
                     g = gt_add(T, G_RECT, R, C, R, C);
                     g->col = spec->layers[li].has_color ? spec->layers[li].color
                            : cont_col ? CCOL(r)
@@ -2610,7 +2860,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                            : C_BAR;
                     g->sub = 1; g->clip = 1;
                     g->x0 = NPCX(tx - colw / 2); g->x1 = NPCX(tx + colw / 2);
-                    g->y0 = fmin(base, NPCY(ty)); g->y1 = fmax(base, NPCY(ty));
+                    g->y0 = fmin(ya, yb); g->y1 = fmax(ya, yb);
                 }
             } else if (gt == GEOM_BAR) {
                 /* stat_count bars, width 0.9, stacked by colour group with
@@ -2806,6 +3056,14 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     free(sx); free(sy); free(pts);
                 }
             } else if (gt == GEOM_LINE) {
+                /* A continuous colour has no group to draw one line per, and
+                 * a black line beside a colourbar claims a mapping it does
+                 * not have; a layer colour= overrides the mapping and is fine. */
+                if (cont_col && !spec->layers[li].has_color) {
+                    snprintf(err, CP_ERRLEN, "continuous colour= on geom_line() "
+                             "is not implemented; use factor()");
+                    return -1;
+                }
                 int ngrp = cf ? cf->nlev : 1;
                 for (int grp = 0; grp < ngrp; grp++) {
                     int np = 0;
@@ -2832,6 +3090,39 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                            : cf ? pal[grp] : C_BLACK;
                     g->lw = lw_pt(0.5); g->clip = 1;
                 }
+            } else if (gt == GEOM_ERRORBAR || gt == GEOM_LINERANGE) {
+                /* a vertical range per row, ymin..ymax at x; errorbar adds
+                 * flat caps of width= (x-axis units in transformed space,
+                 * as ggplot applies it), default 0.9 x the x resolution.
+                 * The bars follow a colour= mapping but not a fill= one
+                 * (ggplot draws those black): painted in the fill palette
+                 * the half of each whisker inside its bar disappears. */
+                double wda = spec->layers[li].eb_width > 0
+                           ? spec->layers[li].eb_width : colw;
+                int mapped = spec->colour.col && !spec->colour.is_fill;
+                for (int r = 0; r < df->nrow; r++) {
+                    if (!use[r] || (ff && ff->idx[r] != p)) continue;
+                    if (isnan(yminc->num[r]) || isnan(yec->num[r])) continue;
+                    double tx = TXR(r);
+                    double ylo = NPCY(TY(yminc->num[r]));
+                    double yhi = NPCY(TY(yec->num[r]));
+                    Col ec = spec->layers[li].has_color ? spec->layers[li].color
+                           : !mapped ? C_BLACK
+                           : cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BLACK;
+                    g = gt_add(T, G_LINE, R, C, R, C);
+                    g->col = ec; g->lw = lw_pt(0.5); g->clip = 1;
+                    g->x0 = g->x1 = NPCX(tx);
+                    g->y0 = ylo; g->y1 = yhi;
+                    if (gt == GEOM_ERRORBAR) {
+                        for (int e2 = 0; e2 < 2; e2++) {
+                            g = gt_add(T, G_LINE, R, C, R, C);
+                            g->col = ec; g->lw = lw_pt(0.5); g->clip = 1;
+                            g->x0 = NPCX(tx - wda / 2);
+                            g->x1 = NPCX(tx + wda / 2);
+                            g->y0 = g->y1 = e2 ? yhi : ylo;
+                        }
+                    }
+                }
             } else if (gt == GEOM_SEGMENT && spec->layers[li].data) {
                 /* per-layer data (e.g. CBS segments): its own file, genome-
                  * offset horizontal lines from start..end at y */
@@ -2843,6 +3134,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 const Column *c_x = df_col(d2, spec->x.col);
                 const Column *c_xe = spec->xend.col ? df_col(d2, spec->xend.col) : NULL;
                 const Column *c_y = df_col(d2, L->ycol ? L->ycol : spec->y.col);
+                const Column *c_ye2 = spec->yend.col ? df_col(d2, spec->yend.col) : NULL;
+                if (c_ye2 && c_ye2->type != COL_NUM) c_ye2 = NULL;
                 if (!c_x || !c_y || (genome_x && !c_chr)) {
                     snprintf(err, CP_ERRLEN, "geom_segment(data=%s): missing chrom/x/y column", L->data);
                     return -1;
@@ -2854,23 +3147,45 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     if (isnan(c_x->num[r2]) || isnan(c_y->num[r2])) continue;
                     g = gt_add(T, G_LINE, R, C, R, C);
                     g->col = lcol; g->lw = lw_pt(0.6); g->clip = 1;
-                    g->x0 = NPCX(off + c_x->num[r2]);
-                    g->x1 = NPCX(off + (c_xe ? c_xe->num[r2] : c_x->num[r2]));
-                    g->y0 = g->y1 = NPCY(TY(c_y->num[r2]));
+                    /* through the log transform like geom_rect(data=); a
+                     * 10..100 segment used to land off a log10 panel */
+                    g->x0 = NPCX(genome_x ? off + c_x->num[r2]
+                                 : cp_logt(spec->log_x, c_x->num[r2]));
+                    g->x1 = NPCX(genome_x ? off + (c_xe ? c_xe->num[r2] : c_x->num[r2])
+                                 : cp_logt(spec->log_x, c_xe ? c_xe->num[r2] : c_x->num[r2]));
+                    g->y0 = NPCY(TY(c_y->num[r2]));
+                    /* with yend resolvable in the file the segment is
+                     * vertical/diagonal; the horizontal CBS default stays */
+                    g->y1 = c_ye2 && !isnan(c_ye2->num[r2])
+                          ? NPCY(TY(c_ye2->num[r2])) : g->y0;
                 }
             } else if (gt == GEOM_SEGMENT) {
-                /* one line per row: (x,y) -> (xend, yend); yend defaults to y */
+                /* one line per row: (x,y) -> (xend, yend); yend defaults to
+                 * y. A layer y= names a different START column — it used to
+                 * parse and silently do nothing without data= */
+                const Column *syc = yc;
+                if (spec->layers[li].ycol) {
+                    syc = df_col(df, spec->layers[li].ycol);
+                    if (!syc || syc->type != COL_NUM) {
+                        snprintf(err, CP_ERRLEN, "geom_segment(y=%s): %s",
+                                 spec->layers[li].ycol,
+                                 syc ? "must be numeric" : "column not found");
+                        return -1;
+                    }
+                }
                 for (int r = 0; r < df->nrow; r++) {
                     if (!use[r] || (ff && ff->idx[r] != p)) continue;
                     if (xec && isnan(xec->num[r])) continue;
+                    if (isnan(syc->num[r])) continue;
                     g = gt_add(T, G_LINE, R, C, R, C);
-                    g->col = cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BLACK;
+                    g->col = spec->layers[li].has_color ? spec->layers[li].color
+                           : cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BLACK;
                     g->lw = lw_pt(0.5); g->clip = 1;
                     g->x0 = NPCX(TXR(r));
                     g->x1 = NPCX(xec ? (genome_x ? GX(r, xec->num[r])
                                       : cp_logt(spec->log_x, xec->num[r]))
                                      : TXR(r));
-                    g->y0 = NPCY(TY(yc->num[r]));
+                    g->y0 = NPCY(TY(syc->num[r]));
                     g->y1 = NPCY(yec ? TY(yec->num[r]) : TY(yc->num[r]));
                 }
             } else if (gt == GEOM_TILE) {
@@ -2994,7 +3309,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     }
                 }
             } else if (gt == GEOM_RECT) {
-                /* filled rectangle per row: (xmin,ymin) .. (xmax,ymax) */
+                /* filled rectangle per row: (xmin,ymin) .. (xmax,ymax); a
+                 * layer fill= overrides a mapped one, as geom_point's does */
                 Col fixed = spec->layers[li].has_color ? spec->layers[li].color : C_BAR;
                 for (int r = 0; r < df->nrow; r++) {
                     if (!use[r] || (ff && ff->idx[r] != p)) continue;
@@ -3004,7 +3320,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                                   : cp_logt(spec->log_x, xec->num[r]));
                     double c0 = NPCY(TY(yc->num[r])), d = NPCY(TY(yec->num[r]));
                     g = gt_add(T, G_RECT, R, C, R, C);
-                    g->col = cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : fixed;
+                    g->col = spec->layers[li].has_color ? fixed
+                           : cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : fixed;
                     g->sub = 1; g->clip = 1;
                     g->x0 = fmin(a, b); g->x1 = fmax(a, b);
                     g->y0 = fmin(c0, d); g->y1 = fmax(c0, d);
@@ -3012,11 +3329,32 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             } else if (gt == GEOM_BOXPLOT) {
                 /* five-number summary + Tukey whiskers + outliers, in
                  * transformed-y space; position_dodge2 when box_dodge */
+                if (cont_col && !spec->layers[li].has_color) {   /* as geom_line */
+                    snprintf(err, CP_ERRLEN, "continuous colour= on geom_boxplot() "
+                             "is not implemented; use factor()");
+                    return -1;
+                }
                 const double WFULL = 0.75;               /* undodged box width */
-                double slotw = WFULL / box_slots;
-                double boxw = box_slots > 1 ? slotw * 0.9 : WFULL;  /* padding 0.1 */
+                int *present = cp_xmalloc(box_slots * sizeof(int));
                 for (int cat = 0; cat < xf->nlev; cat++) {
+                    int slot = xmap ? xmap[cat] : cat;   /* freed x renumbers */
+                    if (slot < 0) continue;
+                    /* dodge2 with preserve="total": the groups this category
+                     * actually holds share its full width, so a category
+                     * with fewer groups is not squeezed off-centre into the
+                     * slots of the absent ones */
+                    int ns = 0;
                     for (int s = 0; s < box_slots; s++) {
+                        int any = 0;
+                        for (int r = 0; r < df->nrow && !any; r++)
+                            if (use[r] && (!ff || ff->idx[r] == p) && xf->idx[r] == cat
+                                && (box_slots == 1 || cf->idx[r] == s)) any = 1;
+                        if (any) present[ns++] = s;
+                    }
+                    double slotw = WFULL / (ns ? ns : 1);
+                    double boxw = box_slots > 1 ? slotw * 0.9 : WFULL;  /* padding 0.1 */
+                    for (int si = 0; si < ns; si++) {
+                        int s = present[si];
                         int ny = 0, anyg = -1;
                         for (int r = 0; r < df->nrow; r++)
                             if (use[r] && (!ff || ff->idx[r] == p) && xf->idx[r] == cat
@@ -3032,7 +3370,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                             }
                         qsort(ys, ny, sizeof(double), cmp_double);
                         BoxStat b; box_stats(ys, ny, &b);
-                        double center = (cat + 1) - WFULL / 2 + slotw * (s + 0.5);
+                        double center = (slot + 1) - WFULL / 2 + slotw * (si + 0.5);
                         double xl = NPCX(center - boxw / 2), xr = NPCX(center + boxw / 2);
                         double xm = NPCX(center);
                         /* aes(fill=) colours the box BODY and keeps ggplot's
@@ -3040,11 +3378,18 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                          * aes(colour=) colours the chrome over a white body.
                          * One shared aes carries both spellings, so the
                          * recorded spelling decides — writing fill= used to
-                         * silently render the colour= look. */
+                         * silently render the colour= look. A layer constant
+                         * follows the same rule by its own spelling, and
+                         * overrides the mapping on its side only. */
+                        const Layer *BL = &spec->layers[li];
                         Col grpc = cf ? pal[box_slots > 1 ? s : anyg] : C_TICK;
                         int fillbox = cf && spec->colour.is_fill;
                         Col lc = fillbox ? C_TICK : grpc;
                         Col body = fillbox ? grpc : C_WHITE;
+                        if (BL->has_color) {
+                            if (BL->color_is_fill) body = BL->color;
+                            else lc = BL->color;
+                        }
 
                         for (int w = 0; w < 2; w++) {    /* whiskers */
                             g = gt_add(T, G_LINE, R, C, R, C);
@@ -3081,6 +3426,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         free(ys);
                     }
                 }
+                free(present);
             } else if (gt == GEOM_HLINE) {
                 const Layer *L = &spec->layers[li];
                 /* a reference value <= 0 has no place on a log axis; ggplot
@@ -3104,10 +3450,11 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 }
             } else if (gt == GEOM_ABLINE) {
                 const Layer *L = &spec->layers[li];
-                double xl = spec->log_x ? pow(10, x0) : x0;   /* data-space edges */
-                double xr = spec->log_x ? pow(10, x1) : x1;
-                double yl = NPCY(TY(L->intercept + L->slope * xl));
-                double yr = NPCY(TY(L->intercept + L->slope * xr));
+                /* in TRANSFORMED space, as ggplot draws it: straight on the
+                 * page, base-agnostic, and finite at both panel edges (see
+                 * train_ref_lines) */
+                double yl = NPCY(L->intercept + L->slope * x0);
+                double yr = NPCY(L->intercept + L->slope * x1);
                 if (isfinite(yl) && isfinite(yr)) {
                     g = gt_add(T, G_LINE, R, C, R, C);
                     g->col = L->has_color ? L->color : C_BLACK;
@@ -3120,10 +3467,15 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 double fs = (L->txt_size > 0 ? L->txt_size : 3.88) * 2.845276; /* mm -> pt */
                 double ndx = x1 > x0 ? L->nudge_x / (x1 - x0) : 0;   /* data -> npc */
                 double ndy = y1 > y0 ? L->nudge_y / (y1 - y0) : 0;
+                /* y goes through the same discrete mapping the tile and
+                 * point layers use: with a string y there is no num[] to
+                 * read at all, and with factor(y) the label belongs at the
+                 * factor slot, not the raw value. */
+#define TYR(r) (disc_y ? YVAL(r) : TY(yc->num[r]))
                 int cap = 0;
                 for (int r = 0; r < df->nrow; r++)
                     if (use[r] && (!ff || ff->idx[r] == p)
-                        && !isnan(TXR(r)) && !isnan(yc->num[r])) cap++;
+                        && !isnan(TXR(r)) && !isnan(TYR(r))) cap++;
                 if (cap > 0) {
                     RLabel *rl = cp_xmalloc(cap * sizeof(RLabel));
                     const char **strs = cp_xmalloc(cap * sizeof(char *));
@@ -3133,7 +3485,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     int m = 0;
                     for (int r = 0; r < df->nrow; r++) {
                         if (!use[r] || (ff && ff->idx[r] != p)) continue;
-                        if (isnan(TXR(r)) || isnan(yc->num[r])) continue;
+                        if (isnan(TXR(r)) || isnan(TYR(r))) continue;
                         const char *s;
                         if (labc->type == COL_STR) s = labc->str[r];
                         else if (isnan(labc->num[r])) continue;   /* NA: no label */
@@ -3144,7 +3496,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                          * otherwise a volcano labelling its top 8 of 230 hits gets
                          * ~220 leader lines radiating to empty strings. */
                         if (!s || !*s || !strcmp(s, "NA")) continue;
-                        double axp = NPCX(TXR(r)) * panelw_pt, ayp = NPCY(TY(yc->num[r])) * panelh_pt;
+                        double axp = NPCX(TXR(r)) * panelw_pt, ayp = NPCY(TYR(r)) * panelh_pt;
                         px[m] = axp; py[m] = ayp;
                         rl[m].hw = text_w(cr, fs, s) / 2 + bpad;
                         rl[m].hh = font_h(cr, fs) / 2 + bpad;
@@ -3155,7 +3507,11 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                             rl[m].cy = rl[m].ay + rad * sin(th);
                         } else { rl[m].cx = rl[m].ax; rl[m].cy = rl[m].ay; }
                         strs[m] = s;
+                        /* text takes the colour= mapping, never fill=: a
+                         * fill-mapped label on its own tile is invisible
+                         * (same colour as the tile). ggplot2 draws it black. */
                         cols[m] = L->has_color ? L->color
+                                : spec->colour.is_fill ? C_BLACK
                                 : cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BLACK;
                         m++;
                     }
@@ -3188,6 +3544,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     }
                     free(rl); free(strs); free(cols); free(px); free(py);
                 }
+#undef TYR
             }
 
             /* Stamp this layer's alpha= / linetype= onto every grob it just
@@ -3222,27 +3579,11 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             }
         }
 
-        /* coord_flip: transpose every panel-content grob (x <-> y npc). The
-         * gridlines therefore align with the re-pointed left/bottom axes. */
-        if (flip)
-            for (int gi = gstart; gi < T->ngrobs; gi++) flip_grob(&T->grobs[gi]);
-
-        /* Left axis. Shared scales label the left column only, because every
-         * panel in a row carries the same one; a freed axis differs per panel,
-         * so each gets its own, drawn in the spacer to its left. */
-        int lfree = flip ? spec->free_x : spec->free_y;
-        if (!spec->polar && (pc == 0 || lfree)) {
-            g = gt_add(T, G_AXIS_Y, R, pc == 0 ? 3 : PC(pc) - 1, R, pc == 0 ? 3 : PC(pc) - 1);
-            g->n = flip ? S->nxbr : S->nybr;
-            g->py = flip ? S->xnpc : S->ynpc;
-            g->labels = flip ? S->xlabs : S->ylabs;
-            g->axis_styled = 1; g->tick_col = th->tick; g->hide_ticks = !th->tick_on;
-            g->text_col = th->axis_text; g->hide_text = !th->axis_text_on;
-        }
         /* annotate(): one-off marks at literal data coords, drawn over the
          * geoms in every panel. Coordinates go through the panel's own
          * scales, and the coord_flip transpose below catches these grobs
-         * like any other panel content. */
+         * like any other panel content -- they must therefore be emitted
+         * BEFORE it; they used to follow it and stayed unflipped. */
         for (int a2 = 0; a2 < spec->nannos; a2++) {
             const Annotate *an = &spec->annos[a2];
             double ax = NPCX(genome_x ? an->x : cp_logt(spec->log_x, an->x));
@@ -3278,6 +3619,23 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             }
         }
 
+        /* coord_flip: transpose every panel-content grob (x <-> y npc). The
+         * gridlines therefore align with the re-pointed left/bottom axes. */
+        if (flip)
+            for (int gi = gstart; gi < T->ngrobs; gi++) flip_grob(&T->grobs[gi]);
+
+        /* Left axis. Shared scales label the left column only, because every
+         * panel in a row carries the same one; a freed axis differs per panel,
+         * so each gets its own, drawn in the spacer to its left. */
+        int lfree = flip ? spec->free_x : spec->free_y;
+        if (!spec->polar && (pc == 0 || lfree)) {
+            g = gt_add(T, G_AXIS_Y, R, pc == 0 ? 3 : PC(pc) - 1, R, pc == 0 ? 3 : PC(pc) - 1);
+            g->n = flip ? S->nxbr : S->nybr;
+            g->py = flip ? S->xnpc : S->ynpc;
+            g->labels = flip ? S->xlabs : S->ylabs;
+            g->axis_styled = 1; g->tick_col = th->tick; g->hide_ticks = !th->tick_on;
+            g->text_col = th->axis_text; g->hide_text = !th->axis_text_on;
+        }
         /* annotation() bands under this panel: one strip per call, stacked
          * top-to-bottom, each cell a category-wide chip (bar width 0.9, so
          * chips align under stacked geom_col bars). x positions go through

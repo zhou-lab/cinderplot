@@ -80,14 +80,23 @@ enum { DEND_LEFT, DEND_RIGHT, DEND_TOP, DEND_BENEATH };
 static HClust *cluster_dim(const Matrix *m, int dim, int **ord, char *err) {
     int n = dim == 0 ? m->nr : m->nc;
     int p = dim == 0 ? m->nc : m->nr;
+    const char *what = dim == 0 ? "rows" : "columns";
+    /* say which axis failed: under cluster=both a 1-row matrix otherwise
+     * reports "need at least 2 observations" with no way to tell which */
+    if (n < 2) {
+        snprintf(err, CP_ERRLEN, "clustering %s: need at least 2 %s, the matrix has %d",
+                 what, what, n);
+        return NULL;
+    }
     double *obs = cp_xmalloc((size_t)n * p * sizeof(double));
     for (int i = 0; i < n; i++)
         for (int k = 0; k < p; k++)
             obs[(size_t)i * p + k] = dim == 0 ? m->v[(size_t)i * m->nc + k]
                                               : m->v[(size_t)k * m->nc + i];
-    HClust *h = hclust_ward(obs, n, p, err);
+    char cerr[CP_ERRLEN];
+    HClust *h = hclust_ward(obs, n, p, cerr);
     free(obs);
-    if (!h) return NULL;
+    if (!h) { snprintf(err, CP_ERRLEN, "clustering %s: %.*s", what, CP_ERRLEN - 32, cerr); return NULL; }
     *ord = cp_xmalloc(n * sizeof(int));
     memcpy(*ord, h->order, n * sizeof(int));
     return h;
@@ -156,6 +165,13 @@ static Matrix *matrix_from_df(const DataFrame *df, char *err) {
     return m;
 }
 
+/* labels=: a count prints in full (a confusion matrix's 1234 read 1.23e+03
+ * under %.3g), anything else to three significant digits; -0 is 0 */
+static void cell_label(double v, char *buf, size_t cap) {
+    if (fabs(v - round(v)) <= 1e-9 * fabs(v)) fmt_num(v, buf, cap);
+    else snprintf(buf, cap, "%.3g", v);
+}
+
 static double text_w(cairo_t *cr, double size, const char *s) {
     cairo_text_extents_t e;
     cairo_set_font_size(cr, size);
@@ -173,6 +189,17 @@ static const char *legend_title(const PlotSpec *spec, const RObj *lg, const RObj
     if (lg->o->title) return lg->o->title;
     if (src->o->type == HM_ANNOTATION) return src->ann_name;
     return spec->lab_fill;
+}
+
+/* colourbar breaks: the extended breaks that fall within [lo, hi]. The
+ * fence is a hair wider than the range, because 3 * 0.1 is 0.30000000000000004
+ * and a bar for [0, 0.3] lost its top label to that ulp. */
+static int legend_breaks(double lo, double hi, double *br) {
+    int nb = extended_breaks(lo, hi, 5, br, 16), nf = 0;
+    double eps = 1e-9 * (hi - lo);
+    for (int k = 0; k < nb; k++)
+        if (br[k] >= lo - eps && br[k] <= hi + eps) br[nf++] = br[k];
+    return nf;
 }
 
 /* the scale a continuous legend draws: a numeric annotation uses its own
@@ -200,6 +227,31 @@ static int find_obj(RObj *ro, int n, const char *name) {
         if (ro[i].o->type == HM_ANNOTATION && ro[i].ann_name
             && !strcmp(ro[i].ann_name, name)) return i;
     return -1;
+}
+
+/* The heatmap an object ultimately sits against, through any chain of
+ * annotations or dendrograms (B right_of A, A right_of m); NULL if the chain
+ * never reaches one. Row/column order and the tree come from here, so a
+ * second annotation follows the clustering as the first one does. */
+static RObj *chain_heatmap(RObj *ro, RObj *a) {
+    while (a && a->o->type != HM_HEATMAP)
+        a = a->anchor >= 0 ? &ro[a->anchor] : NULL;
+    return a;
+}
+
+/* how a user would refer to this object in a placement: its name=, or for
+ * an annotation left with the parser's automatic h<N>, its column name */
+static const char *obj_ref(const RObj *ro, const RObj *r) {
+    char autoname[16];
+    snprintf(autoname, sizeof autoname, "h%d", (int)(r - ro) + 1);
+    if (r->o->type == HM_ANNOTATION && r->ann_name && !strcmp(r->o->name, autoname))
+        return r->ann_name;
+    return r->o->name;
+}
+
+static const char *place_word(PlaceKind k) {
+    return k == PL_TOP_OF ? "top_of" : k == PL_BENEATH ? "beneath"
+         : k == PL_RIGHT_OF ? "right_of" : "left_of";
 }
 
 /* map (leaf fraction lf in [0,1], depth fraction df in [0,1]) to canvas
@@ -336,17 +388,20 @@ static void draw_one_legend(GTable *T, const RObj *r, const RObj *tg,
             by0 = pk == PL_BENEATH ? 0 - LPTY(gapx) - hts - barT
                                    : 1 + LPTY(gapx) + hts;
         }
+        /* painted by VALUE through the same mapping the cells use, so a
+         * gradient2 bar (piecewise about its midpoint) puts white where the
+         * matrix does; ticks below stay linear in value */
         for (int k = 0; k < NSTEP; k++) {
+            double v = lo + (hi - lo) * (k + 0.5) / NSTEP;
             g = gt_add(T, G_RECT, RR, CCc, RR, CCc);
-            g->sub = 1; g->col = fill_map(fs, (k + 0.5) / NSTEP);
+            g->sub = 1; g->col = fill_map_value(fs, v, lo, hi);
             if (vert) { g->x0 = bx0; g->x1 = bx0 + barT;
                         g->y0 = by0 + barL * k / NSTEP; g->y1 = by0 + barL * (k + 1) / NSTEP; }
             else { g->y0 = by0; g->y1 = by0 + barT;
                    g->x0 = bx0 + barL * k / NSTEP; g->x1 = bx0 + barL * (k + 1) / NSTEP; }
         }
         double br[16];
-        int nb = extended_breaks(lo, hi, 5, br, 16), nf = 0;
-        for (int k = 0; k < nb; k++) if (br[k] >= lo && br[k] <= hi) br[nf++] = br[k];
+        int nf = legend_breaks(lo, hi, br);
         int dec = axis_decimals(br, nf);
         for (int k = 0; k < nf; k++) {
             double frac = hi > lo ? (br[k] - lo) / (hi - lo) : 0.5;
@@ -498,6 +553,14 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             if (!(ro[i].m = matrix_from_df(df, err))) return -1;
             ro[i].nr = ro[i].m->nr;
             ro[i].nc = ro[i].m->nc;
+            /* a label side on a matrix with nothing to label drew nothing and
+             * said nothing; cluster=diagonal errors on the same condition */
+            if (o->rownames && !ro[i].m->rn) {
+                snprintf(err, CP_ERRLEN, "rownames=%s: the matrix has no row names; "
+                         "give it a first text column, or drop rownames=",
+                         o->rownames == SIDE_LEFT ? "left" : "right");
+                return -1;
+            }
             ro[i].roword = identity(ro[i].nr);
             ro[i].coword = identity(ro[i].nc);
             if (o->cluster == CL_ROWS || o->cluster == CL_BOTH
@@ -527,11 +590,46 @@ int render_heatmap(const PlotSpec *spec, const char *out,
         if (pl->kind != PL_FULL) {
             if (pl->anchor) {
                 int ai = find_obj(ro, i, pl->anchor);
-                if (ai < 0) { snprintf(err, CP_ERRLEN, "unknown object `%s` in placement", pl->anchor); return -1; }
+                if (ai < 0) {
+                    /* the usual way here: legend(right_of("m")) on a heatmap
+                     * that was never given name="m" */
+                    int nh = 0, hk = -1;
+                    for (int k = 0; k < i; k++)
+                        if (ro[k].o->type == HM_HEATMAP) { nh++; hk = k; }
+                    if (nh == 1 && o->type == HM_LEGEND && !strcmp(ro[hk].o->name, "h1"))
+                        snprintf(err, CP_ERRLEN, "unknown object `%s` in placement: the "
+                                 "heatmap has no name= to anchor to; write "
+                                 "heatmap(name=\"%s\", ...) and %s(\"%s\") here",
+                                 pl->anchor, pl->anchor, place_word(pl->kind), pl->anchor);
+                    else if (nh == 1 && o->type == HM_LEGEND)
+                        snprintf(err, CP_ERRLEN, "unknown object `%s` in placement: the "
+                                 "heatmap is named `%s`; write %s(\"%s\")",
+                                 pl->anchor, ro[hk].o->name, place_word(pl->kind), ro[hk].o->name);
+                    else
+                        snprintf(err, CP_ERRLEN, "unknown object `%s` in placement; "
+                                 "name the object with name=\"%s\" first", pl->anchor, pl->anchor);
+                    return -1;
+                }
                 a = &ro[ai];
             } else if (i > 0) a = &ro[i - 1];
             else { snprintf(err, CP_ERRLEN, "first object cannot have a relative placement"); return -1; }
             ro[i].anchor = (int)(a - ro);
+            /* One object per slot. A second top_of("m") landed on the first
+             * and hid it, with both legends still drawn -- so a reader mapped
+             * colours to the wrong key. Legends are margin chrome and stack
+             * among themselves, so they are exempt. */
+            if (o->type != HM_LEGEND)
+                for (int k = 0; k < i; k++) {
+                    if (ro[k].o->type == HM_LEGEND || ro[k].anchor != ro[i].anchor
+                        || ro[k].o->place.kind != pl->kind) continue;
+                    snprintf(err, CP_ERRLEN, "slot %s(%s) already taken by the %s `%s`; "
+                             "anchor to %s(\"%s\") instead",
+                             place_word(pl->kind), obj_ref(ro, a),
+                             ro[k].o->type == HM_HEATMAP ? "heatmap"
+                             : ro[k].o->type == HM_ANNOTATION ? "annotation" : "dendrogram",
+                             obj_ref(ro, &ro[k]), place_word(pl->kind), obj_ref(ro, &ro[k]));
+                    return -1;
+                }
         }
 
         if (o->type == HM_ANNOTATION) {
@@ -567,10 +665,58 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                         o->data, df->nrow, a->o->name, need);
                 return -1;
             }
+            /* Align by KEY when the file carries one: a first text column
+             * that is not the colour column, against the heatmap's row (or
+             * column) names -- as grammar-mode annotation() keys on its first
+             * column. Every key matching reorders the values to the matrix;
+             * none matching keeps the positional reading (the file may simply
+             * list samples under other labels); a partial match is the one
+             * case that is surely a mistake, so it errors on the first miss. */
+            RObj *hm = chain_heatmap(ro, a);
+            const Column *key = df->ncol > 1 && df->cols[0].type == COL_STR
+                                && &df->cols[0] != col ? &df->cols[0] : NULL;
+            char **names = hm ? (ro[i].ann_horiz ? hm->m->cn : hm->m->rn) : NULL;
+            int nnames = hm ? (ro[i].ann_horiz ? hm->m->nc : hm->m->nr) : 0;
+            int *perm = NULL;                   /* file row for each matrix index */
+            if (key && names && nnames == need) {
+                perm = cp_xmalloc(need * sizeof(int));
+                int matched = 0;
+                for (int r = 0; r < need; r++) {
+                    perm[r] = -1;
+                    for (int q = 0; q < df->nrow; q++)
+                        if (!strcmp(key->str[q], names[r])) { perm[r] = q; matched++; break; }
+                }
+                if (matched == 0) { free(perm); perm = NULL; }
+                else if (matched < need) {
+                    const char *axis = ro[i].ann_horiz ? "column" : "row";
+                    for (int q = 0; q < df->nrow; q++) {
+                        int hit = 0;
+                        for (int r = 0; r < need && !hit; r++) hit = !strcmp(key->str[q], names[r]);
+                        if (!hit) {
+                            snprintf(err, CP_ERRLEN, "annotation `%s`: key `%s` is not a %s "
+                                     "name of heatmap `%s` (%d of %d keys match)",
+                                     o->data, key->str[q], axis, hm->o->name, matched, need);
+                            return -1;
+                        }
+                    }
+                    for (int r = 0; r < need; r++)      /* all keys known: one is repeated */
+                        if (perm[r] < 0) {
+                            snprintf(err, CP_ERRLEN, "annotation `%s`: no row for %s `%s` of "
+                                     "heatmap `%s` (a key is repeated)",
+                                     o->data, axis, names[r], hm->o->name);
+                            return -1;
+                        }
+                }
+            }
             ro[i].ann_col = cp_xmalloc(df->nrow * sizeof(Col));
             ro[i].ann_name = col->name;
             if (col->type == COL_STR) {
                 Factor *f = factor_make(df, col);
+                if (perm) {                     /* levels keep file order; rows follow the matrix */
+                    int *idx = cp_xmalloc(df->nrow * sizeof(int));
+                    for (int r = 0; r < df->nrow; r++) idx[r] = f->idx[perm[r]];
+                    free(f->idx); f->idx = idx;
+                }
                 Col *pal = cp_xmalloc(f->nlev * sizeof(Col));
                 hue_palette(f->nlev, pal);
                 for (int r = 0; r < df->nrow; r++)
@@ -589,9 +735,10 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                 }
                 FillScale vir = {0};
                 vir.kind = FILL_VIRIDIS;
-                for (int r = 0; r < df->nrow; r++)
-                    ro[i].ann_col[r] = isnan(col->num[r]) ? C_NA
-                                     : fill_map_value(&vir, col->num[r], lo, hi);
+                for (int r = 0; r < df->nrow; r++) {
+                    double v = col->num[perm ? perm[r] : r];
+                    ro[i].ann_col[r] = isnan(v) ? C_NA : fill_map_value(&vir, v, lo, hi);
+                }
                 ro[i].ann_continuous = 1;           /* own colorbar scale */
                 ro[i].ann_dmin = lo; ro[i].ann_dmax = hi; ro[i].ann_fill = vir;
             }
@@ -601,22 +748,40 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             }
             ro[i].nr = ro[i].ann_horiz ? 1 : ro[i].ann_n;
             ro[i].nc = ro[i].ann_horiz ? ro[i].ann_n : 1;
-            /* inherit the anchor heatmap's ordering (col order if the
-             * annotation runs horizontally, row order if vertically) */
-            if (a->o->type == HM_HEATMAP)
-                ro[i].ann_ord = ro[i].ann_horiz ? a->coword : a->roword;
+            /* inherit the heatmap's ordering (col order if the annotation
+             * runs horizontally, row order if vertically) -- through a chain
+             * of annotations too, so B right_of A right_of m follows the
+             * clustering as A does. Only when the counts line up: an
+             * annotation on a 1-column strip has one cell, not m's rows. */
+            if (hm && nnames == ro[i].ann_n)
+                ro[i].ann_ord = ro[i].ann_horiz ? hm->coword : hm->roword;
             if (!ro[i].ann_ord) ro[i].ann_ord = identity(ro[i].ann_n);
+            free(perm);
         }
         if (o->type == HM_DENDROGRAM) {
-            if (!a || a->o->type != HM_HEATMAP) {
-                snprintf(err, CP_ERRLEN, "dendrogram() must be placed relative to a heatmap");
+            /* the tree and leaf order come from the heatmap the anchor sits
+             * against, so heatmap | annotation | dendrogram is reachable by
+             * anchoring to the annotation; its cells must line up with the
+             * heatmap's leaves */
+            RObj *hm = chain_heatmap(ro, a);
+            int horiz = pl->kind == PL_TOP_OF || pl->kind == PL_BENEATH;
+            if (!a || !hm) {
+                snprintf(err, CP_ERRLEN, "dendrogram() must be placed relative to a heatmap "
+                         "(or an annotation beside one)");
                 return -1;
             }
-            int horiz = pl->kind == PL_TOP_OF || pl->kind == PL_BENEATH;
-            HClust *tree = horiz ? a->colclust : a->rowclust;
+            if (horiz ? a->nc != hm->nc : a->nr != hm->nr) {
+                snprintf(err, CP_ERRLEN, "dendrogram(%s(\"%s\")): `%s` has %d %s, the heatmap "
+                         "`%s` has %d; the leaves would not line up",
+                         place_word(pl->kind), obj_ref(ro, a), obj_ref(ro, a),
+                         horiz ? a->nc : a->nr, horiz ? "columns" : "rows",
+                         hm->o->name, horiz ? hm->nc : hm->nr);
+                return -1;
+            }
+            HClust *tree = horiz ? hm->colclust : hm->rowclust;
             if (!tree) {
                 snprintf(err, CP_ERRLEN, "dendrogram() needs the heatmap `%s` clustered on that axis "
-                             "(add cluster=%s)", a->o->name, horiz ? "cols" : "rows");
+                             "(add cluster=%s)", hm->o->name, horiz ? "cols" : "rows");
                 return -1;
             }
             ro[i].tree = tree;
@@ -624,7 +789,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             ro[i].dir = pl->kind == PL_LEFT_OF ? DEND_LEFT
                       : pl->kind == PL_RIGHT_OF ? DEND_RIGHT
                       : pl->kind == PL_TOP_OF ? DEND_TOP : DEND_BENEATH;
-            int *word = horiz ? a->coword : a->roword;
+            int *word = horiz ? hm->coword : hm->roword;
             ro[i].slot = cp_xmalloc(tree->n * sizeof(int));
             for (int s = 0; s < tree->n; s++) ro[i].slot[word[s]] = s;
             ro[i].nr = 1; ro[i].nc = 1;
@@ -675,7 +840,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
         case PL_BENEATH:
             H = pl->height >= 0 ? pl->height
               : o->type == HM_LEGEND ? a->h
-              : o->type == HM_DENDROGRAM ? 0.2 * a->h
+              : o->type == HM_DENDROGRAM ? 0.2 * chain_heatmap(ro, a)->h
               : clampr((double)ro[i].nr / a->nr) * a->h;
             /* A vertical placement inherits the anchor's width, but width=
              * was still parsed -- so beneath(width=0.5) was accepted and
@@ -689,7 +854,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
         case PL_LEFT_OF:
             W = pl->width >= 0 ? pl->width
               : o->type == HM_LEGEND ? 0.05
-              : o->type == HM_DENDROGRAM ? 0.2 * a->w
+              : o->type == HM_DENDROGRAM ? 0.2 * chain_heatmap(ro, a)->w
               : clampr((double)ro[i].nc / a->nc) * a->w;
             ro[i].b = a->b; ro[i].w = W;      /* and height= beside it */
             ro[i].h = pl->height >= 0 ? pl->height : a->h;
@@ -819,8 +984,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             double lo, hi; const FillScale *fs;
             legend_scale(&ro[r->target], spec, dmin, dmax, &lo, &hi, &fs);
             double br[16];
-            int nb = extended_breaks(lo, hi, 5, br, 16), nf = 0;
-            for (int k = 0; k < nb; k++) if (br[k] >= lo && br[k] <= hi) br[nf++] = br[k];
+            int nf = legend_breaks(lo, hi, br);
             int dec = axis_decimals(br, nf);
             double wmax = 0;
             for (int k = 0; k < nf; k++) {
@@ -1269,7 +1433,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             for (int cc = 0; cc < m->nc; cc++) {
                 double v = m->v[(size_t)r->roword[rr] * m->nc + r->coword[cc]];
                 if (isnan(v)) continue;
-                snprintf(buf, sizeof buf, "%.3g", v);
+                cell_label(v, buf, sizeof buf);
                 double tw = text_w(cr, SZ_AXIS_TEXT, buf);
                 if (tw > maxw) maxw = tw;
             }
@@ -1287,7 +1451,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             for (int cc = 0; cc < m->nc; cc++) {
                 double v = m->v[(size_t)r->roword[rr] * m->nc + r->coword[cc]];
                 if (isnan(v)) continue;   /* as geom_text() skips NA labels */
-                snprintf(buf, sizeof buf, "%.3g", v);
+                cell_label(v, buf, sizeof buf);
                 Col f = fill_map_value(&spec->fill, v, dmin, dmax);
                 double lum = 0.299 * f.r + 0.587 * f.g + 0.114 * f.b;
                 Col dark = {0.1, 0.1, 0.1};

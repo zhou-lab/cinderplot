@@ -2,7 +2,7 @@
 #ifndef CINDERPLOT_H
 #define CINDERPLOT_H
 
-#define CINDERPLOT_VERSION "0.21.0"
+#define CINDERPLOT_VERSION "0.22.0"
 
 /* Size of the caller-supplied error buffer passed to every *_read / render /
  * dsl_parse entry point (see main.c: char err[CP_ERRLEN]). All error
@@ -206,7 +206,7 @@ typedef struct { UKind k; double v; } Unit;
 static inline Unit upt(double v)   { Unit u = {U_PT, v};   return u; }
 static inline Unit unull(double w) { Unit u = {U_NULL, w}; return u; }
 
-typedef enum { G_RECT, G_LINE, G_POLYLINE, G_TEXT, G_POINTS, G_TABLE,
+typedef enum { G_RECT, G_LINE, G_POLYLINE, G_POLYGON, G_TEXT, G_POINTS, G_TABLE,
                G_AXIS_X, G_AXIS_Y, G_IMAGE, G_IDEOGRAM } GType;
 typedef enum { V_TOP, V_BOTTOM, V_INKCENTER } VAlign;
 
@@ -294,13 +294,16 @@ typedef struct {
 
 typedef enum { GEOM_POINT, GEOM_JITTER, GEOM_LINE, GEOM_COL, GEOM_HISTOGRAM, GEOM_BOXPLOT, GEOM_BAR,
                GEOM_SEGMENT, GEOM_RECT, GEOM_DENSITY, GEOM_SMOOTH, GEOM_TILE,
-               GEOM_HLINE, GEOM_VLINE, GEOM_ABLINE, GEOM_TEXT, GEOM_LABEL } GeomType;
+               GEOM_HLINE, GEOM_VLINE, GEOM_ABLINE, GEOM_TEXT, GEOM_LABEL,
+               GEOM_ERRORBAR, GEOM_LINERANGE } GeomType;
 typedef struct {
     GeomType type;
     int bins;
     char *data;          /* per-layer data file (NULL = inherit) */
     char *ycol;          /* per-layer y column override (NULL = inherit) */
     Col color; int has_color;   /* constant layer colour override */
+    int color_is_fill;          /* ... written as fill= (geom_boxplot draws
+                                 * fill= on the body, colour= on the chrome) */
     double bw, adjust;          /* geom_density: bandwidth (0 = nrd0) x adjust */
     double span;                /* geom_smooth: loess span (0 = ggplot's 0.75) */
     int se_given;               /* geom_smooth: se= was written out */
@@ -317,6 +320,8 @@ typedef struct {
      * side. `seed` keeps a figure reproducible across renders. */
     int no_outliers;            /* geom_boxplot(outlier.shape=NA): the points are
                                  * already drawn by a jitter layer over the box */
+    double eb_width;     /* geom_errorbar(width=): cap width in x-axis units
+                          * (transformed space; 0 = the 0.25 default) */
     double tile_lw;      /* geom_tile(linewidth=): border stroke width in
                           * ggplot linewidth units (0 = the 0.1 default) */
     double txt_angle;    /* geom_text(angle=): degrees CCW; hjust= anchors in
@@ -336,6 +341,10 @@ typedef struct {
 typedef enum { PL_FULL, PL_TOP_OF, PL_BENEATH, PL_RIGHT_OF, PL_LEFT_OF } PlaceKind;
 typedef struct {
     PlaceKind kind;
+    int given;                     /* 1 = the spec wrote a placement verb; the
+                                    * default kind for a 2nd+ object is TOP_OF,
+                                    * and grammar-mode annotation() must tell
+                                    * that default from an explicit one */
     char *anchor;                  /* NULL = previous object */
     double pad, width, height;     /* npc; width/height < 0 = auto */
 } HPlace;
@@ -372,8 +381,19 @@ typedef struct {
     char *row, *col;               /* the cell's row/column name */
     char *target;                  /* name= of the heatmap (NULL = the sole one) */
     Col color;                     /* box colour, default red */
+    /* track-mode form: highlight(name="beta", row="S1", region="chr:beg-end"
+     * [, colour=][, linetype=][, label=]) boxes one sample row of a matrix()
+     * track over a genomic span (the probe columns falling in it); or the
+     * file form highlight("boxes.tsv", name="beta") with columns
+     * `row chrom beg end [colour] [label] [linetype]`, one box per line,
+     * read at render time so a classifier's output drops in unbounded. */
+    char *region;                  /* the span as written; NULL = heatmap form */
+    char chrom[64]; long beg, end;
+    int dash;                      /* 0 solid, 1 dashed, 2 dotted */
+    char *label;                   /* tiny corner label, NULL = none */
+    char *file;                    /* file form; row/region are then per line */
 } CellHighlight;
-#define MAX_HIGHLIGHTS 16
+#define MAX_HIGHLIGHTS 64
 
 /* annotate("text"|"segment"|"rect", x=, y=, ...): a one-off mark at literal
  * data coordinates, grammar mode only — ggplot2's annotate(). */
@@ -416,12 +436,22 @@ typedef struct {
 typedef struct {
     char *data_path;
     AesEntry x, y, colour;          /* colour also accepts fill= */
-    AesEntry xend, yend;            /* geom_segment endpoints */
+    AesEntry xend, yend;            /* geom_segment endpoints; yend also = ymax */
+    AesEntry ymin;                  /* geom_errorbar/linerange lower bound */
     AesEntry label;                 /* geom_text/geom_label label column */
     AesEntry size;                  /* geom_point size: numeric -> point area */
     AesEntry shape;                 /* geom_point shape: discrete -> point glyph */
     AesEntry chrom;                 /* genome scale: chromosome column */
     int coord_flip;                 /* coord_flip(): swap the x and y axes */
+    /* chord mode: chord("links.csv") — a circlize-style chord diagram from a
+     * (from, to, value) table; its own mode, like the tree */
+    int chord_mode;
+    char *chord_from, *chord_to, *chord_value;   /* column names (NULL = default) */
+    double chord_gap;               /* gap between sectors, degrees (-1 = unset -> 2; 0 is 0) */
+    char **chord_order; int n_chord_order;   /* order=c(...): explicit sector order */
+    int chord_bipartite;            /* bipartite=TRUE: from-group then to-group,
+                                     * with a bigger gap between the groups */
+    double chord_alpha;             /* ribbon alpha (0 = 0.6) */
     int polar;                      /* coord_polar(): radar chart — discrete-x
                                      * categories become spokes, y the radius;
                                      * geom_line()/geom_point() only */
@@ -453,7 +483,11 @@ typedef struct {
                                                    * text, paired 1:1 with breaks= */
     int n_x_break_labs, n_y_break_labs;           /* 0 = format the break numbers */
     ThemeType theme;                              /* theme_*(); THEME_GRAY = 0 = default */
-    int no_legend;                  /* guides(colour="none"|fill="none") or --no-legend */
+    int no_legend;                  /* guides(colour="none"|fill="none") or --no-legend:
+                                     * drop the colour/fill guide */
+    int no_legend_size, no_legend_shape;   /* guides(size="none") / guides(shape="none"):
+                                     * the size and shape guides are separate builders
+                                     * in render.c and are dropped separately */
     char *facet_var;
     char **facet_levels; int n_facet_levels;      /* facet_wrap(~v, levels=c(...)) */
     int free_x, free_y;                           /* facet_wrap(scales=): per-panel ranges */
@@ -489,6 +523,8 @@ typedef struct {
                                      * (leg_ix, leg_iy) npc instead of reserving
                                      * a margin or a row */
     double leg_ix, leg_iy;
+    int legend_reverse;             /* guide_legend(reverse=TRUE): flip the key
+                                     * order without flipping the factor */
     int legend_ncol, legend_nrow;   /* guides(colour=guide_legend(ncol=/nrow=)):
                                      * fold a discrete legend over columns; nrow
                                      * caps rows (each free_colour block derives
@@ -560,6 +596,9 @@ typedef struct {
 } Matrix;
 int render_heatmap(const PlotSpec *spec, const char *out,
                    double w_pt, double h_pt, char *err);
+/* chord.c: circlize-style chord diagram (chord() mode) */
+int render_chord(const PlotSpec *spec, const char *data, const char *out,
+                 double w_pt, double h_pt, char *err);
 
 /* ---------- tree.c: Newick trees, ggtree-style ---------- */
 int render_tree(const PlotSpec *spec, const char *out,

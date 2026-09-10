@@ -131,10 +131,47 @@ static MatData *read_matrix(const TrackObj *t, const char *win_chrom,
     if (!sc || !ec || sc->type != COL_NUM || ec->type != COL_NUM) {
         snprintf(err, CP_ERRLEN, "matrix needs numeric position columns (beg/start, end)"); return NULL;
     }
-    const Column *samp = NULL;                        /* string col => long/tidy */
-    for (int c = 0; c < mf->ncol; c++)
-        if (mf->cols[c].type == COL_STR && &mf->cols[c] != chr_c && &mf->cols[c] != pid)
-            { samp = &mf->cols[c]; break; }
+    /* Probe IDs as text. A numeric Probe_ID column (1001, 1002) has no str[]
+     * and dereferencing it crashed; format it the way a numeric chrom is. The
+     * formatted strings are owned here, and leak with mf as the borrowed ones
+     * do (see the return). */
+    char **pidstr = NULL;
+    if (pid) {
+        pidstr = cp_xmalloc((size_t)mf->nrow * sizeof(char *));
+        for (int r = 0; r < mf->nrow; r++) {
+            if (pid->type == COL_STR) { pidstr[r] = pid->str[r]; continue; }
+            if (!isfinite(pid->num[r])) { pidstr[r] = NULL; continue; }
+            char buf[64]; snprintf(buf, sizeof buf, "%.15g", pid->num[r]);
+            pidstr[r] = cp_xstrdup(buf);
+        }
+    }
+    /* Long vs wide. A text column beyond chrom/Probe_ID used to mean long,
+     * so one `n/a` in a sample column of a wide file silently turned that
+     * column into the sample NAMES and the next into the values. A sample
+     * column holds names, so a text column with numeric cells in it is a
+     * numeric column with a bad cell, and that cell is the error. */
+    const Column *samp = NULL;                        /* name col => long/tidy */
+    for (int c = 0; c < mf->ncol; c++) {
+        const Column *col = &mf->cols[c];
+        if (col->type != COL_STR || col == chr_c || col == pid) continue;
+        int nnum = 0, bad = -1;
+        for (int r = 0; r < mf->nrow; r++) {
+            const char *v = col->str[r];
+            if (!*v || !strcmp(v, "NA") || !strcmp(v, "na") || !strcmp(v, "NaN"))
+                continue;                             /* the CSV reader's own NA spellings */
+            char *e2; strtod(v, &e2);
+            if (e2 != v && !*e2) nnum++;
+            else if (bad < 0) bad = r;
+        }
+        if (nnum > 0) {
+            snprintf(err, CP_ERRLEN, "matrix `%s`: column `%s` row %d is \"%s\", not a "
+                     "number; sample and value columns must be numeric throughout "
+                     "(write NA for a missing value)", t->data, col->name,
+                     bad < 0 ? 1 : bad + 2, bad < 0 ? "" : col->str[bad]);
+            return NULL;
+        }
+        if (!samp) samp = col;
+    }
     MatData *m = cp_xcalloc(1, sizeof *m);
     int nr = 0, nc = 0;
     if (samp) {                                       /* --- long/tidy --- */
@@ -142,7 +179,7 @@ static MatData *read_matrix(const TrackObj *t, const char *win_chrom,
         const Column *val = NULL;
         for (int c = 0; c < mf->ncol; c++)
             if (mf->cols[c].type == COL_NUM && &mf->cols[c] != chr_c
-                && &mf->cols[c] != sc && &mf->cols[c] != ec)
+                && &mf->cols[c] != sc && &mf->cols[c] != ec && &mf->cols[c] != pid)
                 { val = &mf->cols[c]; break; }
         if (!val) { snprintf(err, CP_ERRLEN, "long matrix needs a numeric value column"); return NULL; }
         char **pn = cp_xmalloc(mf->nrow * sizeof(char *));
@@ -152,14 +189,28 @@ static MatData *read_matrix(const TrackObj *t, const char *win_chrom,
                                     win_beg, win_end)
         for (int r = 0; r < mf->nrow; r++) {
             if (!IN_WIN(r)) continue;
-            const char *id = pid->str[r]; int f = -1;
+            const char *id = pidstr[r]; int f = -1;
+            if (!id) {
+                snprintf(err, CP_ERRLEN, "matrix `%s`: Probe_ID is empty at row %d",
+                         t->data, r + 2);
+                return NULL;
+            }
             for (int i = 0; i < nc; i++) if (!strcmp(pn[i], id)) { f = i; break; }
             if (f < 0) { pn[nc] = (char *)id; pp[nc] = (sc->num[r] + ec->num[r]) * 0.5; nc++; }
             const char *s = samp->str[r]; f = -1;
             for (int i = 0; i < nr; i++) if (!strcmp(sn[i], s)) { f = i; break; }
             if (f < 0) sn[nr++] = (char *)s;
         }
-        if (nc < 1 || nr < 1) { snprintf(err, CP_ERRLEN, "matrix is empty"); return NULL; }
+        if (nc < 1 || nr < 1) {
+            /* name the window and the file: under regions() this is one of
+             * several windows and "matrix is empty" said nothing about which */
+            if (win_chrom)
+                snprintf(err, CP_ERRLEN, "matrix is empty in the requested window "
+                         "%s:%ld-%ld (%s)", win_chrom, win_beg, win_end, t->data);
+            else
+                snprintf(err, CP_ERRLEN, "matrix `%s` is empty", t->data);
+            return NULL;
+        }
         int *ord = cp_xmalloc(nc * sizeof(int));
         for (int i = 0; i < nc; i++) ord[i] = i;
         for (int a = 1; a < nc; a++) { int k = ord[a]; double kp = pp[k]; int b2 = a - 1;
@@ -171,7 +222,7 @@ static MatData *read_matrix(const TrackObj *t, const char *win_chrom,
         for (size_t i = 0; i < (size_t)nr * nc; i++) m->mv[i] = NAN;
         for (int r = 0; r < mf->nrow; r++) {
             if (!IN_WIN(r)) continue;
-            const char *id = pid->str[r], *s = samp->str[r];
+            const char *id = pidstr[r], *s = samp->str[r];
             int col = -1; for (int c = 0; c < nc; c++) if (!strcmp(m->colid[c], id)) { col = c; break; }
             int row = -1; for (int i = 0; i < nr; i++) if (!strcmp(m->rowname[i], s)) { row = i; break; }
             if (col >= 0 && row >= 0) m->mv[(size_t)row * nc + col] = val->num[r];
@@ -182,10 +233,10 @@ static MatData *read_matrix(const TrackObj *t, const char *win_chrom,
         int scol[2048], ns = 0;
         for (int c = 0; c < mf->ncol && ns < 2048; c++)
             if (mf->cols[c].type == COL_NUM && &mf->cols[c] != chr_c
-                && &mf->cols[c] != sc && &mf->cols[c] != ec)
+                && &mf->cols[c] != sc && &mf->cols[c] != ec && &mf->cols[c] != pid)
                 scol[ns++] = c;
-        if (ns < 1) { snprintf(err, CP_ERRLEN, "matrix has no numeric sample columns"); return NULL; }
-        if (mf->nrow < 1) { snprintf(err, CP_ERRLEN, "matrix is empty"); return NULL; }
+        if (ns < 1) { snprintf(err, CP_ERRLEN, "matrix `%s` has no numeric sample columns", t->data); return NULL; }
+        if (mf->nrow < 1) { snprintf(err, CP_ERRLEN, "matrix `%s` is empty", t->data); return NULL; }
         int *ord = cp_xmalloc(mf->nrow * sizeof(int));
         double *pp = cp_xmalloc(mf->nrow * sizeof(double));
         for (int r = 0; r < mf->nrow; r++) {
@@ -195,7 +246,9 @@ static MatData *read_matrix(const TrackObj *t, const char *win_chrom,
             ord[nc++] = r;
         }
         if (nc < 1) {
-            snprintf(err, CP_ERRLEN, "matrix is empty in the requested window");
+            snprintf(err, CP_ERRLEN, "matrix is empty in the requested window "
+                     "%s:%ld-%ld (%s)", win_chrom ? win_chrom : "", win_beg, win_end,
+                     t->data);
             free(ord); free(pp);
             return NULL;
         }
@@ -203,7 +256,7 @@ static MatData *read_matrix(const TrackObj *t, const char *win_chrom,
             while (b2 >= 0 && pp[ord[b2]] > kp) { ord[b2+1] = ord[b2]; b2--; } ord[b2+1] = k; }
         nr = ns;
         m->colpos = cp_xmalloc(nc * sizeof(double)); m->colid = cp_xmalloc(nc * sizeof(char *));
-        for (int c = 0; c < nc; c++) { m->colpos[c] = pp[ord[c]]; m->colid[c] = pid ? pid->str[ord[c]] : NULL; }
+        for (int c = 0; c < nc; c++) { m->colpos[c] = pp[ord[c]]; m->colid[c] = pidstr ? pidstr[ord[c]] : NULL; }
         m->rowname = cp_xmalloc(nr * sizeof(char *));
         for (int r = 0; r < nr; r++) m->rowname[r] = mf->cols[scol[r]].name;
         m->mv = cp_xmalloc((size_t)nr * nc * sizeof(double));
@@ -319,11 +372,8 @@ static Window *load_windows(const char *path, int *n_out, char *err) {
         return NULL;
     }
     const Column *c0 = &df->cols[0], *c1 = &df->cols[1], *c2 = &df->cols[2];
-    if (c0->type != COL_STR) {
-        snprintf(err, CP_ERRLEN, "regions `%s`: first column must be the chromosome "
-                 "name", path);
-        return NULL;
-    }
+    /* A numeric chromosome column (Ensembl-style 1, 2, X) is formatted as
+     * text, as region("1:...") and matrix() already accept it. */
     /* start/end are read per cell rather than per column, because a header row
      * makes the whole column type as text and a column-level check would reject
      * the file outright -- which is exactly what a user gets for writing the
@@ -341,7 +391,17 @@ static Window *load_windows(const char *path, int *n_out, char *err) {
                      path, r + 1);
             return NULL;
         }
-        snprintf(w[n].chrom, sizeof w[n].chrom, "%s", c0->str[r]);
+        const char *cv = matrix_chrom_value(c0, r, w[n].chrom, sizeof w[n].chrom);
+        if (!cv) {
+            snprintf(err, CP_ERRLEN, "regions `%s` row %d: chromosome is empty", path, r + 1);
+            return NULL;
+        }
+        if (cv != w[n].chrom) snprintf(w[n].chrom, sizeof w[n].chrom, "%s", cv);
+        if (b < 0 || e < 0 || b != floor(b) || e != floor(e)) {
+            snprintf(err, CP_ERRLEN, "regions `%s` row %d: start and end must be "
+                     "non-negative integers", path, r + 1);
+            return NULL;
+        }
         w[n].beg = (long)b; w[n].end = (long)e;
         w[n].label = cn && cn->type == COL_STR ? cn->str[r] : NULL;
         n++;
@@ -393,6 +453,91 @@ static void align_rows(MatData *m, const MatData *ref) {
                                                        * borrowed; only the
                                                        * arrays are ours */
     m->mv = mv; m->rowname = rowname; m->roword = roword; m->nr = nr;
+}
+
+/* ---- highlight() boxes on a matrix() track: one sample row over a genomic
+ * span. Spec-level calls and the file form are flattened into one list up
+ * front; each window then draws the boxes that fall inside it. ---- */
+typedef struct {
+    const char *row, *target, *label;
+    char chrom[64]; long beg, end;
+    Col col; int dash;
+    int placed;                    /* drawn in at least one window */
+} TBox;
+
+static int trk_boxes_load(const PlotSpec *spec, TBox **out, int *n_out, char *err) {
+    int n = 0, cap = 0;
+    TBox *bx = NULL;
+    for (int i = 0; i < spec->nhls; i++) {
+        const CellHighlight *h = &spec->hls[i];
+        if (!h->file) {
+            if (n == cap) bx = cp_xrealloc(bx, (cap = cap ? 2 * cap : 16) * sizeof *bx);
+            TBox *b = &bx[n++];
+            memset(b, 0, sizeof *b);
+            b->row = h->row; b->target = h->target; b->label = h->label;
+            snprintf(b->chrom, sizeof b->chrom, "%s", h->chrom);
+            b->beg = h->beg; b->end = h->end; b->col = h->color; b->dash = h->dash;
+            continue;
+        }
+        DataFrame *df = df_read_csv(h->file, err);
+        if (!df) return -1;
+        const Column *rc = df_col(df, "row"), *cc = df_col(df, "chrom");
+        const Column *bc = df_col(df, "beg"), *ec = df_col(df, "end");
+        const Column *kc = df_col(df, "colour"); if (!kc) kc = df_col(df, "color");
+        const Column *lc = df_col(df, "label"), *tc = df_col(df, "linetype");
+        if (!rc || !cc || !bc || !ec) {
+            snprintf(err, CP_ERRLEN, "highlight(\"%s\"): needs columns row, chrom, beg, end "
+                     "(optional: colour, label, linetype)", h->file);
+            return -1;
+        }
+        if (bc->type != COL_NUM || ec->type != COL_NUM) {
+            snprintf(err, CP_ERRLEN, "highlight(\"%s\"): beg/end must be numeric", h->file);
+            return -1;
+        }
+        char scratch[64];
+        for (int r = 0; r < df->nrow; r++) {
+            if (n == cap) bx = cp_xrealloc(bx, (cap = cap ? 2 * cap : 16) * sizeof *bx);
+            TBox *b = &bx[n++];
+            memset(b, 0, sizeof *b);
+            b->target = h->target;
+            b->row = rc->type == COL_STR ? rc->str[r] : NULL;
+            if (!b->row) {                  /* a numeric sample name column */
+                char *t = cp_xmalloc(32);
+                snprintf(t, 32, "%.15g", rc->num[r]);
+                b->row = t;
+            }
+            snprintf(b->chrom, sizeof b->chrom, "%s", matrix_chrom_value(cc, r, scratch, sizeof scratch));
+            if (isnan(bc->num[r]) || isnan(ec->num[r]) || bc->num[r] < 0 || ec->num[r] <= bc->num[r]) {
+                snprintf(err, CP_ERRLEN, "highlight(\"%s\"): row %d has beg/end %g-%g "
+                         "(need 0 <= beg < end)", h->file, r + 2, bc->num[r], ec->num[r]);
+                return -1;
+            }
+            b->beg = (long)bc->num[r]; b->end = (long)ec->num[r];
+            b->col = h->color;
+            if (kc && kc->type == COL_STR && kc->str[r] && *kc->str[r]
+                && parse_color(kc->str[r], &b->col)) {
+                snprintf(err, CP_ERRLEN, "highlight(\"%s\"): row %d colour `%s` invalid "
+                         "(names or #RRGGBB)", h->file, r + 2, kc->str[r]);
+                return -1;
+            }
+            if (lc && lc->type == COL_STR && lc->str[r] && *lc->str[r]) b->label = lc->str[r];
+            else if (lc && lc->type == COL_NUM && !isnan(lc->num[r])) {
+                char *t = cp_xmalloc(32); snprintf(t, 32, "%.15g", lc->num[r]); b->label = t;
+            }
+            if (tc && tc->type == COL_STR && tc->str[r] && *tc->str[r]) {
+                if (!strcmp(tc->str[r], "solid")) b->dash = 0;
+                else if (!strcmp(tc->str[r], "dashed")) b->dash = 1;
+                else if (!strcmp(tc->str[r], "dotted")) b->dash = 2;
+                else {
+                    snprintf(err, CP_ERRLEN, "highlight(\"%s\"): row %d linetype `%s` "
+                             "(solid, dashed or dotted)", h->file, r + 2, tc->str[r]);
+                    return -1;
+                }
+            }
+        }
+    }
+    *out = bx; *n_out = n;
+    return 0;
 }
 
 int render_tracks(const PlotSpec *spec, const char *out,
@@ -484,7 +629,8 @@ int render_tracks(const PlotSpec *spec, const char *out,
         rstart = wins[0].beg; rend = wins[0].end;
     } else if (spec->region) {
         if (region_parse(spec->region, chrom, &rstart, &rend)) {
-            snprintf(err, CP_ERRLEN, "bad region `%s`; expected chr:start-end", spec->region); return -1;
+            snprintf(err, CP_ERRLEN, "bad region `%s`; expected chr:start-end with "
+                     "non-negative integers and start < end", spec->region); return -1;
         }
     } else {
         MatData *src = NULL;
@@ -645,6 +791,35 @@ int render_tracks(const PlotSpec *spec, const char *out,
         per_h = null_h > 0 ? fmax(0, h_pt - fixed_h) / null_h : 0;
     }
 
+    /* highlight() boxes, flattened once; drawn per window below */
+    TBox *boxes = NULL; int nboxes = 0;
+    if (spec->nhls > 0) {
+        if (trk_boxes_load(spec, &boxes, &nboxes, err)) return -1;
+        int nmat = 0; const char *mname = NULL;
+        for (int i = 0; i < ntr; i++)
+            if (spec->tobjs[i].type == TRK_MATRIX) { nmat++; mname = spec->tobjs[i].name; }
+        for (int b = 0; b < nboxes; b++) {
+            if (!boxes[b].target && nmat > 1) {
+                snprintf(err, CP_ERRLEN, "highlight(): %d matrix() tracks in the spec; "
+                         "say which with name=", nmat);
+                return -1;
+            }
+            if (boxes[b].target) {
+                int hit = 0;
+                for (int i = 0; i < ntr; i++)
+                    if (spec->tobjs[i].type == TRK_MATRIX && spec->tobjs[i].name
+                        && !strcmp(spec->tobjs[i].name, boxes[b].target)) hit = 1;
+                if (!hit) {
+                    snprintf(err, CP_ERRLEN, "highlight(name=\"%s\"): no matrix() track has "
+                             "that name%s%s%s", boxes[b].target,
+                             mname ? " (the matrix is named `" : "", mname ? mname : "",
+                             mname ? "`)" : "");
+                    return -1;
+                }
+            }
+        }
+    }
+
     Grob *g;
     if (title && !wins) {
         g = gt_add(T, G_TEXT, 1, CC, 1, CC);
@@ -719,16 +894,15 @@ int render_tracks(const PlotSpec *spec, const char *out,
               double npc = NPCX(bp), half = text_w(cr, SZ_AXIS_TEXT, lab) / 2;
               double centre = npc * win_pt;
               /* A tick near the edge would centre its label half outside the
-               * panel -- in the gap or the next window. Keep the tick where it
-               * belongs and slide the text inward, as a genome browser does,
-               * rather than dropping a narrow panel's only coordinate. The
-               * overlap test then has to run on the *slid* position, or two
-               * nudged labels collide in the middle. */
+               * panel -- in the gap or the next window, or with one window
+               * past the page margin, where it was cut in half. Keep the tick
+               * where it belongs and slide the text inward, as a genome
+               * browser does, rather than dropping a narrow panel's only
+               * coordinate. The overlap test then has to run on the *slid*
+               * position, or two nudged labels collide in the middle. */
               double tc = centre;
-              if (wins) {
-                  if (tc - half < 0) tc = half;
-                  if (tc + half > win_pt) tc = win_pt - half;
-              }
+              if (tc - half < 0) tc = half;
+              if (tc + half > win_pt) tc = win_pt - half;
               if (tc - half < last_r + 3) { free(lab); continue; }   /* would touch */
               last_r = tc + half;
               xtxt[nx] = win_pt > 0 ? tc / win_pt : npc;
@@ -760,18 +934,26 @@ int render_tracks(const PlotSpec *spec, const char *out,
         if (t->type == TRK_COVERAGE) {
             int nsb; SigBin *sb = bedgraph_read(t->data, chrom, rstart, rend, &nsb, err);
             if (!sb) return -1;
-            double ymax = t->max_value > 0 ? t->max_value : 0;
+            /* The range is [min(0, min), max]: a positive-only bedGraph keeps
+             * its zero baseline and [0 - max] readout, and a minus-strand or
+             * log-ratio file draws its bars downward from a zero line instead
+             * of an empty lane reading [0 - 1]. */
+            double ymax = t->max_value > 0 ? t->max_value : 0, ymin = 0;
             if (ymax <= 0) for (int k = 0; k < nsb; k++) if (sb[k].val > ymax) ymax = sb[k].val;
-            if (ymax <= 0) ymax = 1;
+            for (int k = 0; k < nsb; k++) if (sb[k].val < ymin) ymin = sb[k].val;
+            if (ymax <= ymin) ymax = ymin + 1;
+            double yspan = ymax - ymin, yzero = -ymin / yspan;
             Col col = t->has_color ? t->color : C_COV;
             for (int k = 0; k < nsb; k++) {
-                if (sb[k].val <= 0) continue;
+                if (sb[k].val == 0) continue;
                 g = gt_add(T, G_RECT, R, CC, R, CC);
                 g->col = col; g->sub = 1; g->clip = 1;
                 g->x0 = NPCX(sb[k].start); g->x1 = NPCX(sb[k].end);
-                g->y0 = 0; g->y1 = sb[k].val / ymax;
+                g->y0 = yzero; g->y1 = (sb[k].val - ymin) / yspan;
             }
-            char *rd = cp_xmalloc(32); snprintf(rd, 32, "[0 - %g]", ymax);   /* readout */
+            char *rd = cp_xmalloc(32);                                       /* readout */
+            if (ymin < 0) snprintf(rd, 32, "[%g - %g]", ymin, ymax);
+            else          snprintf(rd, 32, "[0 - %g]", ymax);
             g = gt_add(T, G_TEXT, R, CC, R, CC);
             g->str = rd; g->size = SZ_AXIS_TEXT; g->col = C_AXTXT;
             g->tx = 0.004; g->ty = 0.98; g->hj = 0; g->va = V_TOP;
@@ -902,18 +1084,31 @@ int render_tracks(const PlotSpec *spec, const char *out,
             const Column *bc = df_col(cb, "chrom"), *bs = df_col(cb, "start"),
                          *be = df_col(cb, "end"), *bt = df_col(cb, "stain");
             if (!bc || !bs || !be || !bt) {
-                snprintf(err, CP_ERRLEN, "cytoband needs chrom,start,end,stain columns"); return -1;
+                snprintf(err, CP_ERRLEN, "cytoband `%s` needs chrom,start,end,stain columns", t->data); return -1;
             }
+            /* Type-check before touching str[]/num[]: a text cell in start/end
+             * (or a numeric stain) has no num[] and dereferenced NULL. */
+            if (bs->type != COL_NUM || be->type != COL_NUM) {
+                snprintf(err, CP_ERRLEN, "cytoband `%s`: column `%s` must be numeric",
+                         t->data, bs->type != COL_NUM ? "start" : "end"); return -1;
+            }
+            if (bt->type != COL_STR) {
+                snprintf(err, CP_ERRLEN, "cytoband `%s`: column `stain` must be text "
+                         "(gneg, gpos50, acen, ...)", t->data); return -1;
+            }
+            /* a numeric chrom column (1, 2, ...) is formatted, as matrix() does */
+#define CB_CHROM(r2) matrix_chrom_value(bc, (r2), cbchr, sizeof cbchr)
+            char cbchr[64]; const char *cv;
             double clen = 0; int nband = 0;
             for (int r2 = 0; r2 < cb->nrow; r2++)
-                if (!strcmp(bc->str[r2], chrom)) { nband++; if (be->num[r2] > clen) clen = be->num[r2]; }
-            if (clen <= 0) { snprintf(err, CP_ERRLEN, "chromosome %s not in cytoband file", chrom); return -1; }
+                if ((cv = CB_CHROM(r2)) && !strcmp(cv, chrom)) { nband++; if (be->num[r2] > clen) clen = be->num[r2]; }
+            if (clen <= 0) { snprintf(err, CP_ERRLEN, "chromosome %s not in cytoband file %s", chrom, t->data); return -1; }
             double *bst = cp_xmalloc(nband * sizeof(double)), *ben = cp_xmalloc(nband * sizeof(double));
             Col *bcol = cp_xmalloc(nband * sizeof(Col));
             double cen_lo = 1, cen_hi = 0;                   /* centromere (acen) extent, npc */
             int nb2 = 0;
             for (int r2 = 0; r2 < cb->nrow; r2++) {
-                if (strcmp(bc->str[r2], chrom)) continue;
+                if (!(cv = CB_CHROM(r2)) || strcmp(cv, chrom)) continue;
                 double a = bs->num[r2] / clen, b = be->num[r2] / clen;
                 const char *s = bt->str[r2];
                 Col c;
@@ -935,6 +1130,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
             g->col = red; g->lw = lw_pt(1.3); g->clip = 1;
             g->x0 = g->x1 = (rstart + rend) / 2.0 / clen;
             g->y0 = 0.12; g->y1 = 0.88;
+#undef CB_CHROM
         } else if (t->type == TRK_MATRIX) {
             /* genome-anchored heatmap (rows = samples, cols = probes evenly
              * placed), read up front into md[i]. Cell bands (npc, y up):
@@ -973,6 +1169,51 @@ int render_tracks(const PlotSpec *spec, const char *out,
             Col bbh = {0.4, 0.4, 0.4};
             g->col = bbh; g->sub = 1; g->stroke = 1; g->lw = lw_pt(0.5) * cp_line_scale; g->clip = 1;
             g->x0 = 0; g->x1 = 1; g->y0 = lblband; g->y1 = hmtop;
+            /* highlight() boxes: the sample's row band over the probe columns
+             * whose genomic position falls in the span. The heatmap's x is
+             * probe-index space (columns are evenly placed), so the box edges
+             * are column edges, not the span's coordinates. */
+            for (int b = 0; b < nboxes; b++) {
+                TBox *bx = &boxes[b];
+                if (bx->target && (!t->name || strcmp(bx->target, t->name))) continue;
+                if (strcmp(bx->chrom, chrom) || bx->end <= rstart || bx->beg >= rend) continue;
+                int kr = -1;
+                for (int k = 0; k < nr; k++) if (!strcmp(m->rowname[k], bx->row)) { kr = k; break; }
+                if (kr < 0) {
+                    snprintf(err, CP_ERRLEN, "highlight(row=\"%s\"): not a sample row of "
+                             "matrix `%s` (rows are the matrix's sample names)",
+                             bx->row, t->name ? t->name : t->data);
+                    return -1;
+                }
+                int rr = 0;
+                for (int k = 0; k < nr; k++) if (m->roword[k] == kr) { rr = k; break; }
+                int c0 = -1, c1 = -1;
+                for (int c = 0; c < nc; c++)
+                    if (m->colpos[c] >= bx->beg && m->colpos[c] < bx->end) {
+                        if (c0 < 0) c0 = c;
+                        c1 = c;
+                    }
+                if (c0 < 0) continue;              /* no probe in the span here */
+                bx->placed = 1;
+                double bx0 = (double)c0 / nc, bx1 = (double)(c1 + 1) / nc;
+                double by1 = hmtop - (double)rr / nr * (hmtop - lblband);
+                double by0 = hmtop - (double)(rr + 1) / nr * (hmtop - lblband);
+                double *px = cp_xmalloc(5 * sizeof(double)), *py = cp_xmalloc(5 * sizeof(double));
+                px[0] = bx0; py[0] = by0; px[1] = bx1; py[1] = by0;
+                px[2] = bx1; py[2] = by1; px[3] = bx0; py[3] = by1;
+                px[4] = bx0; py[4] = by0;
+                g = gt_add(T, G_POLYLINE, R, CC, R, CC);
+                g->n = 5; g->px = px; g->py = py; g->col = bx->col;
+                g->lw = lw_pt(1); g->dash = bx->dash; g->clip = 1;
+                if (bx->label) {                   /* tiny corner tag, box colour */
+                    double lsz = sz_samp * 0.8;
+                    double lh = cell_pt > 0 ? font_h(cr, lsz) / cell_pt : 0.02;
+                    g = gt_add(T, G_TEXT, R, CC, R, CC);
+                    g->str = (char *)bx->label; g->size = lsz; g->col = bx->col;
+                    g->tx = bx1 + 0.002; g->ty = by1 - lh * 0.1;
+                    g->hj = 0; g->va = V_TOP; g->clip = 1;
+                }
+            }
             g = gt_add(T, G_LINE, R, CC, R, CC);              /* kb axis baseline (top) */
             g->col = C_TICK; g->lw = lw_pt(0.5) * cp_line_scale; g->clip = 1;
             g->x0 = 0; g->x1 = 1; g->y0 = g->y1 = axline;
@@ -1035,6 +1276,16 @@ int render_tracks(const PlotSpec *spec, const char *out,
           g->n = nx; g->px = axis_pos; g->label_pos = axis_txt;
           g->labels = axis_lab;
       }
+    }
+
+    if (nboxes) {
+        int lost = 0;
+        for (int b = 0; b < nboxes; b++) lost += !boxes[b].placed;
+        if (lost)
+            fprintf(stderr, "cinderplot: warning: highlight(): %d of %d box%s outside "
+                    "every panel, or covering no probe column, %s not drawn\n",
+                    lost, nboxes, nboxes == 1 ? "" : "es",
+                    lost == 1 ? "was" : "were");
     }
 
     gt_resolve(T, 0, 0, w_pt, h_pt);

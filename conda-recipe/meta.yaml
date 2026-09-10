@@ -1,5 +1,5 @@
 {% set name = "cinderplot" %}
-{% set version = "0.7.1" %}
+{% set version = "0.22.0" %}
 
 package:
   name: {{ name }}
@@ -44,14 +44,17 @@ about:
   license: MIT
   license_family: MIT
   license_file: LICENSE
-  summary: Fast C plotter for ggplot2-quality PDF figures and wheatmap-style heatmaps
+  summary: Fast C plotter for ggplot2-quality figures, heatmaps, genome tracks, trees and chord diagrams
   description: |
     Cinderplot is a small, fast, grammar-inspired plotting tool written in C.
-    It turns CSV data into publication-quality PDF graphics via Cairo, with a
-    ggplot2-flavoured mini-DSL (aes/geom_point/line/col/histogram, facets,
-    log scales) and a wheatmap-style matrix mode (composable heatmaps,
-    annotations, hierarchical clustering, dendrograms, and rigid legends).
-    Dependencies are deliberately minimal: just Cairo and libm.
+    It turns a CSV/TSV (plain or gzipped) into publication-quality PDF, SVG or
+    PNG graphics via Cairo. Five modes, chosen by the verbs used: a
+    ggplot2-flavoured grammar (aes/geom_*, facets, scales, themes), a
+    wheatmap-style matrix mode (composable heatmaps, annotations, Ward
+    clustering, dendrograms, legends), a genome locus browser of stacked
+    tracks (bedGraph/BED/BEDPE/BED12, tabix), a Newick tree mode, and a
+    circlize-style chord diagram. Dependencies are deliberately minimal:
+    Cairo and zlib.
   dev_url: https://github.com/zhou-lab/cinderplot
 
 extra:

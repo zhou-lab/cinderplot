@@ -20,20 +20,63 @@
 #include <zlib.h>
 
 /* ---------------- whole-file gzip inflate ---------------- */
+/* Read a whole file into memory; NULL with err on failure. */
+static unsigned char *file_slurp(const char *path, size_t *len, char *err) {
+    FILE *f = fopen(path, "rb");
+    if (!f) { snprintf(err, CP_ERRLEN, "cannot open %s", path); return NULL; }
+    fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
+    if (sz < 0) sz = 0;
+    unsigned char *b = cp_xmalloc(sz > 0 ? (size_t)sz : 1);
+    if (sz > 0 && fread(b, 1, (size_t)sz, f) != (size_t)sz) {
+        snprintf(err, CP_ERRLEN, "%s: read error", path); fclose(f); free(b); return NULL;
+    }
+    fclose(f);
+    *len = (size_t)sz;
+    return b;
+}
+
+/* Inflate every gzip member in the file. This drives inflate() directly
+ * rather than gzread(): a member cut short mid-stream came back from gzread()
+ * as a plain end of file (0, and with some zlib builds no error either), so a
+ * truncated download read as a complete, shorter file. Here the input running
+ * out anywhere but at a member boundary is the error it is. */
 static char *gz_slurp(const char *path, size_t *outlen, char *err) {
-    gzFile g = gzopen(path, "rb");
-    if (!g) { snprintf(err, CP_ERRLEN, "cannot open %s", path); return NULL; }
+    size_t clen = 0;
+    unsigned char *c = file_slurp(path, &clen, err);
+    if (!c) return NULL;
     size_t cap = 1 << 16, n = 0;
     char *b = cp_xmalloc(cap);
-    for (;;) {
-        if (cap - n < 4096) { cap *= 2; b = cp_xrealloc(b, cap); }
-        int r = gzread(g, b + n, (unsigned)(cap - n - 1));
-        if (r < 0) { snprintf(err, CP_ERRLEN, "%s: gzip read error", path); free(b); gzclose(g); return NULL; }
-        n += (size_t)r;
-        if (r == 0) break;
+    z_stream zs; memset(&zs, 0, sizeof zs);
+    if (inflateInit2(&zs, 15 + 32) != Z_OK) {          /* +32: gzip or zlib header */
+        snprintf(err, CP_ERRLEN, "%s: zlib init failed", path); free(c); free(b); return NULL;
     }
+    zs.next_in = c; zs.avail_in = (uInt)clen;
+    while (zs.avail_in > 0) {
+        if (cap - n < 4096) { cap *= 2; b = cp_xrealloc(b, cap); }
+        zs.next_out = (unsigned char *)b + n; zs.avail_out = (uInt)(cap - n - 1);
+        int ret = inflate(&zs, Z_NO_FLUSH);
+        n = cap - 1 - zs.avail_out;
+        if (ret == Z_STREAM_END) {
+            /* a concatenated file (bgzip) has more members; anything after
+             * the last that is not one is trailing padding, which gzip itself
+             * ignores */
+            if (zs.avail_in == 0 || zs.next_in[0] != 0x1f) break;
+            inflateReset(&zs);
+            continue;
+        }
+        if (ret != Z_OK && ret != Z_BUF_ERROR) {
+            snprintf(err, CP_ERRLEN, "%s: corrupt gzip data (%s)", path,
+                     zs.msg ? zs.msg : "inflate failed");
+            inflateEnd(&zs); free(c); free(b); return NULL;
+        }
+        if (zs.avail_in == 0) {                          /* input ran out mid-member */
+            snprintf(err, CP_ERRLEN, "%s: unexpected end of file (truncated gzip)", path);
+            inflateEnd(&zs); free(c); free(b); return NULL;
+        }
+    }
+    inflateEnd(&zs);
+    free(c);
     b[n] = 0;
-    gzclose(g);
     if (outlen) *outlen = n;
     return b;
 }
@@ -53,28 +96,36 @@ static void rd_skip(Rd *r, size_t n) { if (r->off + n > r->len) r->ok = 0; else 
 
 /* ---------------- BGZF single-block inflate ---------------- */
 /* inflate the block at compressed offset `co`; malloc *out (uncompressed),
- * set *usize (uncompressed length) and *blocklen (compressed block size). */
+ * set *usize (uncompressed length) and *blocklen (compressed block size).
+ * Returns BGZF_NOT_BGZF when no BGZF block header starts at `co` (a plain
+ * gzip, or garbage) and BGZF_CORRUPT when the header is one but the block
+ * does not hold up, so the caller can tell "wrong kind of file" from "damaged
+ * file". */
+enum { BGZF_OK = 0, BGZF_NOT_BGZF = -1, BGZF_CORRUPT = -2 };
 static int bgzf_block(const unsigned char *c, size_t clen, size_t co,
                       unsigned char **out, uint32_t *usize, size_t *blocklen) {
-    if (co + 12 > clen) return -1;
-    if (c[co] != 0x1f || c[co + 1] != 0x8b) return -1;      /* gzip magic */
+    if (co + 12 > clen) return BGZF_NOT_BGZF;
+    if (c[co] != 0x1f || c[co + 1] != 0x8b) return BGZF_NOT_BGZF;      /* gzip magic */
+    if (!(c[co + 3] & 4)) return BGZF_NOT_BGZF;                        /* FEXTRA unset: plain gzip */
     unsigned xlen = c[co + 10] | (unsigned)c[co + 11] << 8;
     size_t xo = co + 12;
-    if (xo + xlen > clen) return -1;
+    if (xo + xlen > clen) return BGZF_CORRUPT;
     unsigned bsize = 0; int have = 0;                        /* find the BC subfield */
     for (size_t i = 0; i + 4 <= xlen; ) {
         unsigned char si1 = c[xo + i], si2 = c[xo + i + 1];
         unsigned slen = c[xo + i + 2] | (unsigned)c[xo + i + 3] << 8;
-        if (si1 == 'B' && si2 == 'C' && slen == 2) {
+        /* the 2 data bytes must also lie inside the extra field */
+        if (si1 == 'B' && si2 == 'C' && slen == 2 && i + 6 <= xlen) {
             bsize = (c[xo + i + 4] | (unsigned)c[xo + i + 5] << 8) + 1;
             have = 1; break;
         }
         i += 4 + slen;
     }
-    if (!have || co + bsize > clen) return -1;
+    if (!have) return BGZF_NOT_BGZF;
+    if (co + bsize > clen) return BGZF_CORRUPT;
     /* a valid block is >= 12 header + xlen extra + 8 trailer; a smaller BSIZE
      * (corrupt block) would underflow dlen/isize below into huge indices */
-    if (bsize < xlen + 20) return -1;
+    if (bsize < xlen + 20) return BGZF_CORRUPT;
     size_t dstart = xo + xlen;                               /* deflate payload */
     size_t dlen = bsize - (xlen + 12) - 8;                   /* -header -extra -trailer */
     uint32_t isize = c[co + bsize - 4] | (uint32_t)c[co + bsize - 3] << 8
@@ -82,15 +133,15 @@ static int bgzf_block(const unsigned char *c, size_t clen, size_t co,
     unsigned char *ub = cp_xmalloc(isize ? isize : 1);
     if (isize) {
         z_stream zs; memset(&zs, 0, sizeof zs);
-        if (inflateInit2(&zs, -15) != Z_OK) { free(ub); return -1; }
+        if (inflateInit2(&zs, -15) != Z_OK) { free(ub); return BGZF_CORRUPT; }
         zs.next_in = (unsigned char *)(c + dstart); zs.avail_in = (uInt)dlen;
         zs.next_out = ub; zs.avail_out = isize;
         int ret = inflate(&zs, Z_FINISH);
         inflateEnd(&zs);
-        if (ret != Z_STREAM_END) { free(ub); return -1; }
+        if (ret != Z_STREAM_END) { free(ub); return BGZF_CORRUPT; }
     }
     *out = ub; *usize = isize; *blocklen = bsize;
-    return 0;
+    return BGZF_OK;
 }
 
 /* ---------------- tabix binning ---------------- */
@@ -146,17 +197,42 @@ char *tabix_slurp_region(const char *path, const char *chrom, long beg, long end
     int32_t l_nm = rd_i32(&rd);
     if (!rd.ok || rd.off + (size_t)l_nm > ilen) { snprintf(err, CP_ERRLEN, "%s: truncated tabix header", tbi); free(idx); return NULL; }
 
-    /* find the reference id whose name matches chrom */
+    /* Read the compressed file now, before the index says anything about it:
+     * the .tbi alone selected this path, so the data file may be a plain gzip
+     * beside a stale index. Such a file inflated nothing and drew an empty
+     * track (exit 0); refuse it before trusting any chunk offset into it, and
+     * before a chrom the index lacks returns nothing. */
+    size_t csz = 0;
+    unsigned char *cbuf = file_slurp(path, &csz, err);
+    if (!cbuf) { free(idx); return NULL; }
+    {
+        unsigned char *ub; uint32_t us; size_t blen;
+        int rc = csz > 0 ? bgzf_block(cbuf, csz, 0, &ub, &us, &blen) : BGZF_NOT_BGZF;
+        if (rc == BGZF_OK) free(ub);
+        else {
+            if (rc == BGZF_NOT_BGZF)
+                snprintf(err, CP_ERRLEN, "%s: not a BGZF file (needed for tabix); "
+                         "recompress with bgzip", path);
+            else
+                snprintf(err, CP_ERRLEN, "%s: corrupt BGZF block at offset 0", path);
+            free(cbuf); free(idx); return NULL;
+        }
+    }
+
+    /* find the reference id whose name matches chrom: one walk over the
+     * NUL-separated names (the old per-id restart was quadratic, and a
+     * 40,000-scaffold assembly spent seconds here for a 5-record query) */
     const char *names = idx + rd.off;
     int target = -1;
-    for (int id = 0; ; id++) {
-        size_t o = 0; const char *nm = names;              /* walk NUL-separated names */
-        for (int j = 0; j < id; j++) { size_t L = strlen(nm); o += L + 1; if (o >= (size_t)l_nm) { nm = NULL; break; } nm = names + o; }
-        if (!nm || o >= (size_t)l_nm) break;
-        if (!strcmp(nm, chrom)) { target = id; break; }
+    for (size_t o = 0, id = 0; o < (size_t)l_nm; id++) {
+        const char *nm = names + o;
+        size_t L = strnlen(nm, (size_t)l_nm - o);
+        if (L == (size_t)l_nm - o) break;                  /* unterminated last name */
+        if (!strcmp(nm, chrom)) { target = (int)id; break; }
+        o += L + 1;
     }
     rd.off += (size_t)l_nm;
-    if (target < 0) { free(idx); char *e = cp_xmalloc(1); e[0] = 0; return e; }   /* chrom not indexed */
+    if (target < 0) { free(idx); free(cbuf); char *e = cp_xmalloc(1); e[0] = 0; return e; }   /* chrom not indexed */
 
     /* clamp to reg2bins' own [0, 2^29) domain before sizing qbins, so a huge
      * raw span can't overflow the int qcap into a too-small allocation */
@@ -204,22 +280,24 @@ char *tabix_slurp_region(const char *path, const char *chrom, long beg, long end
     }
     nchunk = w;
 
-    /* 4. read the compressed file and inflate the merged chunk ranges */
-    FILE *cf = fopen(path, "rb");
-    if (!cf) { snprintf(err, CP_ERRLEN, "cannot open %s", path); free(chunks); return NULL; }
-    fseek(cf, 0, SEEK_END); long csz = ftell(cf); fseek(cf, 0, SEEK_SET);
-    unsigned char *cbuf = cp_xmalloc(csz > 0 ? csz : 1);
-    if (csz > 0 && fread(cbuf, 1, (size_t)csz, cf) != (size_t)csz) { snprintf(err, CP_ERRLEN, "%s: read error", path); fclose(cf); free(cbuf); free(chunks); return NULL; }
-    fclose(cf);
-
+    /* 4. inflate the merged chunk ranges out of the compressed file */
     Buf ob = {0};
     for (int i = 0; i < nchunk; i++) {
         size_t co = chunks[i].b >> 16; unsigned uo = chunks[i].b & 0xffff;
         size_t co_end = chunks[i].e >> 16; unsigned uo_end = chunks[i].e & 0xffff;
         size_t pos = co;
-        while (pos < (size_t)csz) {
+        while (pos < csz) {
             unsigned char *ub; uint32_t us; size_t blen;
-            if (bgzf_block(cbuf, (size_t)csz, pos, &ub, &us, &blen) != 0) break;
+            int rc = bgzf_block(cbuf, csz, pos, &ub, &us, &blen);
+            if (rc != BGZF_OK) {
+                /* an index chunk pointing at a non-block means the .tbi does
+                 * not belong to this file; stopping quietly rendered whatever
+                 * was gathered so far as if it were everything */
+                snprintf(err, CP_ERRLEN, "%s: %s at offset %zu; the .tbi does not match "
+                         "this file, re-index with tabix", path,
+                         rc == BGZF_NOT_BGZF ? "no BGZF block" : "corrupt BGZF block", pos);
+                free(cbuf); free(chunks); free(ob.b); return NULL;
+            }
             unsigned start = (pos == co) ? uo : 0;
             unsigned stop = (pos == co_end) ? uo_end : us;
             if (stop > us) stop = us;

@@ -126,8 +126,9 @@ SECTIONS = [
         # legend and a diverging colormap. R reference uses ComplexHeatmap.
         ("heatmap", "Complex assembly",
          'data/mtcars_heat.csv + heatmap(name="m", cluster=both, rownames=right)'
-         ' + dendrogram(top_of("m")) + dendrogram(left_of("m"))'
-         ' + annotation("data/mtcars_cyl.csv", left_of("m")) + legend(right_of("m"))'
+         ' + dendrogram(top_of("m"))'
+         ' + annotation("data/mtcars_cyl.csv", left_of("m"), name="cyl")'
+         ' + dendrogram(left_of("cyl")) + legend(right_of("m"))'
          ' + scale_fill_gradient2(low="#2166ac", mid="#f7f7f7", high="#b2182b")',
          '# mtcars, z-scored features (ComplexHeatmap)\n'
          'library(ComplexHeatmap)\n'
@@ -705,14 +706,16 @@ __SECTIONS__
 # Landing-page content (compact, info-rich, lab-website style). Only the
 # landing uses this; the gallery keeps STYLE/header() above.
 GEOMS = ["point", "jitter", "line", "smooth", "col", "bar", "histogram", "boxplot", "density",
-         "rect", "segment", "tile", "raster", "text", "label", "text_repel",
-         "hline", "vline", "abline",
+         "rect", "segment", "tile", "raster", "text", "label", "text_repel", "label_repel",
+         "errorbar", "linerange", "hline", "vline", "abline",
          "tree", "tiplab", "nodelab", "nodepoint", "tippoint"]
-SCALES = ["x / y log10", "percent labels", "genome x", "colour hue",
-          "12 continuous palettes", "gradient / gradient2", "manual colours",
+SCALES = ["x / y log10 / log2", "breaks / labels / percent", "limits + expand", "genome x",
+          "colour hue", "12 continuous palettes", "gradient / gradient2",
+          "ColorBrewer / distiller", "manual / identity colours",
           "discrete x / y", "free facet scales", "discrete label angle"]
-POSITIONS = ["stack", "dodge", "dodge2"]
-MODES = ["scatter / grammar", "heatmap + clustering", "genomic tracks", "Newick trees"]
+POSITIONS = ["stack"]          # dodging is not implemented; do not list it
+MODES = ["scatter / grammar", "heatmap + clustering", "genomic tracks", "Newick trees",
+         "chord diagram"]
 THEMES_CHIPS = ["gray", "bw", "minimal", "classic", "void", "linedraw",
                 "light", "dark", "few"]
 
@@ -998,7 +1001,7 @@ def cinder_version():
                   (REPO / "include" / "cinderplot.h").read_text())
     return m.group(1) if m else ""
 
-AGENT_PROMPT = ("Use cinderplot to render figures from CSV/TSV instead of writing a ggplot2 or matplotlib script. Read https://zhou-lab.github.io/cinderplot/llms.txt first — it covers installation, the grammar, the four modes and the traps.")
+AGENT_PROMPT = ("Use cinderplot to render figures from CSV/TSV instead of writing a ggplot2 or matplotlib script. Read https://zhou-lab.github.io/cinderplot/llms.txt first — it covers installation, the grammar, the five modes and the traps.")
 
 def landing_html():
     def chips(items):

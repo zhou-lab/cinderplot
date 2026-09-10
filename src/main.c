@@ -10,6 +10,13 @@
  */
 #include "cinderplot.h"
 #include <stdarg.h>
+/* Build identity printed by --version: `git describe` from the Makefile
+ * (tag-distance-hash, "-dirty" when uncommitted). A version string alone
+ * never identified a build -- two binaries both saying 0.7.0 once differed
+ * by a feature -- so this is what to ask a reporter for. */
+#ifndef CINDERPLOT_BUILD
+#define CINDERPLOT_BUILD "unknown"
+#endif
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,8 +34,9 @@ static const char *USAGE =
     "         output is REQUIRED — a trailing filename or -o FILE (format from the extension)\n"
     "         data: a leading DSL token, or omitted / '-' / 'stdin' = read stdin\n"
     "  DSL:   'data.csv + aes(x, y, colour=factor(g)) + geom_point() + facet_wrap(~g)'\n"
-    "  flags: -x COL -y COL [-c COL] [-f COL] [-t TITLE] [-m point|line|col|histogram] [--log x|y|xy]\n"
-    "         --size WxH (partial Wx / xH auto-fits) · --dpi N · --font FAMILY · --dump-spec · --version · --help\n";
+    "  flags: -x COL -y COL [-c COL] [-f COL] [-t TITLE] [-m point|line|col|histogram|boxplot|bar] [--log x|y|xy]\n"
+    "         -r/--region chr:start-end (track mode) · -H/--no-header · --no-legend\n"
+    "         --size WxH (partial Wx / xH auto-fits) · --dpi N · --font FAMILY · --dump-spec · -V/--version · --help\n";
 
 /* A modern, sectioned --help. Colour is enabled for a TTY (or CLICOLOR_FORCE)
  * and suppressed by NO_COLOR, so piped/redirected output stays plain text. */
@@ -53,20 +61,23 @@ static void print_help(void) {
     printf("  %sGRAMMAR%s   %s(compose layers with %s+%s%s)%s\n", H, R, D, K, R, D, R);
     printf("    %sdata.csv%s        a CSV/TSV path — or %s-%s / %sstdin%s / omitted = pipe, %s.gz%s = gzip/bgzip\n", K, R, K, R, K, R, K, R);
     printf("    %saes%s(x, y, …)    map columns to aesthetics\n", G, R);
-    printf("    %sgeom_*%s()        point · jitter · line · smooth · col · histogram · tile · boxplot · text · h/v/abline\n", G, R);
+    printf("    %sgeom_*%s()        point · jitter · line · smooth · col · bar · histogram · density · boxplot · tile\n", G, R);
+    printf("                    segment · rect · errorbar · linerange · text · label · *_repel · h/v/abline\n");
     printf("    %sfacet_wrap%s(~g)  small multiples · %sscale_*%s · %stheme_*%s · %slabs%s(title=…)\n", G, R, G, R, G, R, G, R);
 
-    printf("\n  %sFOUR MODES%s   %s(chosen from the verbs you use)%s\n", H, R, D, R);
+    printf("\n  %sFIVE MODES%s   %s(chosen from the verbs you use)%s\n", H, R, D, R);
     printf("    %splots%s     %saes(…) + geom_*()%s              %s— the ggplot2 grammar%s\n", G, R, K, R, D, R);
     printf("    %sheatmaps%s  %sheatmap() + annotation()%s       %s— clustering, dendrograms%s\n", G, R, K, R, D, R);
     printf("    %sgenome%s    %sregion() + genes() + matrix()%s  %s— locus browser, tabix tracks%s\n", G, R, K, R, D, R);
     printf("    %strees%s     %sgeom_tree() + geom_tiplab()%s    %s— Newick input, not a table%s\n", G, R, K, R, D, R);
+    printf("    %schords%s    %schord(...)%s                     %s— from/to/value links, circlize-style%s\n", G, R, K, R, D, R);
 
     printf("\n  %sEXAMPLES%s\n", H, R);
     printf("    %scinderplot%s %s'mtcars.csv + aes(wt, mpg, colour=factor(cyl)) + geom_point()'%s -o s.pdf\n", D, R, K, R);
     printf("    %scinderplot%s %s'expr.tsv + heatmap(cluster=both, rownames=right)'%s -o h.png\n", D, R, K, R);
     printf("    %scinderplot%s %s'region() + genes(\"genes.bed.gz\") + matrix(\"betas.tsv\")'%s -o r.svg\n", D, R, K, R);
     printf("    %scinderplot%s %s'taxonomy.tre + geom_tree() + geom_tiplab()'%s -o t.pdf\n", D, R, K, R);
+    printf("    %scinderplot%s %s'links.csv + chord(from=\"src\", to=\"dst\", value=\"n\")'%s -o c.svg\n", D, R, K, R);
 
     printf("\n  %sOPTIONS%s\n", H, R);
     printf("    %s-o%s FILE %sor%s FILE  output %s(required)%s — format from the extension (%s.pdf .svg .png%s)\n", G, R, D, R, D, R, K, R);
@@ -75,11 +86,12 @@ static void print_help(void) {
     printf("    %s--font%s FAMILY  figure font, all modes %s(default Arial; warns if not found)%s\n", G, R, D, R);
     printf("    %s--editable-svg%s labels as %s<text>%s elements (svglite-style, retypable in Inkscape;\n", G, R, K, R);
     printf("                   %sCINDERPLOT_EDITABLE_SVG=1 makes it your default; --outline-svg overrides)%s\n", D, R);
-    printf("    %s--no-header%s    headerless input — columns become %sV1, V2, …%s %s(R style)%s\n", G, R, K, R, D, R);
-    printf("    %s--no-legend%s    drop the colour/fill/size guide %s(same as guides(colour=\"none\"))%s\n", G, R, D, R);
-    printf("    %s-x -y -c -f -t -m --log%s   shortcut flags that desugar to the grammar\n", G, R);
-    printf("    %s--dump-spec%s    print the desugared DSL and exit\n", G, R);
-    printf("    %s--version%s  ·  %s--help%s\n", G, R, G, R);
+    printf("    %s-H, --no-header%s headerless input — columns become %sV1, V2, …%s %s(R style)%s\n", G, R, K, R, D, R);
+    printf("    %s--no-legend%s    drop every guide (colour/fill, size, shape) %s(guides(colour=\"none\") drops one)%s\n", G, R, D, R);
+    printf("    %s-r, --region%s CHR:START-END   the window for track mode, when region() is left empty\n", G, R);
+    printf("    %s-x -y -c -f -t -m --log%s   shortcut flags that desugar to the grammar (not with a DSL expression)\n", G, R);
+    printf("    %s--dump-spec%s    print the desugared DSL (and still render if an output is given)\n", G, R);
+    printf("    %s-V, --version%s  ·  %s-h, --help%s\n", G, R, G, R);
 
     printf("\n  %sdocs%s  https://zhou-lab.github.io/cinderplot\n\n", D, R);
 }
@@ -189,6 +201,20 @@ int main(int argc, char **argv) {
 
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
+        /* --flag=value spellings: split once, then read as --flag value */
+        char eqflag[32];
+        if (!strncmp(a, "--", 2) && strchr(a, '=')) {
+            const char *eq = strchr(a, '=');
+            size_t fl = (size_t)(eq - a);
+            if (fl < sizeof eqflag) {
+                memcpy(eqflag, a, fl); eqflag[fl] = 0;
+                if (!strcmp(eqflag, "--size") || !strcmp(eqflag, "--dpi") || !strcmp(eqflag, "--font")
+                    || !strcmp(eqflag, "--log") || !strcmp(eqflag, "--region")) {
+                    argv[i] = (char *)eq + 1; i--;      /* ++i below re-reads it as the value */
+                    a = eqflag;
+                }
+            }
+        }
         if (!strcmp(a, "-o") && i + 1 < argc) out = argv[++i];
         else if (!strcmp(a, "-x") && i + 1 < argc) fx = argv[++i];
         else if (!strcmp(a, "-y") && i + 1 < argc) fy = argv[++i];
@@ -229,7 +255,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--dump-spec")) dump = 1;
         else if (!strcmp(a, "--no-header") || !strcmp(a, "-H")) cp_set_no_header(1);
         else if (!strcmp(a, "--no-legend")) no_legend = 1;
-        else if (!strcmp(a, "--version") || !strcmp(a, "-V")) { printf("cinderplot %s\n", CINDERPLOT_VERSION); return 0; }
+        else if (!strcmp(a, "--version") || !strcmp(a, "-V")) { printf("cinderplot %s (%s)\n", CINDERPLOT_VERSION, CINDERPLOT_BUILD); return 0; }
         else if (!strcmp(a, "-h") || !strcmp(a, "--help")) { print_help(); return 0; }
         else if (strchr(a, '(')) expr = a;
         /* a recognized value-flag that fell through the branches above was given
@@ -244,6 +270,12 @@ int main(int argc, char **argv) {
         }
         else if (a[0] == '-' && a[1]) { fprintf(stderr, "cinderplot: unknown flag %s\n%s", a, USAGE); return 1; }
         else if (npos < 8) pos[npos++] = a;
+        else {
+            /* the 9th used to vanish, taking the output name with it */
+            fprintf(stderr, "cinderplot: too many arguments (`%s`); expected at most "
+                    "an expression, a data file and an output\n%s", a, USAGE);
+            return 1;
+        }
     }
 
     /* Resolve output + primary data from bare positionals. Output is required:
@@ -255,6 +287,49 @@ int main(int argc, char **argv) {
     if (!out && !dump) {                             /* --dump-spec just inspects */
         fprintf(stderr, "cinderplot: no output file — give -o FILE or a trailing FILENAME\n%s", USAGE);
         return 1;
+    }
+    if (out) {
+        /* The format comes from the extension and nothing else, so an
+         * unknown one used to write PDF bytes under fig.jpg; `-` became a
+         * file literally named "-"; and out == data overwrote the input. */
+        const char *dot = strrchr(out, '.');
+        const char *slash = strrchr(out, '/');
+        if (slash && dot && dot < slash) dot = NULL;   /* dot in a directory name */
+        /* Character devices carry no extension and are not files to name:
+         * /dev/stdout and /dev/fd/N are a pipe (a PDF stream), /dev/null is
+         * the "render it but keep nothing" check a shell loop uses. Both skip
+         * the extension rule; everything else must say its format. */
+        int is_stream = !strcmp(out, "/dev/stdout") || !strncmp(out, "/dev/fd/", 8)
+                      || !strcmp(out, "/dev/null");
+        if (!strcmp(out, "-")) {
+            fprintf(stderr, "cinderplot: -o - would write a file named `-`; the format "
+                    "comes from the extension. For a pipe use -o /dev/stdout (a PDF stream)\n");
+            return 1;
+        }
+        if (!is_stream
+            && (!dot || (strcasecmp(dot, ".pdf") && strcasecmp(dot, ".svg") && strcasecmp(dot, ".png")))) {
+            fprintf(stderr, "cinderplot: output must end in .pdf, .svg or .png (got `%s`)\n", out);
+            return 1;
+        }
+        if (data && !strcmp(data, out)) {
+            fprintf(stderr, "cinderplot: output `%s` is the data file; refusing to overwrite it\n", out);
+            return 1;
+        }
+        /* a missing directory fails inside cairo with no path in the message */
+        char dir[4096];
+        if (is_stream) ;
+        else if (slash && (size_t)(slash - out) < sizeof dir) {
+            memcpy(dir, out, slash - out); dir[slash - out] = 0;
+            if (access(*dir ? dir : "/", W_OK)) {
+                fprintf(stderr, "cinderplot: cannot write `%s`: directory `%s` is missing or "
+                        "not writable\n", out, dir);
+                return 1;
+            }
+        } else if (access(".", W_OK)) {
+            fprintf(stderr, "cinderplot: cannot write `%s`: the current directory is not "
+                    "writable\n", out);
+            return 1;
+        }
     }
 
     /* Editable SVG text is chosen three ways: --editable-svg for one run,
@@ -294,11 +369,38 @@ int main(int argc, char **argv) {
 
 
     char buf[4096];
+    int quick = fx || fy || fc || ff || ft || flog || strcmp(fm, "point");
+    if (expr && quick) {
+        /* the flags desugar INTO a DSL string; beside one they were dropped */
+        fprintf(stderr, "cinderplot: -x/-y/-c/-f/-t/-m/--log build a spec and cannot be "
+                "combined with a DSL expression; put the mapping in aes() and the "
+                "title in labs()\n");
+        return 1;
+    }
+    if (flog && strcmp(flog, "x") && strcmp(flog, "y") && strcmp(flog, "xy") && strcmp(flog, "yx")) {
+        fprintf(stderr, "cinderplot: --log must be x, y or xy (got `%s`)\n", flog);
+        return 1;
+    }
     if (!expr) {
         int hist = !strcmp(fm, "histogram");
         int box = !strcmp(fm, "boxplot");
         int bar = !strcmp(fm, "bar");
-        if (!fx || (!fy && !hist && !bar)) { fprintf(stderr, "%s", USAGE); return 1; }
+        if (strcmp(fm, "point") && strcmp(fm, "line") && strcmp(fm, "col") && !hist && !box && !bar) {
+            fprintf(stderr, "cinderplot: -m must be point, line, col, histogram, boxplot or bar "
+                    "(got `%s`)\n", fm);
+            return 1;
+        }
+        if (!fx && !quick) {
+            fprintf(stderr, "cinderplot: no expression given; pass a DSL string "
+                    "('data.csv + aes(x, y) + geom_point()') or the -x/-y flags\n%s", USAGE);
+            return 1;
+        }
+        if (!fx) { fprintf(stderr, "cinderplot: the flag form needs -x COL\n%s", USAGE); return 1; }
+        if (!fy && !hist && !bar) {
+            fprintf(stderr, "cinderplot: -x without -y: -m %s needs both axes (only -m histogram "
+                    "and -m bar compute y from x)\n%s", fm, USAGE);
+            return 1;
+        }
         size_t n = 0;
         /* boxplot and bar need a discrete x — wrap the column in factor() */
         int bad = (box || bar) ? appendf(buf, sizeof buf, &n, "%s + aes(x=factor(%s)", data ? data : "-", fx)
@@ -334,7 +436,12 @@ int main(int argc, char **argv) {
      * parser) -> a positional data arg -> stdin. So 'heatmap(...)' alone reads a
      * pipe, and a bare data filename is honoured instead of silently ignored. */
     if (!spec.data_path) spec.data_path = (char *)(data ? data : "-");
-    if (no_legend) spec.no_legend = 1;      /* --no-legend == guides(colour="none") */
+    if (!strcmp(spec.data_path, out)) {
+        fprintf(stderr, "cinderplot: output `%s` is the data file; refusing to overwrite it\n", out);
+        return 1;
+    }
+    if (no_legend)                          /* --no-legend: every guide */
+        spec.no_legend = spec.no_legend_size = spec.no_legend_shape = 1;
 
     /* 0 = auto-fit: track & heatmap modes size themselves from content;
      * grammar mode keeps the classic 6x4in default. */
@@ -358,6 +465,15 @@ int main(int argc, char **argv) {
     }
     /* annotation() beside aes()/geom_* is a grammar-mode band (dsl_parse has
      * already vetted the combination), so only a pure heatmap spec comes here */
+    if (spec.chord_mode) {                       /* chord diagram mode */
+        if (render_chord(&spec, spec.data_path ? spec.data_path : data,
+                         out, w_pt, h_pt, err)) {
+            fprintf(stderr, "cinderplot: %s\n", err);
+            return 1;
+        }
+        fprintf(stderr, "wrote %s\n", out);
+        return 0;
+    }
     if (spec.nhobjs > 0 && spec.nlayers == 0 && !spec.x.col) {   /* matrix (wheatmap) mode */
         if (render_heatmap(&spec, out, w_pt, h_pt, err)) {
             fprintf(stderr, "cinderplot: %s\n", err);
@@ -374,8 +490,8 @@ int main(int argc, char **argv) {
     char *needed[MAX_LAYERS + 16];
     int nneeded = 0;
     const AesEntry *aes[] = { &spec.x, &spec.y, &spec.colour, &spec.xend,
-                              &spec.yend, &spec.label, &spec.size, &spec.shape,
-                              &spec.chrom };
+                              &spec.yend, &spec.ymin, &spec.label, &spec.size,
+                              &spec.shape, &spec.chrom };
     for (size_t i = 0; i < sizeof aes / sizeof *aes; i++)
         if (aes[i]->col) needed[nneeded++] = aes[i]->col;
     if (spec.facet_var) needed[nneeded++] = spec.facet_var;

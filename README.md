@@ -10,10 +10,10 @@ turns a CSV/TSV into publication-ready PDF, SVG or PNG graphics with Cairo and
 keeps the runtime and dependency footprint deliberately small — one binary, no
 language runtime, Cairo and zlib the only link-time dependencies.
 
-Four modes, chosen by which verbs appear: the **grammar** (`aes()` +
+Five modes, chosen by which verbs appear: the **grammar** (`aes()` +
 `geom_*()`), a **heatmap** with clustering and anchor-placed objects, a
-**genome locus browser** of stacked tracks over one or more windows, and a
-**Newick tree**.
+**genome locus browser** of stacked tracks over one or more windows, a
+**Newick tree**, and a **chord diagram** of from/to/value links.
 
 The project is an early prototype. Its current plotting grammar is inspired by
 ggplot2, but Cinderplot is an independent implementation rather than a drop-in
@@ -33,7 +33,7 @@ conda install -c zhou-lab -c conda-forge cinderplot
 
 A condensed, agent-oriented reference lives at
 [llms.txt](https://zhou-lab.github.io/cinderplot/llms.txt) — the grammar, the
-four modes and the behavioural traps in a fraction of the tokens the HTML docs
+five modes and the behavioural traps in a fraction of the tokens the HTML docs
 cost. Point your agent at that URL rather than the gallery.
 
 ## License
