@@ -128,14 +128,37 @@ build (currently `ok: highest is GLIBC_2.14`) instead of trusting a note.
 scripts/release.sh deploy
 ```
 
-CI does not do this. Builds **without** the conda rpath (the dev build's rpath
-points into a personal, unreadable env, so a copy of it breaks for every other
-user), verifies `ldd` resolves the system cairo, installs to
-`/mnt/isilon/zhoulab/labbin/cinderplot`, writes `cinderplot.deployed`
-(`version hash date`) beside it, then rebuilds the dev binary with the rpath so
-the regression baseline matches again. The two link different cairo versions
-and rasterise slightly differently; that is expected, and is the price of a
-binary that runs for every lab user with no environment.
+**CI does not do this, and it is the step most often skipped** — the lab copy
+sat at 0.7.1 through fourteen releases. Deploying is part of releasing: a lab
+user running the shared binary has no other way to get the work.
+
+In order, `deploy`:
+
+1. builds **without** the conda rpath. The dev build bakes in a path under
+   `~/tmp`, which is ephemeral and unreadable by anyone else, so a straight
+   copy of it breaks for every other user. `-L` at the conda env is still
+   needed to *link* (the system has `libcairo.so.2` but no `.so` symlink),
+   just not to *run*;
+2. refuses to continue if `ldd` still resolves cairo from that env;
+3. **runs the whole regression suite against the portable binary.** The dev
+   build proves nothing about this one — they link different cairo versions;
+4. refuses to deploy an unpushed commit, since `--version` would then name a
+   revision nobody can fetch;
+5. keeps the outgoing binary as `cinderplot.prev`, so a bad deploy is one
+   `mv` from recovery rather than a rebuild;
+6. installs, and writes `cinderplot.deployed` (`version hash date`) beside it;
+7. renders a real figure with the installed copy, from the deploy directory
+   and with no environment set — which is how a lab user invokes it;
+8. rebuilds the dev binary with the rpath, so the gallery baseline matches
+   again.
+
+The two builds link different cairo versions (system 1.17.4 vs the conda
+env's 1.18.4) and rasterise slightly differently. That is expected, shows up
+only in PNG comparisons, and is the price of a binary that runs for every lab
+user with no environment.
+
+To roll back: `mv /mnt/isilon/zhoulab/labbin/cinderplot.prev
+/mnt/isilon/zhoulab/labbin/cinderplot`.
 
 ## 8. Confirm
 

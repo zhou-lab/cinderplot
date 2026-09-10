@@ -214,11 +214,48 @@ do_deploy() {
     fi
     ldd ./cinderplot | grep cairo
     rev=$(git rev-parse --short HEAD)
+
+    # This binary is about to become every lab user's cinderplot, and the dev
+    # build proves nothing about it: it links a different cairo. Run the whole
+    # suite against THIS binary, exactly as a user would run it.
+    step "regression suite against the portable binary"
+    ( cd "$EXAMPLES" && CINDERPLOT="$here/cinderplot" sh tests/test.sh >/dev/null 2>&1 ) \
+        || fail "the portable binary fails the suite — not installing it"
+    echo ok
+
+    step "deploying a commit nobody can identify is worse than deploying nothing"
+    if git rev-parse --abbrev-ref @{u} >/dev/null 2>&1; then
+        [ "$(git log --oneline @{u}..HEAD | wc -l)" -eq 0 ] \
+            || fail "HEAD is not pushed; --version would name a revision no one else can fetch"
+        echo ok
+    else
+        echo "no upstream configured; skipping"
+    fi
+
     step "install"
+    # Keep the outgoing binary next to the new one. A bad deploy is otherwise
+    # unrecoverable without a rebuild, and the people who notice are users.
+    if [ -x "$DEPLOY_DIR/cinderplot" ]; then
+        cp -p "$DEPLOY_DIR/cinderplot" "$DEPLOY_DIR/cinderplot.prev" \
+            && echo "previous binary kept as cinderplot.prev ($("$DEPLOY_DIR/cinderplot" --version 2>/dev/null))"
+    fi
     cp ./cinderplot "$DEPLOY_DIR/cinderplot.new" && mv -f "$DEPLOY_DIR/cinderplot.new" "$DEPLOY_DIR/cinderplot"
     chmod 755 "$DEPLOY_DIR/cinderplot"
     printf '%s %s %s\n' "$v" "$rev" "$(date +%Y-%m-%dT%H:%M)" > "$DEPLOY_DIR/cinderplot.deployed"
+
+    step "verify the installed copy renders"
     "$DEPLOY_DIR/cinderplot" --version
+    tmpd=$(mktemp -d)
+    printf 'x,y,g\n1,2,a\n2,4,b\n3,1,a\n' > "$tmpd/t.csv"
+    if "$DEPLOY_DIR/cinderplot" "$tmpd/t.csv + aes(x,y,colour=factor(g)) + geom_point()" \
+         -o "$tmpd/t.pdf" >/dev/null 2>&1 && [ -s "$tmpd/t.pdf" ]; then
+        echo "ok — rendered from $DEPLOY_DIR with no environment"
+        rm -rf "$tmpd"
+    else
+        rm -rf "$tmpd"
+        fail "the installed binary did not render; roll back with: mv $DEPLOY_DIR/cinderplot.prev $DEPLOY_DIR/cinderplot"
+    fi
+
     step "rebuild the dev binary (with rpath) so the regression baseline matches again"
     build 1
     green "deployed $v ($rev) to $DEPLOY_DIR"
