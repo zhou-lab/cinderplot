@@ -69,7 +69,8 @@ check: $(TARGET)
 	cd $(EXAMPLES) && CINDERPLOT=$(CURDIR)/$(TARGET) CINDERPLOT_REPO=$(CURDIR) sh tests/gallery.sh
 
 # The release SOP (version strings, docs, counts, tests, deploy, tag) is
-# scripts/release.sh; see RELEASING.md.
+# scripts/release.sh; the procedure around it is in the lab journal,
+# zhouw3/2026/20260723_cinderplot_releasing.org (not user-facing, so not here).
 release-check:
 	scripts/release.sh check
 

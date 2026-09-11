@@ -1,5 +1,7 @@
 #!/bin/sh
-# scripts/release.sh — the release SOP, enforced.
+# scripts/release.sh — the release SOP, enforced. The prose version, with the
+# reasoning behind each check, is in the lab journal:
+# ~/repo/labjournal/zhouw3/2026/20260723_cinderplot_releasing.org
 #
 # Every step of a release that has ever been forgotten is a check or an action
 # here, so that "release 0.x.0" is never a commit that bumps the header and
@@ -107,7 +109,7 @@ do_check() {
         lingering() {
             grep -rnI --exclude-dir=.git --exclude-dir=tmp --exclude=CLAUDE.md \
                  --exclude='*.o' --exclude=cinderplot -F "$prev" . \
-               | grep -v 'docs/index.html\|docs/gallery.html\|release.sh\|RELEASING.md\|design-notes'
+               | grep -v 'docs/index.html\|docs/gallery.html\|release.sh\|design-notes'
         }
         if lingering | grep -q .; then
             lingering >&2
