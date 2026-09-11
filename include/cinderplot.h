@@ -2,7 +2,7 @@
 #ifndef CINDERPLOT_H
 #define CINDERPLOT_H
 
-#define CINDERPLOT_VERSION "0.22.0"
+#define CINDERPLOT_VERSION "0.23.0"
 
 /* Size of the caller-supplied error buffer passed to every *_read / render /
  * dsl_parse entry point (see main.c: char err[CP_ERRLEN]). All error
@@ -362,6 +362,11 @@ typedef struct {
     char *column;                  /* annotation: which column to colour by
                                     * (NULL = the last, the historical default) */
     ClusterMode cluster;           /* heatmap only */
+    int discrete;                  /* heatmap: fill trigger. 0 = decide from the
+                                    * cell types (text => categorical), 1 =
+                                    * discrete=TRUE (numeric codes ARE levels),
+                                    * -1 = discrete=FALSE (numbers, so text
+                                    * cells are an error as they always were) */
     Side rownames, colnames;       /* heatmap label sides (SIDE_NONE = off) */
     int label_data;                /* annotation: in-situ value runs + bezier leaders;
                                     * heatmap: print each cell's value */
@@ -494,6 +499,12 @@ typedef struct {
     int free_colour;                              /* scales="free_colour": each facet builds
                                                    * its own colour scale + legend block */
     int facet_ncol, facet_nrow;                   /* facet_wrap(ncol=/nrow=); 0 = auto */
+    /* facet_grid(rowvar ~ colvar): a true 2-D grid. Every (row, col)
+     * combination gets a panel, the empty ones included -- that is what
+     * separates it from facet_wrap, which lays out only the combinations the
+     * data holds. Either side may be "." (one-sided), leaving it NULL. */
+    int facet_grid;
+    char *facet_rowvar, *facet_colvar;
     double x_angle, y_angle;                      /* scale_*_discrete(angle=); <0 = auto */
     int tree_layout;                              /* 0 rectangular, 1 slanted, 2 circular */
     int tree_mode, tree_tiplab, tree_nodelab;     /* geom_tree()/geom_tiplab()/geom_nodelab() */
@@ -589,11 +600,21 @@ typedef struct {
 HClust *hclust_ward(const double *x, int n, int p, char *err);
 
 /* ---------- heatmap.c: matrix mode (wheatmap port) ---------- */
+/* A DISCRETE matrix keeps the same `v` array: each cell holds its LEVEL INDEX
+ * as a double (NaN = NA), so clustering, rasterising and cell addressing stay
+ * one code path and only the value -> colour step forks. `levels` are the
+ * category labels in level order (lexical for text cells, numeric for codes),
+ * and the indices are global across every heatmap in the figure -- they are
+ * remapped onto a unified level set once all matrices are loaded, so one
+ * discrete key describes the whole figure. */
 typedef struct {
     int nr, nc;
-    double *v;                     /* row-major, NaN = NA */
+    double *v;                     /* row-major, NaN = NA; discrete: level index */
     char **rn, **cn;               /* may be NULL */
+    int discrete;                  /* cells are categories, not numbers */
+    int nlev; char **levels;       /* discrete: level labels, level order */
 } Matrix;
+#define HM_MAXLEV 64               /* discrete fill: level cap (= the manual_cols cap) */
 int render_heatmap(const PlotSpec *spec, const char *out,
                    double w_pt, double h_pt, char *err);
 /* chord.c: circlize-style chord diagram (chord() mode) */

@@ -6,9 +6,9 @@
  *
  * Supported: aes() with positional x,y and named x/y/colour/color,
  * values IDENT or factor(IDENT); geom_point(); labs(title/x/y/colour=
- * "string"); facet_wrap(~var). Anything else errors with the supported
- * subset listed, so unimplemented ggplot is a clear "not yet" rather
- * than a syntax error. */
+ * "string"); facet_wrap(~var); facet_grid(row ~ col). Anything else
+ * errors with the supported subset listed, so unimplemented ggplot is a
+ * clear "not yet" rather than a syntax error. */
 #include "cinderplot.h"
 #include <ctype.h>
 #include <stdio.h>
@@ -524,7 +524,7 @@ static int hm_opt_ok(HMType t, const char *key) {
     if (!strcmp(key, "data")) return t == HM_HEATMAP || t == HM_ANNOTATION;
     if (!strcmp(key, "column")) return t == HM_ANNOTATION;
     if (!strcmp(key, "cluster") || !strcmp(key, "rownames") || !strcmp(key, "colnames")
-        || !strcmp(key, "aspect")) return t == HM_HEATMAP;
+        || !strcmp(key, "aspect") || !strcmp(key, "discrete")) return t == HM_HEATMAP;
     if (!strcmp(key, "labels") || !strcmp(key, "box") || !strcmp(key, "grid"))
         return t == HM_HEATMAP || t == HM_ANNOTATION;
     return 0;
@@ -532,7 +532,7 @@ static int hm_opt_ok(HMType t, const char *key) {
 static const char *hm_opt_menu(HMType t) {
     switch (t) {
     case HM_HEATMAP: return "name=, data=, title=, cluster=, rownames=, colnames=, "
-                            "labels=, aspect=, box=, grid=, placements";
+                            "labels=, discrete=, aspect=, box=, grid=, placements";
     case HM_ANNOTATION: return "name=, data=, title=, column=, labels=, box=, grid=, placements";
     case HM_LEGEND: return "name=, title=, placements (e.g. right_of(\"m\"))";
     default: return "name=, placements (e.g. left_of(\"m\"))";
@@ -627,6 +627,20 @@ static int parse_hm_args(P *p, HMObj *o, int want_data) {
                 else if (!strcmp(v, "none") || !strcmp(v, "off") || !strcmp(v, "false")
                          || !strcmp(v, "FALSE") || !strcmp(v, "F") || !strcmp(v, "0")) o->label_data = 0;
                 else return fail(p, "labels=%s invalid; use data/on or none/off", v);
+            } else if (!strcmp(key, "discrete")) {
+                /* The fill kind. Text cells already say "categorical" on their
+                 * own, so this exists for the matrix of numeric CODES -- a 0/1/2
+                 * call matrix -- which is indistinguishable from measurements
+                 * without being told. discrete=FALSE is the way back: it pins
+                 * the continuous reading, so text cells stay the error they
+                 * have always been rather than quietly changing meaning. */
+                char *v = word(p);
+                if (!v) return fail(p, "discrete= expects TRUE or FALSE", "");
+                if (!strcmp(v, "TRUE") || !strcmp(v, "true") || !strcmp(v, "T")
+                    || !strcmp(v, "on") || !strcmp(v, "1")) o->discrete = 1;
+                else if (!strcmp(v, "FALSE") || !strcmp(v, "false") || !strcmp(v, "F")
+                         || !strcmp(v, "off") || !strcmp(v, "0")) o->discrete = -1;
+                else return fail(p, "discrete=%s invalid; use TRUE or FALSE", v);
             } else if (!strcmp(key, "aspect")) {
                 skip_ws(p);
                 char *end;
@@ -1840,8 +1854,8 @@ static int parse_term(P *p, PlotSpec *spec) {
         if (!spec->facet_var) return *p->err ? -1 : fail(p, "expected a column name after ~", "");
         skip_ws(p);
         if (*p->s == '+' || *p->s == '~')
-            return fail(p, "facet_wrap() takes one variable; facet_grid()/two-way "
-                        "facets are not implemented", "");
+            return fail(p, "facet_wrap() takes one variable; for two-way facets "
+                        "use facet_grid(rowvar ~ colvar)", "");
         skip_ws(p);
         while (*p->s == ',') {   /* levels=c(...) panel order, scales= free axes */
             p->s++;
@@ -1877,6 +1891,91 @@ static int parse_term(P *p, PlotSpec *spec) {
                                  "free_y, free, or free_colour", v);
             } else return fail(p, "facet_wrap() option `%s` not implemented; "
                                "supported: levels=c(...), scales=, ncol=, nrow=", key);
+            free(key);
+            skip_ws(p);
+        }
+        return expect(p, ')');
+    }
+    /* facet_grid(rowvar ~ colvar) -- the two-way grid. One panel per (row,
+     * col) combination, including the combinations the data never uses, which
+     * is the whole point of asking for a grid rather than a wrap. Either side
+     * may be `.`, as in ggplot2, for a one-row or one-column grid. */
+    if (!strcmp(name, "facet_grid")) {
+        const char *form = "facet_grid() expects a two-sided formula: "
+                           "facet_grid(rowvar ~ colvar), facet_grid(. ~ colvar) "
+                           "or facet_grid(rowvar ~ .)";
+        skip_ws(p);
+        if (*p->s == '~') return fail(p, form, "");
+        char *rv = colname(p);
+        if (!rv) return *p->err ? -1 : fail(p, form, "");
+        skip_ws(p);
+        if (*p->s == '+') return fail(p, "facet_grid() takes one variable per "
+                                      "side; rowvar + rowvar2 ~ colvar is not "
+                                      "implemented", "");
+        if (expect(p, '~')) return fail(p, form, "");
+        char *cv = colname(p);
+        if (!cv) return *p->err ? -1 : fail(p, form, "");
+        skip_ws(p);
+        if (*p->s == '+') return fail(p, "facet_grid() takes one variable per "
+                                      "side; rowvar ~ colvar + colvar2 is not "
+                                      "implemented", "");
+        if (!strcmp(rv, ".")) { free(rv); rv = NULL; }
+        if (!strcmp(cv, ".")) { free(cv); cv = NULL; }
+        if (!rv && !cv)
+            return fail(p, "facet_grid(. ~ .) names no faceting variable; put a "
+                        "column on at least one side", "");
+        if (rv && cv && !strcmp(rv, cv))
+            return fail(p, "facet_grid() has `%s` on both sides; a grid needs two "
+                        "variables (facet_wrap(~var) is the one-way form)", rv);
+        spec->facet_grid = 1;
+        spec->facet_rowvar = rv;
+        spec->facet_colvar = cv;
+        skip_ws(p);
+        while (*p->s == ',') {
+            p->s++;
+            char *key = ident(p);
+            if (!key || expect(p, '='))
+                return fail(p, "facet_grid() supports scales=", "");
+            if (!strcmp(key, "scales")) {
+                /* per ggplot2's facet_grid: a freed x is shared down a COLUMN
+                 * and a freed y across a ROW, not per panel */
+                char *v = string_lit(p);
+                if (!v) v = ident(p);
+                if (!v) { free(key);
+                    return fail(p, "scales= expects fixed, free_x, free_y, or free", ""); }
+                if (!strcmp(v, "fixed")) { spec->free_x = 0; spec->free_y = 0; }
+                else if (!strcmp(v, "free_x")) { spec->free_x = 1; spec->free_y = 0; }
+                else if (!strcmp(v, "free_y")) { spec->free_x = 0; spec->free_y = 1; }
+                else if (!strcmp(v, "free"))   { spec->free_x = 1; spec->free_y = 1; }
+                else if (!strcmp(v, "free_colour") || !strcmp(v, "free_color")) {
+                    free(v); free(key);
+                    return fail(p, "scales=\"free_colour\" is a facet_wrap() "
+                                "extension (one colour scale per panel) and is not "
+                                "implemented for facet_grid(); use fixed, free_x, "
+                                "free_y or free", "");
+                } else { free(key);
+                    return fail(p, "scales=%s invalid; use fixed, free_x, free_y, "
+                                "or free", v); }
+                free(v);
+            } else if (!strcmp(key, "levels")) {
+                free(key);
+                return fail(p, "facet_grid() option `levels=` is not implemented "
+                            "(the row and column orders are the factor orders); "
+                            "facet_wrap(~var, levels=c(...)) takes it", "");
+            } else if (!strcmp(key, "ncol") || !strcmp(key, "nrow")) {
+                char msg[CP_ERRLEN];
+                snprintf(msg, sizeof msg, "facet_grid() option `%s=` is not "
+                         "implemented; the grid shape is the two variables' level "
+                         "counts (facet_wrap(~var, %s=) takes it)", key, key);
+                free(key);
+                return fail(p, "%s", msg);
+            } else {
+                char msg[CP_ERRLEN];
+                snprintf(msg, sizeof msg, "facet_grid() option `%s` not "
+                         "implemented; supported: scales=", key);
+                free(key);
+                return fail(p, "%s", msg);
+            }
             free(key);
             skip_ws(p);
         }
@@ -2126,8 +2225,6 @@ static int parse_term(P *p, PlotSpec *spec) {
         return expect(p, ')');
     }
     /* a few near-misses get a pointer instead of the whole menu */
-    if (!strcmp(name, "facet_grid"))
-        return fail(p, "facet_grid() is not implemented; facet_wrap(~var[, ncol=]) is", "");
     if (!strcmp(name, "geom_path") || !strcmp(name, "geom_step") || !strcmp(name, "geom_area")
         || !strcmp(name, "geom_ribbon") || !strcmp(name, "geom_violin") || !strcmp(name, "geom_crossbar")
         || !strcmp(name, "geom_pointrange") || !strcmp(name, "geom_bin2d") || !strcmp(name, "geom_hex")
@@ -2146,7 +2243,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                    "aes(), ggplot(), ggsave(); geom_point/jitter/line/smooth/col/bar/histogram/"
                    "boxplot/density/tile/raster/segment/rect/hline/vline/abline/errorbar/linerange/"
                    "text/label/text_repel/label_repel(), annotate(); labs()/xlab()/ylab()/ggtitle(); "
-                   "facet_wrap(~var); coord_flip/polar/cartesian(); scale_x|y_log10/log2/continuous/"
+                   "facet_wrap(~var), facet_grid(row ~ col); coord_flip/polar/cartesian(); scale_x|y_log10/log2/continuous/"
                    "discrete(), xlim(), ylim(), scale_x_genome(); scale_colour|fill_manual/brewer/"
                    "distiller/identity/gradient/gradient2/viridis/magma/...(); theme_bw/minimal/"
                    "classic/...(), theme(legend.position=), guides(); heatmap(), annotation(), "
@@ -2194,7 +2291,8 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
         if (parse_term(&p, spec)) return -1;
     }
 
-    int is_hm = spec->nhobjs > 0 && !spec->nlayers && !spec->x.col && !spec->facet_var;
+    int is_hm = spec->nhobjs > 0 && !spec->nlayers && !spec->x.col
+              && !spec->facet_var && !spec->facet_grid;
     int is_trk = spec->ntracks > 0;
     /* aes(fill=) is stored in spec->colour (fill and colour are one aesthetic
      * here), but scale_fill_*() writes spec->fill, which only heatmap mode
@@ -2247,7 +2345,7 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
     /* ---- mode mixing ---- */
     int any_tree = spec->tree_mode || spec->tree_tiplab || spec->tree_nodelab
                 || spec->tree_nodepoint || spec->tree_tippoint;
-    int any_grammar = spec->nlayers || spec->x.col || spec->facet_var;
+    int any_grammar = spec->nlayers || spec->x.col || spec->facet_var || spec->facet_grid;
     if (spec->chord_mode) {
         if (any_grammar || spec->nhobjs || spec->ntracks || any_tree || spec->polar
             || spec->nannos || spec->coord_flip)
@@ -2333,7 +2431,7 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
                             ? "legend() places a legend beside a heatmap() and cannot be "
                               "used with aes()/geom_*; in grammar mode the legend is "
                               "automatic — suppress it with guides(colour=\"none\")"
-                            : "heatmap() cannot be mixed with aes()/geom_*/facet_wrap()", "");
+                            : "heatmap() cannot be mixed with aes()/geom_*/facet_wrap()/facet_grid()", "");
             if (o->place.given)
                 return fail(&p, "annotation() under a grammar panel always draws "
                             "beneath it; placements (left_of/right_of/...) are "
@@ -2348,19 +2446,12 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
         }
         /* falls through to the grammar-mode checks below */
     } else if (spec->nhobjs > 0) {               /* matrix mode */
-        if (spec->has_manual) {
-            /* heatmap.c maps cell values through a continuous FillScale and never
-             * consults manual_cols, so this used to parse, run, exit 0 and render
-             * the default ramp -- the caller only found out by noticing the output
-             * never changed. Every other unsupported thing here errors with a menu,
-             * which is what makes a wrong guess cheap; silent acceptance breaks that
-             * contract, so refuse until a discrete heatmap fill exists. */
-            return fail(&p, "scale_*_manual() is not supported in heatmap mode: the "
-                            "heatmap fill is a continuous scale. Use "
-                            "scale_fill_gradient()/gradient2()/viridis()/jet(), or "
-                            "encode the categories as an annotation(), which does "
-                            "take a discrete palette and legend", "");
-        }
+        /* scale_*_manual() used to be refused outright here, because the cells
+         * were always mapped through a continuous FillScale. They no longer
+         * are: a categorical matrix takes the manual palette. Whether THIS
+         * matrix is categorical is only known once its file is read, so the
+         * pairing check (manual vs numbers, a ramp vs categories) lives in
+         * heatmap.c beside the data, and still errors rather than ignoring. */
         if (spec->hobjs[0].type != HM_HEATMAP)
             return fail(&p, "the first placed object must be a heatmap()", "");
         if (spec->polar || spec->coord_flip)

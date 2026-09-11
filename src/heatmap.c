@@ -62,6 +62,10 @@ typedef struct {
     Col *ann_col;                   /* data order */
     int *ann_ord;                   /* annotation: display slot -> data index */
     Factor *ann_f; Col *ann_pal;    /* annotation: discrete levels + colours */
+    /* What a DISCRETE legend keys off, whatever drew it: a categorical
+     * annotation's factor, or a categorical heatmap's level set. One pair of
+     * fields so the key is measured and drawn by one code path. */
+    Factor *key_f; Col *key_pal;
     const char *ann_name;           /* annotation: source column name */
     int ann_continuous;             /* annotation: numeric (own colorbar)? */
     double ann_dmin, ann_dmax;      /* annotation: continuous scale range */
@@ -100,6 +104,11 @@ static HClust *cluster_dim(const Matrix *m, int dim, int **ord, char *err) {
     *ord = cp_xmalloc(n * sizeof(int));
     memcpy(*ord, h->order, n * sizeof(int));
     return h;
+}
+
+static const char *cluster_word(ClusterMode c) {
+    return c == CL_ROWS ? "rows" : c == CL_COLS ? "cols" : c == CL_BOTH ? "both"
+         : c == CL_DIAGONAL ? "diagonal" : c == CL_SYMMETRIC ? "symmetric" : "none";
 }
 
 static int *identity(int n) {
@@ -142,23 +151,160 @@ static int *diagonal_cols(const Matrix *m, const int *roword, char *err) {
     return ord;
 }
 
-static Matrix *matrix_from_df(const DataFrame *df, char *err) {
+/* csv.c's is_na, which is static there. Repeated rather than exported because
+ * it is three string compares and the alternative is a header entry for a
+ * predicate nothing else needs. */
+static int cell_is_na(const char *s) {
+    return !*s || !strcmp(s, "NA") || !strcmp(s, "na") || !strcmp(s, "NaN");
+}
+
+static int cmp_lev_str(const void *a, const void *b) {
+    return strcmp(*(char *const *)a, *(char *const *)b);
+}
+static int cmp_lev_num(const void *a, const void *b) {
+    double d = *(const double *)a - *(const double *)b;
+    return d < 0 ? -1 : d > 0 ? 1 : 0;
+}
+
+/* One cell's category label, or NULL for NA. Numeric cells are formatted the
+ * way factor_make() formats a numeric factor's levels, so a 0/1/2 call matrix
+ * keys as "0"/"1"/"2" and its legend reads like the file. */
+static const char *cell_level(const Column *col, int r, char *buf, size_t cap) {
+    if (col->type == COL_STR)
+        return cell_is_na(col->str[r]) ? NULL : col->str[r];
+    if (isnan(col->num[r])) return NULL;
+    fmt_num(col->num[r], buf, cap);
+    return buf;
+}
+
+/* Fill a DISCRETE matrix: every value column's cells become level indices.
+ * Levels sort numerically when every value column is numeric (the coded-call
+ * matrix) and lexically otherwise, which is factor_make()'s rule and therefore
+ * R's. The level set is per-matrix here; render_heatmap() unifies it across
+ * heatmaps afterwards. */
+static int matrix_levels(Matrix *m, const DataFrame *df, int c0, int all_num, char *err) {
+    long cells = (long)df->nrow * m->nc;
+    int cap = cells < HM_MAXLEV ? (int)cells : HM_MAXLEV + 1;
+    char **lv = cp_xcalloc((size_t)cap, sizeof(char *));
+    double *uv = cp_xmalloc((size_t)cap * sizeof(double));
+    int n = 0;
+    for (int c = 0; c < m->nc; c++) {
+        const Column *col = &df->cols[c + c0];
+        for (int r = 0; r < df->nrow; r++) {
+            char buf[32];
+            const char *s = cell_level(col, r, buf, sizeof buf);
+            if (!s) continue;
+            int seen = 0;
+            for (int i = 0; i < n && !seen; i++)
+                seen = all_num ? uv[i] == col->num[r] : !strcmp(lv[i], s);
+            if (seen) continue;
+            if (n == cap) {
+                /* A categorical fill with this many keys is not a figure a
+                 * reader can use, and it is far more often a continuous matrix
+                 * that landed here by accident. Say both. */
+                snprintf(err, CP_ERRLEN, "discrete heatmap fill: the matrix has more than "
+                         "%d distinct values (the cap, as for scale_*_manual); a "
+                         "categorical key that long is unreadable -- collapse the rare "
+                         "categories, or drop discrete=TRUE if the values are measurements",
+                         HM_MAXLEV);
+                free(lv); free(uv);
+                return -1;
+            }
+            if (all_num) uv[n] = col->num[r];
+            else lv[n] = cp_xstrdup(s);
+            n++;
+        }
+    }
+    if (n == 0) {
+        snprintf(err, CP_ERRLEN, "discrete heatmap fill: every cell of the matrix is NA, "
+                 "so there are no categories to colour");
+        free(lv); free(uv);
+        return -1;
+    }
+    if (all_num) {
+        qsort(uv, n, sizeof(double), cmp_lev_num);
+        for (int i = 0; i < n; i++) { lv[i] = cp_xmalloc(32); fmt_num(uv[i], lv[i], 32); }
+    } else {
+        qsort(lv, n, sizeof(char *), cmp_lev_str);
+    }
+    m->discrete = 1; m->nlev = n; m->levels = lv;
+    /* Numeric codes are looked up by VALUE, not by their formatted label: two
+     * near-equal doubles can print the same and would otherwise collapse into
+     * one level while the key still listed two. */
+    for (int c = 0; c < m->nc; c++) {
+        const Column *col = &df->cols[c + c0];
+        for (int r = 0; r < df->nrow; r++) {
+            char buf[32];
+            const char *s = cell_level(col, r, buf, sizeof buf);
+            double slot = NAN;
+            for (int i = 0; s && i < n; i++)
+                if (all_num ? uv[i] == col->num[r] : !strcmp(lv[i], s)) { slot = i; break; }
+            m->v[(size_t)r * m->nc + c] = slot;
+        }
+    }
+    free(uv);
+    return 0;
+}
+
+/* `want_discrete`: 0 = read the cell types (text => categorical), 1 =
+ * heatmap(discrete=TRUE) (numeric codes ARE categories), -1 =
+ * heatmap(discrete=FALSE) (numbers, so text is the error it always was). */
+static Matrix *matrix_from_df(const DataFrame *df, int want_discrete, char *err) {
     int c0 = df->ncol && df->cols[0].type == COL_STR ? 1 : 0;
-    Matrix *m = cp_xmalloc(sizeof *m);
+    Matrix *m = cp_xcalloc(1, sizeof *m);
     m->nr = df->nrow;
     m->nc = df->ncol - c0;
-    if (m->nc < 1) { snprintf(err, CP_ERRLEN, "matrix csv has no numeric columns"); free(m); return NULL; }
+    if (m->nc < 1) {
+        /* A one-column categorical file is the shape people reach for first,
+         * and "no numeric columns" reads as nonsense against it: the single
+         * column was eaten as row names. */
+        snprintf(err, CP_ERRLEN, c0 ? "matrix csv has only one column, and a leading "
+                 "text column is read as the row names; a heatmap needs at least one "
+                 "value column beside them"
+                 : "matrix csv has no numeric columns");
+        free(m); return NULL;
+    }
     m->rn = c0 ? df->cols[0].str : NULL;
     m->cn = cp_xmalloc(m->nc * sizeof(char *));
     m->v = cp_xmalloc((size_t)m->nr * m->nc * sizeof(double));
+    int nnum = 0, nstr = 0, first_str = -1, first_num = -1;
     for (int c = 0; c < m->nc; c++) {
         const Column *col = &df->cols[c + c0];
-        if (col->type != COL_NUM) {
-            snprintf(err, CP_ERRLEN, "matrix column `%s` is not numeric", col->name);
+        m->cn[c] = col->name;
+        if (col->type == COL_NUM) { nnum++; if (first_num < 0) first_num = c; }
+        else { nstr++; if (first_str < 0) first_str = c; }
+    }
+    /* The fill kind. Text cells cannot be a continuous ramp, so they decide it
+     * on their own; numbers stay numbers unless discrete=TRUE says the codes
+     * are categories. A matrix that is PART text is the ambiguous one -- either
+     * a stray word in a numeric column or a category column in a text matrix,
+     * and guessing gets one of those silently wrong -- so it names both sides
+     * and stops. */
+    int discrete = want_discrete == 1 || (want_discrete == 0 && nstr > 0);
+    if (want_discrete != 1 && nstr > 0 && nnum > 0) {
+        snprintf(err, CP_ERRLEN, "matrix mixes numeric and text columns (`%s` is numeric, "
+                 "`%s` is text): a heatmap fill is either a continuous ramp over numbers "
+                 "or a discrete key over categories. Fix the stray values, or say "
+                 "heatmap(discrete=TRUE) to read every cell as a category",
+                 m->cn[first_num], m->cn[first_str]);
+        free(m->cn); free(m->v); free(m);
+        return NULL;
+    }
+    if (!discrete && nstr > 0) {
+        snprintf(err, CP_ERRLEN, "matrix column `%s` is not numeric%s", m->cn[first_str],
+                 want_discrete == -1 ? " (heatmap(discrete=FALSE) asked for numbers)" : "");
+        free(m->cn); free(m->v); free(m);
+        return NULL;
+    }
+    if (discrete) {
+        if (matrix_levels(m, df, c0, nnum == m->nc, err)) {
             free(m->cn); free(m->v); free(m);
             return NULL;
         }
-        m->cn[c] = col->name;
+        return m;
+    }
+    for (int c = 0; c < m->nc; c++) {
+        const Column *col = &df->cols[c + c0];
         for (int r = 0; r < df->nrow; r++)
             m->v[(size_t)r * m->nc + c] = col->num[r];
     }
@@ -170,6 +316,16 @@ static Matrix *matrix_from_df(const DataFrame *df, char *err) {
 static void cell_label(double v, char *buf, size_t cap) {
     if (fabs(v - round(v)) <= 1e-9 * fabs(v)) fmt_num(v, buf, cap);
     else snprintf(buf, cap, "%.3g", v);
+}
+
+/* What labels= prints in a cell: the category for a discrete fill, the number
+ * for a continuous one. A categorical matrix printing its level INDEX -- 0, 1,
+ * 2 -- would be a caption for the palette rather than the data. */
+static const char *cell_text(const Matrix *m, double v, char *buf, size_t cap) {
+    int k = (int)v;
+    if (m->discrete) return k >= 0 && k < m->nlev ? m->levels[k] : "NA";
+    cell_label(v, buf, cap);
+    return buf;
 }
 
 static double text_w(cairo_t *cr, double size, const char *s) {
@@ -303,7 +459,7 @@ static double legend_block_h(const RObj *r, const RObj *tg, const char *title,
                              double baseH, double ch_pt) {
     double titleSpace = title ? (baseH + TXT_GAP) / ch_pt : 0;
     double content = r->leg_discrete
-        ? tg->ann_f->nlev * LEG_GRID / ch_pt + (tg->ann_f->nlev - 1) * LEG_GAP / ch_pt
+        ? tg->key_f->nlev * LEG_GRID / ch_pt + (tg->key_f->nlev - 1) * LEG_GAP / ch_pt
         : LEG_LEN / ch_pt;
     return content + titleSpace;
 }
@@ -357,7 +513,7 @@ static void draw_one_legend(GTable *T, const RObj *r, const RObj *tg,
     double topY, leftX;
 
     if (r->leg_discrete) {                          /* categorical key */
-        Factor *f = tg->ann_f; Col *pal = tg->ann_pal;
+        Factor *f = tg->key_f; Col *pal = tg->key_pal;
         double gw = LPTX(LEG_GRID), gh = LPTY(LEG_GRID), gap = LPTY(LEG_GAP);
         double topEdge = blockTop - titleSpace;
         double sx = pk == PL_RIGHT_OF ? 1 + LPTX(gapx) : 0 - LPTX(gapx) - gw;
@@ -490,6 +646,115 @@ static double max_band_at(cairo_t *cr, const RObj *ro, int n, Side side, double 
     return best;
 }
 
+/* Compare two level LABELS as numbers. Only used when every label in the
+ * figure parses as one, so the ordering is a total order. */
+static int cmp_lab_num(const void *a, const void *b) {
+    double x = strtod(*(char *const *)a, NULL), y = strtod(*(char *const *)b, NULL);
+    return x < y ? -1 : x > y ? 1 : 0;
+}
+
+/* Unify the level sets of the figure's discrete heatmaps onto ONE vocabulary
+ * and remap every matrix onto it, so a stacked pair of call matrices shares a
+ * single key and "MUT" is the same colour in both. The union sorts numerically
+ * when every label is a number (a 0/1/2 code matrix) and lexically otherwise,
+ * which is factor_make()'s rule -- so a lone heatmap keeps the order it
+ * already had. */
+static int unify_levels(RObj *ro, int n, Factor *key, char *err) {
+    char *lab[HM_MAXLEV];
+    int nl = 0;
+    for (int i = 0; i < n; i++) {
+        if (ro[i].o->type != HM_HEATMAP || !ro[i].m->discrete) continue;
+        Matrix *m = ro[i].m;
+        for (int k = 0; k < m->nlev; k++) {
+            int seen = 0;
+            for (int j = 0; j < nl && !seen; j++) seen = !strcmp(lab[j], m->levels[k]);
+            if (seen) continue;
+            if (nl == HM_MAXLEV) {
+                snprintf(err, CP_ERRLEN, "the heatmaps together have more than %d distinct "
+                         "values; one discrete key describes the whole figure and a key "
+                         "that long is unreadable", HM_MAXLEV);
+                return -1;
+            }
+            lab[nl++] = m->levels[k];
+        }
+    }
+    int numeric = 1;
+    for (int j = 0; j < nl && numeric; j++) {
+        char *e;
+        strtod(lab[j], &e);
+        if (e == lab[j] || *e) numeric = 0;
+    }
+    qsort(lab, nl, sizeof(char *), numeric ? cmp_lab_num : cmp_lev_str);
+    key->nlev = nl;
+    key->idx = NULL;                       /* a key, not a per-row factor */
+    key->levels = cp_xmalloc((size_t)nl * sizeof(char *));
+    memcpy(key->levels, lab, (size_t)nl * sizeof(char *));
+    for (int i = 0; i < n; i++) {
+        if (ro[i].o->type != HM_HEATMAP || !ro[i].m->discrete) continue;
+        Matrix *m = ro[i].m;
+        int map[HM_MAXLEV];
+        for (int k = 0; k < m->nlev; k++) {
+            map[k] = 0;
+            for (int j = 0; j < nl; j++)
+                if (!strcmp(lab[j], m->levels[k])) { map[k] = j; break; }
+        }
+        for (long c = 0; c < (long)m->nr * m->nc; c++)
+            if (!isnan(m->v[c])) m->v[c] = map[(int)m->v[c]];
+        m->nlev = nl; m->levels = key->levels;
+    }
+    return 0;
+}
+
+/* The palette a discrete fill paints with: ggplot's hue wheel, then whatever
+ * scale_fill_manual(values=) says over the top. A NAMED values= list maps the
+ * levels it names and leaves the rest on their hue colour -- so a two-category
+ * highlight does not have to enumerate the other eight. A POSITIONAL list is
+ * read level by level and must be long enough, because a short one would paint
+ * the tail levels silently, which is the failure the grammar-mode scale
+ * already refuses. */
+static int discrete_palette(const PlotSpec *spec, const Factor *key, Col *pal, char *err) {
+    hue_palette(key->nlev, pal);
+    if (!spec->has_manual) return 0;
+    int named = spec->n_manual > 0 && spec->manual_names[0] != NULL;
+    if (!named) {
+        if (spec->n_manual < key->nlev) {
+            if (spec->brewer_disc)
+                snprintf(err, CP_ERRLEN, "palette `%s` has %d colours; the matrix has %d "
+                         "categories (`%s`, ...); pick a larger palette or name the "
+                         "colours with scale_fill_manual(values=)", spec->brewer_disc,
+                         spec->n_manual, key->nlev, key->levels[0]);
+            else
+                snprintf(err, CP_ERRLEN, "scale_fill_manual(values=) gives %d colours; the "
+                         "matrix has %d categories (`%s`, ...); give one colour per "
+                         "category, or name them -- values=c(\"%s\"=\"red\", ...) -- and "
+                         "the rest keep the default palette", spec->n_manual, key->nlev,
+                         key->levels[0], key->levels[0]);
+            return -1;
+        }
+        for (int i = 0; i < key->nlev; i++) pal[i] = spec->manual_cols[i];
+        return 0;
+    }
+    for (int i = 0; i < key->nlev; i++)
+        for (int k = 0; k < spec->n_manual; k++)
+            if (spec->manual_names[k] && !strcmp(spec->manual_names[k], key->levels[i])) {
+                pal[i] = spec->manual_cols[k];
+                break;
+            }
+    return 0;
+}
+
+/* One cell's fill: a level index into the discrete palette, or the shared
+ * continuous ramp. NA is wheatmap's grey either way. */
+static Col hm_cell_col(const Matrix *m, const Col *pal, const FillScale *fs,
+                       double v, double dmin, double dmax) {
+    if (isnan(v)) return C_NA;
+    if (m->discrete) {
+        int k = (int)v;
+        return k >= 0 && k < m->nlev ? pal[k] : C_NA;
+    }
+    return fill_map_value(fs, v, dmin, dmax);
+}
+
 /* The label bands falling BETWEEN placed objects, in points, keyed by the
  * boundary each sits on. Depends only on the normalized rects and the text
  * metrics -- never on the canvas size -- which is what lets auto-fit ask for
@@ -550,7 +815,23 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             const char *path = o->data ? o->data : spec->data_path;
             DataFrame *df = df_read_csv(path, err);
             if (!df) return -1;
-            if (!(ro[i].m = matrix_from_df(df, err))) return -1;
+            if (!(ro[i].m = matrix_from_df(df, o->discrete, err))) return -1;
+            /* Ward's linkage is Euclidean: it needs a distance between two
+             * cells, and a category has none. Clustering the LEVEL INDICES
+             * would be arithmetic on arbitrary labels -- "MUT" nearer "WT"
+             * than "AMP" because of how they sort -- which is the kind of
+             * confident wrong answer a reader cannot see. cluster=diagonal is
+             * exempt: it matches column names to row names and computes no
+             * distance at all. */
+            if (ro[i].m->discrete && o->cluster != CL_NONE && o->cluster != CL_DIAGONAL) {
+                snprintf(err, CP_ERRLEN, "cluster=%s needs numeric cells: this matrix is "
+                         "categorical (%d levels: `%s`, ...), and there is no distance "
+                         "between two categories to cluster on. Use cluster=none, "
+                         "cluster=diagonal (columns follow the row names), or order the "
+                         "rows in the file", cluster_word(o->cluster), ro[i].m->nlev,
+                         ro[i].m->levels[0]);
+                return -1;
+            }
             ro[i].nr = ro[i].m->nr;
             ro[i].nc = ro[i].m->nc;
             /* a label side on a matrix with nothing to label drew nothing and
@@ -722,6 +1003,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                 for (int r = 0; r < df->nrow; r++)
                     ro[i].ann_col[r] = f->idx[r] >= 0 ? pal[f->idx[r]] : C_NA;
                 ro[i].ann_f = f; ro[i].ann_pal = pal;   /* for a discrete legend */
+                ro[i].key_f = f; ro[i].key_pal = pal;
             } else {
                 double lo = 1e300, hi = -1e300;
                 for (int r = 0; r < df->nrow; r++) {
@@ -815,6 +1097,10 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                              "heatmap or an annotation");
                 return -1;
             }
+            /* A categorical heatmap's legend is a KEY, not a colourbar --
+             * the same key an annotation gets, down the same code path. */
+            if (ro[ro[i].target].o->type == HM_HEATMAP && ro[ro[i].target].m->discrete)
+                ro[i].leg_discrete = 1;
             if (ro[i].leg_discrete && (pl->kind == PL_TOP_OF || pl->kind == PL_BENEATH)) {
                 snprintf(err, CP_ERRLEN, "discrete legends must be vertical; use right_of()/left_of()");
                 return -1;
@@ -906,6 +1192,54 @@ int render_heatmap(const PlotSpec *spec, const char *out,
      * reads dmin/dmax so it follows the pinned domain for free. */
     if (spec->fill.has_limits) { dmin = spec->fill.lim_lo; dmax = spec->fill.lim_hi; }
 
+    /* ---- the discrete fill: one vocabulary and one palette for the figure ----
+     *
+     * Whether a matrix is categorical is only knowable once its file is read,
+     * so the scale-vs-data pairing is checked here rather than in the parser:
+     * a ramp over categories and a manual palette over measurements are both
+     * refused, by name, instead of rendering something plausible. */
+    Col hm_pal[HM_MAXLEV];
+    Factor hm_key = {0, NULL, NULL};
+    int ndisc = 0, ncont = 0, i_disc = -1, i_cont = -1;
+    for (int i = 0; i < n; i++) {
+        if (ro[i].o->type != HM_HEATMAP) continue;
+        if (ro[i].m->discrete) { ndisc++; if (i_disc < 0) i_disc = i; }
+        else { ncont++; if (i_cont < 0) i_cont = i; }
+    }
+    if (ndisc && ncont) {
+        /* Two heatmaps share one fill scale here, and a figure cannot carry a
+         * ramp and a key at once -- one of them would silently get the other's
+         * colours. */
+        snprintf(err, CP_ERRLEN, "heatmap `%s` is categorical and heatmap `%s` is numeric; "
+                 "the heatmaps in one figure share a single fill scale, so they must be "
+                 "the same kind. Give the numeric one categories, or read the categorical "
+                 "one as numbers", ro[i_disc].o->name, ro[i_cont].o->name);
+        return -1;
+    }
+    if (ndisc) {
+        if (spec->has_fill) {
+            snprintf(err, CP_ERRLEN, "scale_fill_gradient()/viridis()/... is a continuous "
+                     "ramp and this matrix is categorical; colour the %d categories with "
+                     "scale_fill_manual(values=c(\"%s\"=\"...\", ...)) or "
+                     "scale_fill_brewer(palette=), or read the cells as numbers with "
+                     "heatmap(discrete=FALSE)", ro[i_disc].m->nlev, ro[i_disc].m->levels[0]);
+            return -1;
+        }
+        if (unify_levels(ro, n, &hm_key, err)) return -1;
+        if (discrete_palette(spec, &hm_key, hm_pal, err)) return -1;
+        for (int i = 0; i < n; i++)
+            if (ro[i].o->type == HM_HEATMAP) { ro[i].key_f = &hm_key; ro[i].key_pal = hm_pal; }
+    } else if (spec->has_manual) {
+        /* The old parser-level refusal, now that there is something to refuse
+         * FOR: a manual palette is a discrete scale, and these cells are
+         * measurements. */
+        snprintf(err, CP_ERRLEN, "scale_*_manual()/scale_*_brewer() "
+                 "is a discrete palette, and this matrix is numeric. Use "
+                 "scale_fill_gradient()/gradient2()/viridis()/jet() for a ramp, or "
+                 "heatmap(discrete=TRUE) to read the numbers as category codes");
+        return -1;
+    }
+
     /* ---- outer gtable: MEASURED chrome, canvas as the null cell ----
      * wheatmap's auto_margin: measure every outward-facing label and
      * reserve it as a page margin so nothing clips at the device edge.
@@ -974,7 +1308,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
         double across;                       /* extent perpendicular to bar */
         if (r->leg_discrete) {
             double wmax = 0;
-            Factor *f = ro[r->target].ann_f;
+            Factor *f = ro[r->target].key_f;
             for (int k = 0; k < f->nlev; k++) {
                 double tw = text_w(cr, SZ_AXIS_TEXT, f->levels[k]);
                 if (tw > wmax) wmax = tw;
@@ -1246,8 +1580,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                     uint32_t *row = (uint32_t *)(buf + (size_t)rr * stride);
                     for (int cc = 0; cc < m->nc; cc++) {
                         double v = m->v[(size_t)r->roword[rr] * m->nc + r->coword[cc]];
-                        row[cc] = isnan(v) ? col_argb(C_NA)
-                                : col_argb(fill_map_value(&spec->fill, v, dmin, dmax));
+                        row[cc] = col_argb(hm_cell_col(m, hm_pal, &spec->fill, v, dmin, dmax));
                     }
                 }
                 g = gt_add(T, G_IMAGE, CR, CC, CR, CC);
@@ -1262,7 +1595,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                         double v = m->v[(size_t)r->roword[rr] * m->nc + r->coword[cc]];
                         g = gt_add(T, G_RECT, CR, CC, CR, CC);
                         g->sub = 1;
-                        g->col = isnan(v) ? C_NA : fill_map_value(&spec->fill, v, dmin, dmax);
+                        g->col = hm_cell_col(m, hm_pal, &spec->fill, v, dmin, dmax);
                         g->x0 = r->l + cc * cw; g->x1 = g->x0 + cw;
                         g->y1 = r->b + r->h - rr * chh; g->y0 = g->y1 - chh;
                     }
@@ -1433,8 +1766,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             for (int cc = 0; cc < m->nc; cc++) {
                 double v = m->v[(size_t)r->roword[rr] * m->nc + r->coword[cc]];
                 if (isnan(v)) continue;
-                cell_label(v, buf, sizeof buf);
-                double tw = text_w(cr, SZ_AXIS_TEXT, buf);
+                double tw = text_w(cr, SZ_AXIS_TEXT, cell_text(m, v, buf, sizeof buf));
                 if (tw > maxw) maxw = tw;
             }
         if (maxw <= 0) continue;          /* all-NA matrix */
@@ -1451,12 +1783,12 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             for (int cc = 0; cc < m->nc; cc++) {
                 double v = m->v[(size_t)r->roword[rr] * m->nc + r->coword[cc]];
                 if (isnan(v)) continue;   /* as geom_text() skips NA labels */
-                cell_label(v, buf, sizeof buf);
-                Col f = fill_map_value(&spec->fill, v, dmin, dmax);
+                const char *lab = cell_text(m, v, buf, sizeof buf);
+                Col f = hm_cell_col(m, hm_pal, &spec->fill, v, dmin, dmax);
                 double lum = 0.299 * f.r + 0.587 * f.g + 0.114 * f.b;
                 Col dark = {0.1, 0.1, 0.1};
                 g = gt_add(T, G_TEXT, CR, CC, CR, CC);
-                g->str = cp_xstrdup(buf); g->size = sz;
+                g->str = cp_xstrdup(lab); g->size = sz;
                 g->col = lum < 0.5 ? C_WHITE : dark;
                 g->tx = r->l + (cc + 0.5) * (r->w / m->nc);
                 g->ty = r->b + r->h - (rr + 0.5) * (r->h / m->nr);

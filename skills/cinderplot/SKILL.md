@@ -196,7 +196,8 @@ for.
   (legacy, banding is an artefact), plus `gradient`/`gradient2` for your own
   endpoints,
   `scale_x_genome("seqinfo.tsv.gz")`, `ideogram("cytoband.tsv.gz")`.
-- **also**: `facet_wrap(~v[, levels=][, scales=][, ncol=][, nrow=])`, `coord_flip()`, `guides(colour="none")`
+- **also**: `facet_wrap(~v[, levels=][, scales=][, ncol=][, nrow=])`,
+  `facet_grid(row ~ col[, scales=])`, `coord_flip()`, `guides(colour="none")`
   (per aesthetic: `guides(size="none")` keeps the colour key; `--no-legend`
   and `theme(legend.position="none")` drop them all), `labs()`/`xlab()`/`ylab()`/`ggtitle()` — `labs()` also
   takes `subtitle=` (under the title) and `caption=` (bottom right) — and
@@ -252,6 +253,20 @@ rest, so column 3 means a different thing in each panel — that is ggplot2's
 `drop = TRUE`. Histograms re-bin per panel under `free_x`, so bin widths differ
 between panels. `scale_x_genome()` cannot be freed (use `regions()` in track
 mode for several windows).
+
+`facet_grid(rowvar ~ colvar)` is the two-way grid: the row variable's levels
+become panel rows, the column variable's become panel columns, and **every
+(row, column) combination gets a panel, including the ones the data never
+uses** — which is the reason to ask for a grid rather than a wrap, since the
+gap is the finding. Column strips run along the top, row strips down the
+right (rotated, ggplot2-style), and the axes sit only on the outer edges: the
+y axis on the left column, the x axis under the bottom row. Either side may
+be `.` — `facet_grid(. ~ col)` is one row of panels, `facet_grid(row ~ .)`
+one column. `scales=` takes `fixed` (default), `free_x`, `free_y` and `free`
+with ggplot2's facet_grid meaning: a freed x is shared down a COLUMN and a
+freed y across a ROW, so the axes stay on the edges. The shape is the two
+level counts, so `ncol=`/`nrow=` are refused; so are `levels=` (use the
+factor order) and `scales="free_colour"` (a facet_wrap extension).
 
 Crowded discrete tick labels **rotate automatically** (45°, then 90°) when the
 measured labels do not fit the panel. Override with `scale_x_discrete(angle=N)`
@@ -333,8 +348,37 @@ destroys it, so use `diagonal` (columns follow the row names, no clustering) or
 group *and* the diagonal survives). Both need row names, and columns no row
 claims are appended in input order.
 
-The heatmap's own fill is **continuous only** — for a categorical grid use
-`geom_tile()` in grammar mode, which takes a discrete fill and a keyed legend.
+**Discrete fill.** A matrix whose cells are **text** (a mutation/call matrix, a
+label grid, a per-sample class assignment) is categorical: each distinct value
+gets a colour, and `legend()` draws a key — one swatch and label per level —
+instead of a colourbar. Nothing has to be said to switch it on; the cell types
+decide. `heatmap(discrete=TRUE)` is the opt-in for a matrix of numeric **codes**
+(a 0/1/2 call matrix), which is otherwise indistinguishable from measurements,
+and `discrete=FALSE` pins the continuous reading. Levels sort as R's factors do:
+lexically for text, numerically for codes. A matrix that is *part* text and part
+numeric is ambiguous and errors, naming a column of each kind.
+
+`scale_fill_manual(values=c("MUT"="#b2182b", "WT"="grey90"))` colours the levels
+by name, and levels it does not name keep their default hue — so a two-category
+highlight need not enumerate the rest. A positional
+`values=c("red","blue",...)` is read level by level and must be at least as long
+as the level count (a short list errors with both counts); `scale_fill_brewer(palette=)`
+works the same way. A *continuous* `scale_fill_*()` over a categorical matrix
+errors, as does a manual palette over a numeric one. The cap is 64 levels.
+
+Two things a discrete fill does **not** do. `cluster=rows|cols|both|symmetric`
+errors: ward.D2 is Euclidean and there is no distance between two categories, so
+the alternatives are `cluster=none`, `cluster=diagonal` (which matches column
+names to row names and computes no distance), or ordering the file yourself.
+And every heatmap in one figure shares a single fill scale, so a categorical one
+and a numeric one cannot be stacked — several categorical heatmaps can, and
+share one key, a colour meaning the same in all of them. `labels=on` prints the
+category rather than a number. Remember the leading-text-column rule: the first
+column is read as row names, so a text matrix meant to be all data loses its
+first column to them — give it a name column.
+
+Grammar mode's `geom_tile()` remains the alternative when the layout wants
+facets or continuous axes rather than clustering and anchor-placed objects.
 
 ### 3. Newick tree — a hierarchy you already have
 
@@ -477,7 +521,7 @@ Every unimplemented verb, aesthetic or option fails with a message that
 **enumerates the supported subset**, so a wrong guess costs one fast run and
 returns a menu rather than a syntax error.
 
-Known absent: `facet_grid()`, the `geom_smooth()` confidence ribbon (`se=TRUE`),
+Known absent: the `geom_smooth()` confidence ribbon (`se=TRUE`),
 an arbitrary `theme()` (presets only), dodged bars (stacking exists), and
 statistical transformations beyond binning, density and loess.
 
@@ -506,8 +550,9 @@ statistical transformations beyond binning, density and loess.
 6. **A long default axis or legend title can squeeze the panel.** The default
    title is the verbatim `aes()` text; set it with `labs()` if it is long.
 7. **Caps error instead of lying.** `scale_*_manual(values=)` holds 64
-   colours; more errors, and a positional list shorter than the factor errors
-   naming both counts. There is no discrete-category or legend-level cap any
+   colours; more errors, and a positional list shorter than the factor (or the
+   heatmap's category count) errors naming both counts. A discrete heatmap fill
+   caps at 64 levels for the same reason. There is no discrete-category or legend-level cap any
    more. Still hard limits: 8 layers, 12 tracks, 16 heatmap objects, 256
    breaks/labels. A legend stack taller than the figure grows the auto-fit
    canvas; under an explicit `--size` it warns before clipping.
@@ -520,3 +565,9 @@ statistical transformations beyond binning, density and loess.
    text: ~9 s and 0.35 MB. Aggregating geoms do not need it.
 10. **The default font is Arial.** If it is missing, Cairo substitutes and the
     figure will not match the gallery.
+11. **A categorical heatmap cannot be clustered.** Text cells (or
+    `heatmap(discrete=TRUE)`) switch the fill to a discrete key, and `cluster=`
+    then errors: there is no Euclidean distance between two categories. Use
+    `cluster=diagonal`, `cluster=none`, or order the rows in the file. The
+    first column is still read as row names, so an all-text matrix meant to be
+    all data loses its first column.

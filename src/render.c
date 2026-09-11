@@ -5,7 +5,9 @@
  * space values (ggplot semantics). Layers render in spec order.
  *
  * Facet layout follows ggplot2's facet_wrap (dims = rev(n2mfrow(n)),
- * shared scales, strips above panels, staircase axes). */
+ * shared scales, strips above panels, staircase axes) and facet_grid
+ * (one panel per row x column combination, the empty ones included,
+ * column strips on top and rotated row strips on the right). */
 #include "cinderplot.h"
 #include <cairo-pdf.h>
 #include <math.h>
@@ -931,8 +933,54 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             return -1;
         }
     }
+    /* One level per PANEL. facet_wrap gets the facet column's factor straight;
+     * facet_grid gets a synthetic row-major one whose levels are every (row,
+     * col) pair, so the combinations the data never uses still own a panel and
+     * every panel-indexed array below (histogram bins, bar counts, per-panel
+     * scales) is sized and addressed exactly as it was for a wrap. */
     Factor *ff = NULL;
-    if (spec->facet_var) {
+    Factor *rowf = NULL, *colf = NULL;    /* facet_grid sides; NULL = "." */
+    const int grid = spec->facet_grid;
+    if (grid) {
+        if (spec->facet_rowvar) {
+            const Column *rc = df_col(df, spec->facet_rowvar);
+            if (!rc) { snprintf(err, CP_ERRLEN, "column `%s` not found", spec->facet_rowvar); return -1; }
+            rowf = factor_make(df, rc);
+            if (rowf->nlev < 1) {
+                snprintf(err, CP_ERRLEN, "facet_grid() row column `%s` has no values",
+                         spec->facet_rowvar);
+                return -1;
+            }
+        }
+        if (spec->facet_colvar) {
+            const Column *cc2 = df_col(df, spec->facet_colvar);
+            if (!cc2) { snprintf(err, CP_ERRLEN, "column `%s` not found", spec->facet_colvar); return -1; }
+            colf = factor_make(df, cc2);
+            if (colf->nlev < 1) {
+                snprintf(err, CP_ERRLEN, "facet_grid() column column `%s` has no values",
+                         spec->facet_colvar);
+                return -1;
+            }
+        }
+        int gnr = rowf ? rowf->nlev : 1, gnc = colf ? colf->nlev : 1;
+        ff = cp_xcalloc(1, sizeof *ff);
+        ff->nlev = gnr * gnc;
+        ff->levels = cp_xmalloc((size_t)ff->nlev * sizeof(char *));
+        for (int i = 0; i < gnr; i++)
+            for (int j = 0; j < gnc; j++) {
+                char lb[256];
+                if (rowf && colf)
+                    snprintf(lb, sizeof lb, "%s, %s", rowf->levels[i], colf->levels[j]);
+                else
+                    snprintf(lb, sizeof lb, "%s", rowf ? rowf->levels[i] : colf->levels[j]);
+                ff->levels[i * gnc + j] = cp_xstrdup(lb);
+            }
+        ff->idx = cp_xmalloc((size_t)(df->nrow ? df->nrow : 1) * sizeof(int));
+        for (int r = 0; r < df->nrow; r++) {
+            int i = rowf ? rowf->idx[r] : 0, j = colf ? colf->idx[r] : 0;
+            ff->idx[r] = (i < 0 || j < 0) ? -1 : i * gnc + j;
+        }
+    } else if (spec->facet_var) {
         const Column *fc = df_col(df, spec->facet_var);
         if (!fc) { snprintf(err, CP_ERRLEN, "column `%s` not found", spec->facet_var); return -1; }
         ff = factor_make(df, fc);
@@ -960,7 +1008,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             || spec->nannos || spec->nhobjs) {
             snprintf(err, CP_ERRLEN, "coord_polar() is not implemented with "
                      "%s", genome_x ? "scale_x_genome()"
-                     : ff ? "facet_wrap()"
+                     : ff ? (grid ? "facet_grid()" : "facet_wrap()")
                      : (spec->free_x || spec->free_y) ? "free scales"
                      : spec->nannos ? "annotate()" : "annotation()");
             return -1;
@@ -1098,7 +1146,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
      * the pairs the figure exists to compare into different rows, and no
      * levels= ordering can fix that. ---- */
     int npan = ff ? ff->nlev : 1, ncolp, nrowp;
-    if (spec->facet_ncol > 0 && spec->facet_nrow > 0) {
+    if (grid) {                     /* the two factors ARE the shape */
+        ncolp = colf ? colf->nlev : 1;
+        nrowp = rowf ? rowf->nlev : 1;
+    } else if (spec->facet_ncol > 0 && spec->facet_nrow > 0) {
         ncolp = spec->facet_ncol; nrowp = spec->facet_nrow;
         if (ncolp * nrowp < npan) {
             snprintf(err, CP_ERRLEN, "facet_wrap(ncol=%d, nrow=%d) holds %d panels "
@@ -1118,9 +1169,40 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         ncolp = (int)ceil(sqrt((double)npan));
         nrowp = (npan + ncolp - 1) / ncolp;
     }
-    if (2 * ncolp + 6 > GT_MAXDIM || 3 * nrowp + 6 > GT_MAXDIM) {
-        snprintf(err, CP_ERRLEN, "too many facet panels (%d)", npan);
+    /* The outer gtable is 4 rows per panel row plus 7 of chrome, and 2 columns
+     * per panel column plus 7 (the extra one is facet_grid's right-hand strip);
+     * both have to fit GT_MAXDIM. The old guard counted 3 rows per panel row,
+     * which let facet_wrap(~v, ncol=1) with 63+ levels write past rowh[]. */
+    int maxrowp = (GT_MAXDIM - 7) / 4;                       /* 4n + 6 rows, +1 for
+                                                              * the free_colour row */
+    int maxcolp = (GT_MAXDIM - 6 - (grid ? 1 : 0)) / 2;
+    if (ncolp > maxcolp || nrowp > maxrowp) {
+        snprintf(err, CP_ERRLEN, "too many facet panels (%d): a %d x %d layout "
+                 "exceeds the %d rows by %d columns the grid can hold",
+                 npan, nrowp, ncolp, maxrowp, maxcolp);
         return -1;
+    }
+
+    /* facet_grid free scales are per COLUMN (x) and per ROW (y), as ggplot2's
+     * facet_grid does it: every panel down a column shares one x range. Two
+     * group factors say so -- they map a data row to its panel column / panel
+     * row -- and the per-panel training below filters through them. Under
+     * facet_wrap each panel is its own group, XG/YG are the identity, and the
+     * code runs exactly as it did. */
+    const Factor *xgf = ff, *ygf = ff;
+#define XG(p) (grid ? (p) % ncolp : (p))
+#define YG(p) (grid ? (p) / ncolp : (p))
+    if (grid && (spec->free_x || spec->free_y)) {
+        Factor *gx = cp_xcalloc(1, sizeof *gx), *gy = cp_xcalloc(1, sizeof *gy);
+        gx->nlev = ncolp; gy->nlev = nrowp;
+        gx->levels = gy->levels = NULL;       /* only idx[] is ever read */
+        gx->idx = cp_xmalloc((size_t)(df->nrow ? df->nrow : 1) * sizeof(int));
+        gy->idx = cp_xmalloc((size_t)(df->nrow ? df->nrow : 1) * sizeof(int));
+        for (int r = 0; r < df->nrow; r++) {
+            gx->idx[r] = ff->idx[r] < 0 ? -1 : ff->idx[r] % ncolp;
+            gy->idx[r] = ff->idx[r] < 0 ? -1 : ff->idx[r] / ncolp;
+        }
+        xgf = gx; ygf = gy;
     }
 
     /* A per-layer data= file is the same file in every panel, so read it once
@@ -1231,7 +1313,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             if (hist_free_x) {
                 lo = 1e300; hi = -1e300;
                 for (int r = 0; r < df->nrow; r++) {
-                    if (!use[r] || ff->idx[r] != p) continue;
+                    if (!use[r] || xgf->idx[r] != XG(p)) continue;
                     double t = TXR(r);
                     if (t < lo) lo = t;
                     if (t > hi) hi = t;
@@ -1685,7 +1767,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     int k = 0;
                     for (int l = 0; l < xf->nlev; l++)
                         for (int r = 0; r < df->nrow; r++)
-                            if (use[r] && ff->idx[r] == p && xf->idx[r] == l) {
+                            if (use[r] && xgf->idx[r] == XG(p) && xf->idx[r] == l) {
                                 map[l] = k++; break;
                             }
                     S->xmap = map; S->nxlev = k;
@@ -1702,7 +1784,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     /* the same rows, layer files and reference lines the
                      * shared pass trains on, restricted to this panel */
                     double lo = 1e300, hi = -1e300;
-                    train_rows_x(spec, df, use, ff, p, xc, xec, &lo, &hi);
+                    train_rows_x(spec, df, use, xgf, XG(p), xc, xec, &lo, &hi);
                     if (lxmin < lo) lo = lxmin;      /* rect layer files, annotate() */
                     if (lxmax > hi) hi = lxmax;
                     for (int li = 0; li < spec->nlayers; li++)   /* histogram bin edges */
@@ -1739,7 +1821,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     int k = 0;
                     for (int l = 0; l < yf->nlev; l++)
                         for (int r = 0; r < df->nrow; r++)
-                            if (use[r] && ff->idx[r] == p && yf->idx[r] == l) {
+                            if (use[r] && ygf->idx[r] == YG(p) && yf->idx[r] == l) {
                                 map[l] = k++; break;
                             }
                     S->ymap = map; S->nylev = k;
@@ -1757,39 +1839,51 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         for (int li = 0; li < spec->nlayers; li++) {
                             if (spec->layers[li].type != GEOM_HISTOGRAM) continue;
                             const Hist *hs = &hist[li];
-                            for (int b = 0; b < hs->nbins; b++) {
-                                int cnt = hs->counts[p * hs->nbins + b];
-                                if (cnt > mx) mx = cnt;
+                            for (int q = 0; q < npan; q++) {
+                                if (YG(q) != YG(p)) continue;
+                                for (int b = 0; b < hs->nbins; b++) {
+                                    int cnt = hs->counts[q * hs->nbins + b];
+                                    if (cnt > mx) mx = cnt;
+                                }
                             }
                         }
                         lo = 0; hi = cp_logt(spec->log_y, (double)(mx ? mx : 1));
                     } else if (hasbar) {
                         int mx = 0;
-                        for (int cat = 0; cat < xf->nlev; cat++) {
-                            int total = 0;
-                            for (int gq = 0; gq < barng; gq++)
-                                total += barcount[((size_t)(p * xf->nlev + cat)) * barng + gq];
-                            if (total > mx) mx = total;
+                        for (int q = 0; q < npan; q++) {
+                            if (YG(q) != YG(p)) continue;
+                            for (int cat = 0; cat < xf->nlev; cat++) {
+                                int total = 0;
+                                for (int gq = 0; gq < barng; gq++)
+                                    total += barcount[((size_t)(q * xf->nlev + cat)) * barng + gq];
+                                if (total > mx) mx = total;
+                            }
                         }
                         lo = 0; hi = cp_logt(spec->log_y, (double)(mx ? mx : 1));
                     } else if (hasdens) {
                         double mx = 0;
                         for (int di = 0; di < ndens; di++)
-                            for (int gg = 0; gg < densg; gg++) {
-                                size_t base = ((size_t)((di * npan + p) * densg + gg)) * DENS_N;
-                                for (int j = 0; j < DENS_N; j++)
-                                    if (dens_y[base + j] > mx) mx = dens_y[base + j];
+                            for (int q = 0; q < npan; q++) {
+                                if (YG(q) != YG(p)) continue;
+                                for (int gg = 0; gg < densg; gg++) {
+                                    size_t base = ((size_t)((di * npan + q) * densg + gg)) * DENS_N;
+                                    for (int j = 0; j < DENS_N; j++)
+                                        if (dens_y[base + j] > mx) mx = dens_y[base + j];
+                                }
                             }
                         lo = 0; hi = mx;
                     }
                     if (!nhist && !hasbar && !hasdens) {
-                        train_rows_y(spec, df, use, ff, p, yc, yec, yminc, &lo, &hi);
+                        train_rows_y(spec, df, use, ygf, YG(p), yc, yec, yminc, &lo, &hi);
                         if (lymin < lo) lo = lymin;  /* rect layer files, annotate() */
                         if (lymax > hi) hi = lymax;
-                        if (colstack_max && TY(colstack_max[p]) > hi)
-                            hi = TY(colstack_max[p]);   /* stacked totals */
-                        if (colstack_min && !spec->log_y && colstack_min[p] < lo)
-                            lo = colstack_min[p];
+                        for (int q = 0; q < npan; q++) {
+                            if (YG(q) != YG(p)) continue;
+                            if (colstack_max && TY(colstack_max[q]) > hi)
+                                hi = TY(colstack_max[q]);   /* stacked totals */
+                            if (colstack_min && !spec->log_y && colstack_min[q] < lo)
+                                lo = colstack_min[q];
+                        }
                         if (hascol && !spec->log_y) {   /* bars anchor at 0 */
                             if (lo > 0) lo = 0;
                             if (hi < 0) hi = 0;
@@ -2003,6 +2097,13 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     }
     double labh = font_h(cr, SZ_AXIS_TEXT), baseh = font_h(cr, SZ_BASE);
     double striph = ff ? labh + 2 * STRIP_PAD : 0;
+    /* facet_wrap strips every panel row. facet_grid instead puts ONE row of
+     * column strips along the top and a column of rotated row strips down the
+     * right, ggplot2-style, so an 8-panel grid spends one strip's height
+     * rather than four. */
+    double striph_top  = (!grid || colf) ? striph : 0;
+    double striph_side = (grid && rowf) ? striph : 0;
+    int nstriprows = grid ? (colf ? 1 : 0) : nrowp;
 
     const char *xtitle = spec->lab_x ? spec->lab_x : genome_x ? "" : spec->x.expr;
     const char *ytitle = spec->lab_y ? spec->lab_y
@@ -2167,7 +2268,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     double auto_panelh = vcats ? vcats * catpitch : 2.6 * 72;
     double auto_h_raw = MARGIN * 2 + labh + TICK_LEN + TXT_GAP + baseh
                       + (spec->lab_title ? font_h(cr, SZ_TITLE) : 0)
-                      + nrowp * (auto_panelh + striph + band_h) + (nrowp - 1) * PANEL_SPACE;
+                      + nrowp * (auto_panelh + band_h) + nstriprows * striph
+                      + (nrowp - 1) * PANEL_SPACE;
     double auto_h = fmin(30.0 * 72, fmax(4.0 * 72, auto_h_raw));   /* the clamped canvas */
     /* the rows the legend column does not span (it sits from the first strip
      * to the last panel): title block, last band, axis rows and margins */
@@ -2367,7 +2469,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
 
     /* ---- outer table ---- */
     GTable *T = cp_xcalloc(1, sizeof(GTable));
-    T->ncol = 2 * ncolp + 6;
+    /* the extra column is facet_grid's right-hand strip; the legend columns
+     * stay addressed from the right end, so nothing else moves */
+    int rstrip_c = 2 * ncolp + 3;
+    T->ncol = 2 * ncolp + 6 + (grid ? 1 : 0);
     T->colw[0] = upt(MARGIN);
     T->colw[1] = upt(baseh);
     T->colw[2] = upt(HALF_LINE / 2);
@@ -2375,7 +2480,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     /* Under free scales the gap between panels has to hold an axis, not just
      * whitespace: every panel carries its own ticks and labels. Each gap is
      * sized by the widest label of the panels immediately to its right. */
-    int lfree_l = flip ? spec->free_x : spec->free_y;
+    int lfree_l = (flip ? spec->free_x : spec->free_y) && !grid;
     for (int c = 0; c < ncolp; c++) {
         T->colw[PC(c)] = unull(1);
         if (c < ncolp - 1) {
@@ -2397,6 +2502,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             T->colw[PC(c) + 1] = upt(gap);
         }
     }
+    if (grid) T->colw[rstrip_c] = upt(striph_side);
     T->colw[T->ncol - 3] = upt(leg ? 2 * HALF_LINE : 0);
     T->colw[T->ncol - 2] = upt(leg ? gt_fixed_w(leg) : 0);
     T->colw[T->ncol - 1] = upt(MARGIN);
@@ -2420,6 +2526,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
              * borrow a neighbour's space */
             if (fc_leg_w > panelw) panelw = fc_leg_w;
             double chrome = MARGIN + ylab_w + TICK_LEN + TXT_GAP + baseh + MARGIN
+                          + striph_side       /* facet_grid row strips */
                           + (leg ? gt_fixed_w(leg) + 2 * HALF_LINE : 0);
             w_pt = chrome + ncolp * panelw + (ncolp - 1) * PANEL_SPACE;
             w_pt = fmin(30.0 * 72, fmax(6.0 * 72, w_pt));
@@ -2478,6 +2585,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
              * legend, split between the columns. Exact enough to decide
              * whether the labels fit, which is all this has to answer. */
             double chrome = MARGIN + ylab_w + TICK_LEN + TXT_GAP + baseh + MARGIN
+                          + striph_side       /* facet_grid row strips */
                           + (leg ? gt_fixed_w(leg) + 2 * HALF_LINE : 0);
             double panel_w = fmax(1, (w_pt - chrome) / ncolp);
             double need = 0;
@@ -2534,9 +2642,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     "a taller --size\n", left_title, h_pt / 72);
     }
 
-    int bfree_l = flip ? spec->free_y : spec->free_x;
+    int bfree_l = (flip ? spec->free_y : spec->free_x) && !grid;
     for (int r = 0; r < nrowp; r++) {
-        T->rowh[SR(r)] = upt(striph);
+        T->rowh[SR(r)] = upt(grid ? (r == 0 ? striph_top : 0) : striph);
         T->rowh[PR(r)] = unull(1);
         T->rowh[PR(r) + 1] = upt(band_h);        /* annotation bands (0 = none) */
         if (r < nrowp - 1)
@@ -2599,6 +2707,32 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         panelh_pt = nh > 0 ? fmax(0, h_pt - fh) / nh : 0;
     }
 
+    /* ---- facet_grid strips ----
+     * Column strips run along the top, one per panel column; row strips down
+     * the right, rotated -90 so they read top-to-bottom, one per panel row.
+     * Each spans its whole column/row rather than sitting over one panel,
+     * which is what makes the grid readable: a label is stated once. */
+    if (grid) {
+        for (int c = 0; colf && c < ncolp; c++) {
+            if (th->strip_bg_on) {
+                g = gt_add(T, G_RECT, SR(0), PC(c), SR(0), PC(c));
+                g->col = th->strip_bg;
+            }
+            g = gt_add(T, G_TEXT, SR(0), PC(c), SR(0), PC(c));
+            g->str = colf->levels[c]; g->size = SZ_AXIS_TEXT; g->col = th->strip_text;
+            g->tx = 0.5; g->ty = 0.5; g->hj = 0.5; g->va = V_INKCENTER;
+        }
+        for (int r = 0; rowf && r < nrowp; r++) {
+            if (th->strip_bg_on) {
+                g = gt_add(T, G_RECT, PR(r), rstrip_c, PR(r), rstrip_c);
+                g->col = th->strip_bg;
+            }
+            g = gt_add(T, G_TEXT, PR(r), rstrip_c, PR(r), rstrip_c);
+            g->str = rowf->levels[r]; g->size = SZ_AXIS_TEXT; g->col = th->strip_text;
+            g->tx = 0.5; g->ty = 0.5; g->hj = 0.5; g->rot = -90;
+        }
+    }
+
     /* ---- panels ---- */
     for (int p = 0; p < npan; p++) {
         int pr = p / ncolp, pc = p % ncolp;
@@ -2614,7 +2748,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
          * panel without being told — the same trick the ranges use above. */
         if (fc_pal) pal = fc_pal + (size_t)p * cf->nlev;
 
-        if (ff) {
+        if (ff && !grid) {
             if (th->strip_bg_on) { g = gt_add(T, G_RECT, SR(pr), C, SR(pr), C); g->col = th->strip_bg; }
             g = gt_add(T, G_TEXT, SR(pr), C, SR(pr), C);
             g->str = ff->levels[p]; g->size = SZ_AXIS_TEXT; g->col = th->strip_text;
@@ -3627,7 +3761,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         /* Left axis. Shared scales label the left column only, because every
          * panel in a row carries the same one; a freed axis differs per panel,
          * so each gets its own, drawn in the spacer to its left. */
-        int lfree = flip ? spec->free_x : spec->free_y;
+        int lfree = (flip ? spec->free_x : spec->free_y) && !grid;
         if (!spec->polar && (pc == 0 || lfree)) {
             g = gt_add(T, G_AXIS_Y, R, pc == 0 ? 3 : PC(pc) - 1, R, pc == 0 ? 3 : PC(pc) - 1);
             g->n = flip ? S->nxbr : S->nybr;
@@ -3658,7 +3792,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
 
         /* Bottom axis. Shared scales draw one per column, under the lowest panel
          * of that column (below); a freed axis is per panel. */
-        int bfree = flip ? spec->free_y : spec->free_x;
+        int bfree = (flip ? spec->free_y : spec->free_x) && !grid;
         if (bfree && !spec->polar) {
             int rb = (npan - 1 - pc) / ncolp;
             int arow = (pr == rb && rb == nrowp - 1) ? r_axis : PR(pr) + 2;
@@ -3674,15 +3808,24 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
 
     /* x axes: under the bottom-most panel of each column (bottom axis: x, or y
      * under flip). Genome mode (never flipped) keeps its chrom-name axis. */
+    int bfree_col = (flip ? spec->free_y : spec->free_x) && grid;
     for (int c = 0; c < ncolp && c < npan && !spec->polar
-             && !(flip ? spec->free_y : spec->free_x); c++) {
+             && (grid || !(flip ? spec->free_y : spec->free_x)); c++) {
         int rb = (npan - 1 - c) / ncolp;
         if (rb == nrowp - 1)
             g = gt_add(T, G_AXIS_X, r_axis, PC(c), r_axis, PC(c));
         else
             g = gt_add(T, G_AXIS_X, PR(rb) + 2, PC(c), PR(rb + 1), PC(c));
         if (genome_x) { g->n = gax_n; g->px = gax_pos; g->labels = gax_lab; }
-        else {
+        else if (bfree_col) {
+            /* facet_grid(scales="free_x"): the column's own breaks, taken from
+             * its bottom panel -- every panel above shares them */
+            const PanelScale *S = &ps[rb * ncolp + c];
+            g->n = flip ? S->nybr : S->nxbr;
+            g->px = flip ? S->ynpc : S->xnpc;
+            g->labels = flip ? S->ylabs : S->xlabs;
+            g->label_angle = bang;
+        } else {
             g->n = bax_n; g->px = bax_pos; g->labels = bax_lab;   /* log ticks drawn inside the panel */
             g->label_angle = bang;
         }

@@ -63,7 +63,8 @@ static void print_help(void) {
     printf("    %saes%s(x, y, …)    map columns to aesthetics\n", G, R);
     printf("    %sgeom_*%s()        point · jitter · line · smooth · col · bar · histogram · density · boxplot · tile\n", G, R);
     printf("                    segment · rect · errorbar · linerange · text · label · *_repel · h/v/abline\n");
-    printf("    %sfacet_wrap%s(~g)  small multiples · %sscale_*%s · %stheme_*%s · %slabs%s(title=…)\n", G, R, G, R, G, R, G, R);
+    printf("    %sfacet_wrap%s(~g)  small multiples — %sfacet_grid%s(r ~ c) for a two-way grid\n", G, R, G, R);
+    printf("    %sscale_*%s · %stheme_*%s · %slabs%s(title=…) · %sguides%s() · %scoord_*%s()\n", G, R, G, R, G, R, G, R, G, R);
 
     printf("\n  %sFIVE MODES%s   %s(chosen from the verbs you use)%s\n", H, R, D, R);
     printf("    %splots%s     %saes(…) + geom_*()%s              %s— the ggplot2 grammar%s\n", G, R, K, R, D, R);
@@ -495,6 +496,8 @@ int main(int argc, char **argv) {
     for (size_t i = 0; i < sizeof aes / sizeof *aes; i++)
         if (aes[i]->col) needed[nneeded++] = aes[i]->col;
     if (spec.facet_var) needed[nneeded++] = spec.facet_var;
+    if (spec.facet_rowvar) needed[nneeded++] = spec.facet_rowvar;
+    if (spec.facet_colvar) needed[nneeded++] = spec.facet_colvar;
     for (int i = 0; i < spec.nlayers; i++)
         if (spec.layers[i].ycol) needed[nneeded++] = spec.layers[i].ycol;
     if (nneeded) cp_set_needed_cols(needed, nneeded);
