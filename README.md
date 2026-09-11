@@ -3,6 +3,7 @@
 [![build](https://github.com/zhou-lab/cinderplot/actions/workflows/conda-build.yml/badge.svg)](https://github.com/zhou-lab/cinderplot/actions/workflows/conda-build.yml)
 [![conda](https://img.shields.io/conda/vn/zhou-lab/cinderplot?label=conda)](https://anaconda.org/zhou-lab/cinderplot)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fzhou-lab.github.io%2Fcinderplot%2Fcoverage.json)](https://github.com/zhou-lab/cinderplot-examples/blob/main/tests/test.sh)
 [![docs](https://img.shields.io/badge/docs-gallery-blueviolet)](https://zhou-lab.github.io/cinderplot/)
 
 Cinderplot is a small, fast, grammar-inspired plotting tool written in C. It

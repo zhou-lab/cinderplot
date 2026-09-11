@@ -58,6 +58,29 @@ fails on that mismatch, but the bump is what prevents it.
 
 Then commit, so the tag has something to point at.
 
+### Coverage and the badge
+
+`scripts/coverage.sh` measures line coverage of the suite with `gcov` and
+rewrites `docs/coverage.json`, which the README badge reads through
+shields.io (GitHub Pages serves `docs/`, so no third-party account or token is
+involved). Run it when a release adds or removes a lot of code:
+
+```sh
+scripts/coverage.sh          # measure, print the per-file table, update the badge
+scripts/coverage.sh --print  # measure only
+scripts/coverage.sh --check  # fail if the committed badge is stale (CI runs this)
+```
+
+It builds instrumented in a scratch copy, never in the repo, so the gallery
+baseline is untouched. It also unsets `FONTCONFIG_FILE` and the personal
+`CINDERPLOT_*` defaults, because `quiet_fontconfig()` takes a different branch
+depending on the first, which moves the total by a tenth of a point.
+
+The number is **line** coverage, not branch coverage, and covers the suite
+only. CI reports it on every push and fails only when the committed badge has
+drifted more than two points — it never gates on the value itself, which would
+mostly reward testing error strings.
+
 ## 3. Check
 
 ```sh

@@ -32,6 +32,23 @@ jobs:
       - name: Regression suite
         run: cd cinderplot-examples && CINDERPLOT="$GITHUB_WORKSPACE/cinderplot" sh tests/test.sh
 
+      # Informational, and a staleness guard for the README badge. The badge
+      # reads docs/coverage.json, which is committed, so it is only as fresh as
+      # the last person who ran scripts/coverage.sh. This fails when the two
+      # have drifted more than TOLERANCE points -- it does not gate on the
+      # coverage VALUE, which would only reward testing error strings.
+      - name: Coverage (and badge freshness)
+        run: |
+          set -o pipefail
+          CINDERPLOT_EXAMPLES="$GITHUB_WORKSPACE/cinderplot-examples" \
+            scripts/coverage.sh --check 2>&1 | tee cov.txt
+          {
+            echo '### Line coverage of the regression suite'
+            echo '```'
+            cat cov.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   build:
     name: ${{ matrix.name }}
     # Nothing is built, and on a tag nothing is PUBLISHED, unless the suite
