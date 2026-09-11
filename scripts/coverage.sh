@@ -1,5 +1,5 @@
 #!/bin/sh
-# scripts/coverage.sh — line coverage of the regression suite, and the badge.
+# scripts/coverage.sh — line coverage of the tests (test.sh + gallery.sh).
 #
 #   scripts/coverage.sh            measure, print the table, rewrite docs/coverage.json
 #   scripts/coverage.sh --print    measure and print only (leave the badge alone)
@@ -55,6 +55,10 @@ fi
 rm -f "$work"/src/*.gcda
 ( cd "$EXAMPLES" && CINDERPLOT="$work/cinderplot" sh tests/test.sh ) >"$work/suite.log" 2>&1 \
     || { tail -20 "$work/suite.log" >&2; echo "coverage: the suite failed; coverage of a red suite is meaningless" >&2; exit 1; }
+# the gallery is a test too, and covers ~200 lines the suite never reaches
+( cd "$EXAMPLES" && CINDERPLOT="$work/cinderplot" CINDERPLOT_REPO="$here" sh tests/gallery.sh ) \
+    >"$work/gallery.log" 2>&1 \
+    || { tail -20 "$work/gallery.log" >&2; echo "coverage: the gallery failed" >&2; exit 1; }
 
 ( cd "$work" && gcov -n -o src src/*.c ) >"$work/gcov.txt" 2>/dev/null || true
 
@@ -72,7 +76,7 @@ print(f"{100*cov/tot:.1f}")
 PY
 )
 
-echo "coverage: ${pct}% of executable lines (gcov, line coverage, suite only)"
+echo "coverage: ${pct}% of executable lines (gcov, line coverage: test.sh + gallery.sh)"
 
 badge="$here/docs/coverage.json"
 case "$mode" in
