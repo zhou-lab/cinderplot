@@ -32,6 +32,17 @@ jobs:
       - name: Regression suite
         run: cd cinderplot-examples && CINDERPLOT="$GITHUB_WORKSPACE/cinderplot" sh tests/test.sh
 
+      # The gallery specs live in docs/build.py and their figures are what the
+      # documentation shows, so a broken one is a broken doc. They are nearly
+      # disjoint from test.sh -- one of 35 overlaps -- and reach 213 lines the
+      # suite never does. The two genome-backed cases skip here (no reference
+      # genome on a runner) and say so.
+      - name: Gallery
+        run: |
+          cd cinderplot-examples
+          CINDERPLOT="$GITHUB_WORKSPACE/cinderplot" CINDERPLOT_REPO="$GITHUB_WORKSPACE" \
+            sh tests/gallery.sh
+
       # Informational, and a staleness guard for the README badge. The badge
       # reads docs/coverage.json, which is committed, so it is only as fresh as
       # the last person who ran scripts/coverage.sh. This fails when the two

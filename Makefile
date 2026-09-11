@@ -66,6 +66,7 @@ src/main.o: $(wildcard $(shell git rev-parse --git-path HEAD 2>/dev/null) $(shel
 EXAMPLES ?= ../cinderplot-examples
 check: $(TARGET)
 	cd $(EXAMPLES) && CINDERPLOT=$(CURDIR)/$(TARGET) sh tests/test.sh
+	cd $(EXAMPLES) && CINDERPLOT=$(CURDIR)/$(TARGET) CINDERPLOT_REPO=$(CURDIR) sh tests/gallery.sh
 
 # The release SOP (version strings, docs, counts, tests, deploy, tag) is
 # scripts/release.sh; see RELEASING.md.

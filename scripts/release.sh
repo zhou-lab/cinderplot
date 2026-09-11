@@ -167,6 +167,12 @@ print(len(b.MODES))")
     rm -f "$EXAMPLES/.release-test.err"
     echo ok
 
+    step "gallery ($EXAMPLES/tests/gallery.sh) — the figures the docs publish"
+    ( cd "$EXAMPLES" && CINDERPLOT="$here/cinderplot" CINDERPLOT_REPO="$here" \
+        sh tests/gallery.sh 2>.release-gal.err ) \
+        || { tail -20 "$EXAMPLES/.release-gal.err" >&2; rm -f "$EXAMPLES/.release-gal.err"; fail "gallery failed"; }
+    rm -f "$EXAMPLES/.release-gal.err"
+
     step "cinderplot-examples is pushed (the test job reads its default branch)"
     if ( cd "$EXAMPLES" && git rev-parse --abbrev-ref @{u} >/dev/null 2>&1 ); then
         ahead=$( cd "$EXAMPLES" && git log --oneline @{u}..HEAD | wc -l )
