@@ -60,6 +60,51 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # Address and undefined-behaviour sanitizers over the SAME suite. This adds
+  # no cases; it makes the ones that exist fatal on corruption instead of
+  # silently drawing a wrong figure. The 2026-09-10 review found three memory
+  # bugs in code the suite already covered -- a legend folded past the column
+  # array, 201 breaks written into a 32-slot stack buffer, and chord(order=)
+  # reading sec[-1]. Valgrind over the whole suite reported none of them,
+  # because memcheck cannot see a STACK overrun; ASan can.
+  #
+  # Leak detection is off on purpose: the tool renders one figure and exits and
+  # deliberately never frees (see the MEMORY POLICY note in cinderplot.h), so
+  # LeakSanitizer would report thousands of live blocks by design.
+  sanitizers:
+    name: asan + ubsan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: zhou-lab/cinderplot-examples
+          path: cinderplot-examples
+      - name: Install cairo and poppler
+        run: sudo apt-get update && sudo apt-get install -y libcairo2-dev pkg-config poppler-utils zlib1g-dev fonts-liberation
+      - name: Build instrumented
+        run: |
+          make -B CFLAGS="-std=gnu11 -Wall -Wextra -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined" \
+                  LDFLAGS="-fsanitize=address,undefined"
+      - name: Suite under the sanitizers
+        env:
+          ASAN_OPTIONS: detect_leaks=0:halt_on_error=1:abort_on_error=0:exitcode=86
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1:exitcode=86
+        run: |
+          set -o pipefail
+          cd cinderplot-examples
+          # The suite has 145 cases that EXPECT a non-zero exit, so a sanitizer
+          # abort inside one of those would look like the expected failure.
+          # Grep the output for the diagnostics rather than trusting exit codes.
+          CINDERPLOT="$GITHUB_WORKSPACE/cinderplot" sh tests/test.sh 2>&1 | tee "$RUNNER_TEMP/san.log" || rc=$?
+          if grep -qE "ERROR: (Address|Leak)Sanitizer|runtime error:|SUMMARY: UndefinedBehaviorSanitizer" "$RUNNER_TEMP/san.log"; then
+            echo "::error::sanitizer diagnostics in the suite run" >&2
+            grep -nE -A12 "ERROR: AddressSanitizer|runtime error:" "$RUNNER_TEMP/san.log" | head -60 >&2
+            exit 1
+          fi
+          [ "${rc:-0}" -eq 0 ] || { echo "::error::suite failed under sanitizers (exit $rc)" >&2; tail -30 "$RUNNER_TEMP/san.log" >&2; exit 1; }
+          echo "no sanitizer diagnostics across the suite"
+
   build:
     name: ${{ matrix.name }}
     # Nothing is built, and on a tag nothing is PUBLISHED, unless the suite
@@ -67,7 +112,7 @@ jobs:
     # would still put a package on the zhou-lab channel, where the next
     # `conda install` picks it up. The package is the only artifact the lab
     # gets, so this gate is what makes "green" mean "safe to install".
-    needs: test
+    needs: [test, sanitizers]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
