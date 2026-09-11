@@ -278,6 +278,17 @@ do_deploy() {
     green "deployed $v — one artifact, shared env + symlink"
 }
 
+# ------------------------------------------------------------------ tag ----
+do_tag() {
+    v=$(header_version)
+    do_check
+    step "tag v$v"
+    git tag -a "v$v" -m "release $v"
+    green "tagged v$v (local — nothing is published until it is pushed)"
+    echo
+    echo "Next:  scripts/release.sh push     # both repos, in the order CI needs"
+}
+
 # ----------------------------------------------------------------- push ----
 # Order matters and is not expressible in the workflow file: the test job
 # checks cinderplot-examples out at its DEFAULT BRANCH, not at a matching
@@ -361,6 +372,16 @@ do_status() {
     fi
     echo "conda channel:  $(command -v conda >/dev/null && conda search -c zhou-lab --override-channels cinderplot 2>/dev/null | awk 'END{print $2}' || echo '?')"
 }
+
+# Every verb below must resolve to a function. do_tag() was once deleted by an
+# edit that replaced the file between two banner comments -- the dispatcher
+# still offered `tag`, so the only symptom was "do_tag: command not found", and
+# only when someone came to cut a release. Check the wiring on every run: it
+# costs nothing and it is exactly the kind of unexercised path this script
+# exists to stop trusting.
+for _v in check bump deploy tag push watch status; do
+    command -v "do_$_v" >/dev/null || fail "internal: verb \`$_v\` has no do_$_v function"
+done
 
 case "${1:-}" in
     check)  do_check ;;
