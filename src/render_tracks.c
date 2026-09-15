@@ -989,6 +989,69 @@ int render_tracks(const PlotSpec *spec, const char *out,
         if (spec->tobjs[i].rowcolour
             && trk_rowcolours_load(&spec->tobjs[i], &rcs[i], &nrcs[i], err)) return -1;
 
+    /* ---- the discrete fill: matrix(discrete=TRUE) reads the cell values as
+     * category codes. The levels come from the pre-read (the whole file under
+     * regions(), so every window keys the same set) through the routine
+     * heatmap(discrete=TRUE) uses, and the palette through its palette rule,
+     * so a 0/1 file keys identically in both modes. The scale-vs-data pairing
+     * is checked here beside the data, as heatmap.c does: a ramp over codes
+     * and a manual palette over measurements are both refused by name. ---- */
+    char **lev[MAX_TRACKS] = {0}; double *levv[MAX_TRACKS] = {0}; int nlev[MAX_TRACKS] = {0};
+    Col *pal[MAX_TRACKS] = {0}; int any_na[MAX_TRACKS] = {0};
+    int ndisc = 0, ncont = 0, nmat = 0, i_disc = -1;
+    for (int i = 0; i < ntr; i++) {
+        if (!md[i]) continue;
+        nmat++;
+        if (spec->tobjs[i].discrete) { ndisc++; if (i_disc < 0) i_disc = i; } else ncont++;
+    }
+    if (ndisc && !ncont && spec->has_fill) {
+        snprintf(err, CP_ERRLEN, "scale_fill_gradient()/viridis()/parula()/... is a continuous "
+                 "ramp and matrix() `%s` is categorical (discrete=TRUE); colour the "
+                 "categories with scale_fill_manual(values=c(\"0\"=\"...\", ...)) or "
+                 "scale_fill_brewer(palette=), or drop discrete=TRUE to read the cells "
+                 "as numbers", spec->tobjs[i_disc].name ? spec->tobjs[i_disc].name
+                                                          : spec->tobjs[i_disc].data);
+        return -1;
+    }
+    if (nmat && !ndisc && spec->has_manual) {
+        snprintf(err, CP_ERRLEN, "scale_*_manual()/scale_*_brewer() is a discrete palette, "
+                 "and this matrix() track is numeric. Use scale_fill_gradient()/"
+                 "gradient2()/viridis()/parula() for a ramp, or matrix(discrete=TRUE) "
+                 "to read the numbers as category codes");
+        return -1;
+    }
+    if (nmat && !ndisc && spec->n_manual_labs) {
+        snprintf(err, CP_ERRLEN, "scale_*_manual(labels=) renames the levels of a discrete "
+                 "key, and this matrix() track is numeric (a colourbar has no levels); "
+                 "say matrix(discrete=TRUE), or drop labels=");
+        return -1;
+    }
+    for (int i = 0; i < ntr; i++) {
+        if (!md[i] || !spec->tobjs[i].discrete) continue;
+        long ncell = (long)md[i]->nr * md[i]->nc;
+        for (long k = 0; k < ncell && !any_na[i]; k++) any_na[i] = isnan(md[i]->mv[k]);
+        nlev[i] = cp_numeric_levels(md[i]->mv, ncell, &lev[i], &levv[i],
+                                    "discrete matrix() fill", err);
+        if (nlev[i] < 0) return -1;
+        pal[i] = cp_xmalloc(HM_MAXLEV * sizeof(Col));
+        if (cp_discrete_palette(spec, lev[i], nlev[i], pal[i], err)) return -1;
+    }
+    /* legend(): the one heatmap-mode object the parser lets through here. It
+     * keys THE matrix track -- with two there is no saying which band it
+     * should centre on, so that is refused rather than guessed. */
+    const HMObj *lg = NULL; int li = -1;
+    for (int k = 0; k < spec->nhobjs; k++)
+        if (spec->hobjs[k].type == HM_LEGEND) lg = &spec->hobjs[k];
+    if (lg) {
+        if (nmat > 1) {
+            snprintf(err, CP_ERRLEN, "legend() with %d matrix() tracks: the track legend "
+                     "describes one matrix and sits beside it; keep one matrix() track, "
+                     "or draw the figure per matrix", nmat);
+            return -1;
+        }
+        for (int i = 0; i < ntr; i++) if (md[i]) { li = i; break; }
+    }
+
     /* ---- windows: regions() gives several, region() one ---- */
     Window *wins = NULL; int nwin = 1;
     if (spec->regions_path) {
@@ -1113,6 +1176,46 @@ int render_tracks(const PlotSpec *spec, const char *out,
         }
     double rmargin = gene_labw > 0 ? gene_labw + HALF_LINE : MARGIN;
 
+    /* ---- legend(): measured now so the right margin can hold it. A discrete
+     * matrix gets the key (one swatch per level, renamed by labels=, plus the
+     * background swatch when the track has one to explain); a continuous one
+     * the colourbar over the track's fixed 0..1 domain. Drawn after the
+     * tracks, centred on the matrix band, below. ---- */
+    double leg_across = 0, leg_h = 0, baseH = font_h(cr, SZ_BASE);
+    const char *leg_title = NULL;
+    char **klab = NULL; Col *kpal = NULL; int nk = 0, leg_disc = 0;
+    if (lg) {
+        const TrackObj *lt = &spec->tobjs[li];
+        leg_title = lg->title ? lg->title : spec->lab_fill;
+        if (lt->discrete) {
+            leg_disc = 1;
+            char **base = cp_key_labels(spec, lev[li], nlev[li], err);
+            if (!base) return -1;
+            /* the background shows wherever a cell is NA, and between probes
+             * when x=genomic painted it -- a colour on the figure the key
+             * would otherwise leave unexplained */
+            int miss = !lg->missing_off && ((lt->genomic_x && lt->has_bg) || any_na[li]);
+            nk = nlev[li] + miss;
+            klab = cp_xmalloc((size_t)nk * sizeof(char *));
+            kpal = cp_xmalloc((size_t)nk * sizeof(Col));
+            for (int k = 0; k < nlev[li]; k++) { klab[k] = base[k]; kpal[k] = pal[li][k]; }
+            if (miss) {
+                klab[nk - 1] = lg->missing ? lg->missing : "NA";
+                kpal[nk - 1] = lt->genomic_x && lt->has_bg ? lt->bg_color : C_NA;
+            }
+            leg_across = cp_key_across_pt(cr, klab, nk);
+            leg_h = nk * LEG_GRID + (nk - 1) * LEG_GAP;
+        } else {
+            leg_across = cp_colourbar_across_pt(cr, 0, 1);
+            leg_h = LEG_LEN;
+        }
+        if (leg_title) {
+            leg_across = fmax(leg_across, text_w(cr, SZ_BASE, leg_title));
+            leg_h += baseH + TXT_GAP;
+        }
+        rmargin = fmax(rmargin, HALF_LINE + leg_across + MARGIN);
+    }
+
     /* ---- measure left label column from track names + matrix sample names ---- */
     double labw = 0;
     for (int i = 0; i < ntr; i++) {
@@ -1158,7 +1261,9 @@ int render_tracks(const PlotSpec *spec, const char *out,
                     if (md[i]->colid[c]) { double w = text_w(cr, sz_samp, md[i]->colid[c]); if (w > lbl_pt) lbl_pt = w; }
                 double bands = font_h(cr, SZ_AXIS_TEXT) + TICK_LEN + TXT_GAP + 42 + lbl_pt + lab_pad;
                 double row_h = spec->tobjs[i].hide_rownames ? AUTO_MIN_CELL : samp_line * AUTO_ROW_PAD;
-                double u = (bands + md[i]->nr * row_h) / wgt;
+                double rows_pt = md[i]->nr * row_h;
+                if (lg && i == li && rows_pt < leg_h) rows_pt = leg_h;   /* the key beside it fits */
+                double u = (bands + rows_pt) / wgt;
                 if (u > per_u) per_u = u;
                 break;
             }
@@ -1257,6 +1362,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
     }
 
     Grob *g;
+    double leg_top = 1, leg_bot = 0;          /* the matrix band, npc of its row */
     if (title && !wins) {
         g = gt_add(T, G_TEXT, 1, CC, 1, CC);
         g->str = title; g->size = sz_title; g->col = C_BLACK;
@@ -1277,6 +1383,10 @@ int render_tracks(const PlotSpec *spec, const char *out,
                   md[i] = read_matrix(&spec->tobjs[i], chrom, rstart, rend, err);
                   if (!md[i]) return -1;
                   align_rows(md[i], rowref[i]);
+                  if (spec->tobjs[i].discrete
+                      && cp_levels_apply(md[i]->mv, (long)md[i]->nr * md[i]->nc,
+                                         levv[i], nlev[i], "discrete matrix() fill", err))
+                      return -1;
               }
       }
       if (wins) {
@@ -1592,6 +1702,10 @@ int render_tracks(const PlotSpec *spec, const char *out,
             int nr = m->nr, nc = m->nc;
             FillScale fs = spec->has_fill ? spec->fill : (FillScale){0};
             if (!spec->has_fill) fs.kind = FILL_PARULA;       /* beta default */
+            /* discrete=TRUE: a cell holds its level index and paints the
+             * level's colour, the same table the key draws from */
+            const Col *dpal = spec->tobjs[i].discrete ? pal[i] : NULL;
+#define CELL_COL(v) (dpal ? dpal[(int)(v)] : fill_map_value(&fs, (v), 0, 1))
             /* bands sized in FIXED points (constant gaps at any figure size). */
             double cell_pt = (spec->tobjs[i].height > 0 ? spec->tobjs[i].height : 1) * per_h;
             double axtop_pt = font_h(cr, SZ_AXIS_TEXT) + TICK_LEN + TXT_GAP;   /* kb axis */
@@ -1609,6 +1723,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
             double hmtop   = cell_pt > 0 ? axline - mapband_pt / cell_pt : 0.80;
             double lblband = cell_pt > 0 ? (lbl_pt + lab_pad) / cell_pt : 0.10;  /* labels + lab_pad gap */
             double lbltop  = cell_pt > 0 ? lbl_pt / cell_pt : lblband * 0.85;    /* label tops = lab_pad below heatmap */
+            if (lg && i == li) { leg_top = hmtop; leg_bot = lblband; }
             if (gx_mode) {
                 /* Draw ONLY the cells that exist, each at its own coordinate.
                  * Not a full-width raster: a 20 kb window is mostly not-a-CpG,
@@ -1644,7 +1759,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
                         double v = m->mv[(size_t)m->roword[rr] * nc + c];
                         if (isnan(v)) continue;                  /* background shows through */
                         g = gt_add(T, G_RECT, R, CC, R, CC);
-                        g->col = fill_map_value(&fs, v, 0, 1);
+                        g->col = CELL_COL(v);
                         g->sub = 1; g->clip = 1;
                         g->x0 = cx0; g->x1 = cx1;
                         g->y1 = hmtop - (double)rr / nr * bgspan;
@@ -1659,13 +1774,14 @@ int render_tracks(const PlotSpec *spec, const char *out,
                 for (int c = 0; c < nc; c++) {
                     double v = m->mv[(size_t)m->roword[rr] * nc + c];
                     row[c] = isnan(v) ? col_argb(C_NA)
-                           : col_argb(fill_map_value(&fs, v, 0, 1));
+                           : col_argb(CELL_COL(v));
                 }
             }
             g = gt_add(T, G_IMAGE, R, CC, R, CC);
             g->img = buf; g->img_w = nc; g->img_h = nr; g->clip = 1;
             g->x0 = 0; g->x1 = 1; g->y0 = lblband; g->y1 = hmtop;
             }
+#undef CELL_COL
             g = gt_add(T, G_RECT, R, CC, R, CC);             /* heatmap bounding box */
             Col bbh = {0.4, 0.4, 0.4};
             g->col = bbh; g->sub = 1; g->stroke = 1; g->lw = lw_pt(0.5) * cp_line_scale; g->clip = 1;
@@ -1878,6 +1994,31 @@ gx_no_fan:
           g->n = nx; g->px = axis_pos; g->label_pos = axis_txt;
           g->labels = axis_lab;
       }
+    }
+
+    /* ---- the legend, in the right-margin column of the matrix track's row,
+     * centred on its heatmap band; the same key/colourbar grobs heatmap mode
+     * emits, so the two modes cannot disagree on what a key looks like ---- */
+    if (lg) {
+        int R = TRK(li), C = T->ncol - 1;
+        double wgt = spec->tobjs[li].height > 0 ? spec->tobjs[li].height : 1;
+        double ch_pt = wgt * per_h > 0 ? wgt * per_h : 1, cw_pt = rmargin;
+        double top = (leg_top + leg_bot) / 2 + leg_h / ch_pt / 2;
+        double sx = HALF_LINE / cw_pt;
+        double titleSpace = leg_title ? (baseH + TXT_GAP) / ch_pt : 0;
+        if (leg_disc) {
+            cp_key_draw(T, R, C, klab, kpal, nk, sx, top - titleSpace, cw_pt, ch_pt);
+        } else {
+            FillScale fs = spec->has_fill ? spec->fill : (FillScale){0};
+            if (!spec->has_fill) fs.kind = FILL_PARULA;
+            cp_colourbar_draw(T, R, C, &fs, 0, 1, 1, 1, sx,
+                              top - titleSpace - LEG_LEN / ch_pt, cw_pt, ch_pt);
+        }
+        if (leg_title) {
+            g = gt_add(T, G_TEXT, R, C, R, C);
+            g->str = leg_title; g->size = SZ_BASE; g->col = C_BLACK;
+            g->tx = sx; g->ty = top; g->hj = 0; g->va = V_TOP;
+        }
     }
 
     if (nboxes) {

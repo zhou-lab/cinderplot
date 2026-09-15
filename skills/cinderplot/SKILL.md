@@ -375,7 +375,10 @@ by name, and levels it does not name keep their default hue — so a two-categor
 highlight need not enumerate the rest. A positional
 `values=c("red","blue",...)` is read level by level and must be at least as long
 as the level count (a short list errors with both counts); `scale_fill_brewer(palette=)`
-works the same way. A *continuous* `scale_fill_*()` over a categorical matrix
+works the same way. `scale_fill_manual(labels=c("0"="WT", "1"="MUT"))` renames
+the levels in the key only (the same table `matrix(discrete=TRUE)` reads in
+track mode); a label for a level the data lacks errors, and `labels=` over a
+numeric matrix errors, since a colourbar has no levels. A *continuous* `scale_fill_*()` over a categorical matrix
 errors, as does a manual palette over a numeric one. The cap is 64 levels.
 
 Two things a discrete fill does **not** do. `cluster=rows|cols|both|symmetric`
@@ -460,7 +463,7 @@ cinderplot 'region("chr20:44616522-44655233")
 Track verbs: `coverage() interval() genes() arcs() matrix() signal() cytoband()`,
 each taking a file plus `name= height= max= color= data= cluster= rownames=
 colnames= transcripts=`; `interval()` also `labels=`, `matrix()` also
-`x= bar= background= rowgroup= rowcolour=`, and `signal()` `rowgroup= rowcolour=
+`x= bar= background= rowgroup= rowcolour= discrete=`, and `signal()` `rowgroup= rowcolour=
 smooth= points= colour=c(...) ylim= linewidth=`. Inputs are BED/bedGraph/BEDPE/BED12/matrix TSV, tabix
 **`matrix(x=genomic)` puts each cell at its own coordinate** instead of in
 probe-index space. The default (`x=index`) gives every probe an equal-width
@@ -474,6 +477,34 @@ wide, far under a pixel, so a cell is widened to stay visible — `bar=N` sets
 the width in bp explicitly. `background=` colours the stretches with no probe
 (default the missing-value grey); an NA cell draws nothing, so the background
 shows through.
+
+**`matrix(discrete=TRUE)` reads the cell values as category codes** — a 0/1
+call matrix is indistinguishable from betas without being told — and is
+`heatmap(discrete=TRUE)`'s twin: each distinct value becomes a level (sorted
+numerically, keyed by value), coloured by `scale_fill_manual(values=c("0"="#4575b4",
+"1"="#d73027"))` by level name (unnamed levels keep their hue) or the hue wheel,
+and the cells paint the level's colour. A continuous `scale_fill_*()` over
+`discrete=TRUE` errors, as does a manual palette over a numeric matrix, both
+naming the other reading. **`legend()` is the track browser's one heatmap-mode
+verb**: it takes no placement (it sits in the right margin, vertically centred
+on the matrix band, and `right_of()` etc. error saying so), needs a `matrix()`
+track (one — two matrices error), and draws the key for a discrete matrix or
+the 0..1 colourbar for a continuous one. `title=` names it (default
+`labs(fill=)`). `scale_fill_manual(labels=c("0"="Unmethylated", "1"="Methylated"))`
+renames the levels in the key only — colours are still keyed by the level as
+the file writes it, and a label for a level the data lacks errors naming it. A
+discrete key ends with a swatch in the background colour whenever the matrix
+has `background=` or NA cells, labelled by `legend(missing="Missing")` (default
+`NA`; `missing=none` drops it):
+
+```sh
+cinderplot 'regions("windows.bed") + genes("genes.bed.gz", height=0.8)
+  + matrix("calls_long.tsv", name="m", x=genomic, bar=8, background="#bdbdbd",
+           rowgroup=" | ", cluster=none, discrete=TRUE, height=3.2)
+  + scale_fill_manual(values=c("0"="#4575b4", "1"="#d73027"),
+                      labels=c("0"="Unmethylated", "1"="Methylated"))
+  + legend(missing="Missing", title="Call")' calls.pdf
+```
 
 **`rowgroup="SEP"` splits each sample name** on the separator: the part before
 it is a group, the part after is that row's label. Sixty rows of

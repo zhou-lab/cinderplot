@@ -403,7 +403,8 @@ static int trk_opt_ok(TrackType t, const char *key) {
     if (!strcmp(key, "rowgroup") || !strcmp(key, "rowcolour") || !strcmp(key, "rowcolor"))
         return t == TRK_MATRIX || t == TRK_SIGNAL;
     if (!strcmp(key, "cluster") || !strcmp(key, "rownames") || !strcmp(key, "colnames")
-        || !strcmp(key, "x") || !strcmp(key, "bar") || !strcmp(key, "background"))
+        || !strcmp(key, "x") || !strcmp(key, "bar") || !strcmp(key, "background")
+        || !strcmp(key, "discrete"))
         return t == TRK_MATRIX;
     if (!strcmp(key, "transcripts")) return t == TRK_GENES;
     if (!strcmp(key, "labels")) return t == TRK_INTERVAL;
@@ -419,7 +420,7 @@ static const char *trk_opt_menu(TrackType t) {
     case TRK_ARCS: return "name=, height=, data=, color=";
     case TRK_GENES: return "name=, height=, data=, color=, transcripts=";
     case TRK_MATRIX: return "name=, height=, data=, cluster=, rownames=, colnames=, "
-                            "x=, bar=, background=, rowgroup=, rowcolour=";
+                            "x=, bar=, background=, rowgroup=, rowcolour=, discrete=";
     case TRK_SIGNAL: return "name=, height=, data=, rowgroup=, rowcolour=, smooth=, "
                             "points=, colour=c(...), ylim=c(lo, hi), linewidth=";
     default: return "name=, height=, data=";
@@ -445,7 +446,7 @@ static int parse_trk_args(P *p, TrackObj *o) {
                          || !strcmp(key, "rowcolour") || !strcmp(key, "rowcolor")
                          || !strcmp(key, "smooth") || !strcmp(key, "points")
                          || !strcmp(key, "ylim") || !strcmp(key, "linewidth")
-                         || !strcmp(key, "size");
+                         || !strcmp(key, "size") || !strcmp(key, "discrete");
                 snprintf(msg, sizeof msg, "option `%s` is %s %s(); supported: %s", key,
                          known ? "not valid for" : "not implemented on",
                          trk_name(o->type), trk_opt_menu(o->type));
@@ -590,6 +591,16 @@ static int parse_trk_args(P *p, TrackObj *o) {
                 if (!v || parse_color(v, &o->bg_color))
                     return fail(p, "background= expects a colour (names or #RRGGBB)", "");
                 o->has_bg = 1;
+            } else if (!strcmp(key, "discrete")) {
+                /* heatmap(discrete=TRUE)'s twin: a 0/1 call matrix is
+                 * indistinguishable from measurements without being told. */
+                char *v = word(p);
+                if (!v) return fail(p, "discrete= expects TRUE or FALSE", "");
+                if (!strcmp(v, "TRUE") || !strcmp(v, "true") || !strcmp(v, "T")
+                    || !strcmp(v, "on") || !strcmp(v, "1")) o->discrete = 1;
+                else if (!strcmp(v, "FALSE") || !strcmp(v, "false") || !strcmp(v, "F")
+                         || !strcmp(v, "off") || !strcmp(v, "0")) o->discrete = 0;
+                else return fail(p, "discrete=%s invalid; use TRUE or FALSE", v);
             } else if (!strcmp(key, "transcripts")) {
                 char *v = word(p);
                 if (!v) return fail(p, "transcripts= expects all or canonical", "");
@@ -657,6 +668,7 @@ static int hm_opt_ok(HMType t, const char *key) {
         || !strcmp(key, "aspect") || !strcmp(key, "discrete")) return t == HM_HEATMAP;
     if (!strcmp(key, "labels") || !strcmp(key, "box") || !strcmp(key, "grid"))
         return t == HM_HEATMAP || t == HM_ANNOTATION;
+    if (!strcmp(key, "missing")) return t == HM_LEGEND;
     return 0;
 }
 static const char *hm_opt_menu(HMType t) {
@@ -664,7 +676,7 @@ static const char *hm_opt_menu(HMType t) {
     case HM_HEATMAP: return "name=, data=, title=, cluster=, rownames=, colnames=, "
                             "labels=, discrete=, aspect=, box=, grid=, placements";
     case HM_ANNOTATION: return "name=, data=, title=, column=, labels=, box=, grid=, placements";
-    case HM_LEGEND: return "name=, title=, placements (e.g. right_of(\"m\"))";
+    case HM_LEGEND: return "name=, title=, missing=, placements (e.g. right_of(\"m\"))";
     default: return "name=, placements (e.g. left_of(\"m\"))";
     }
 }
@@ -688,7 +700,7 @@ static int parse_hm_args(P *p, HMObj *o, int want_data) {
                                   ? "heatmap() and annotation()"
                                   : hm_opt_ok(HM_HEATMAP, key) ? "heatmap()"
                                   : hm_opt_ok(HM_ANNOTATION, key) ? "annotation()"
-                                  : hm_opt_ok(HM_LEGEND, key) ? "heatmap(), annotation() and legend()"
+                                  : hm_opt_ok(HM_LEGEND, key) ? "legend()"
                                   : NULL;
                 if (where)
                     snprintf(msg, sizeof msg, "option `%s` is not valid for %s(); %s= applies "
@@ -702,7 +714,23 @@ static int parse_hm_args(P *p, HMObj *o, int want_data) {
             if (!strcmp(key, "name")) {
                 char *v = string_lit(p);
                 if (!v) return fail(p, "name= expects a quoted string", "");
-                o->name = v;
+                o->name = v; o->name_given = 1;
+            } else if (!strcmp(key, "missing")) {
+                /* the label of the background/NA swatch on a track key;
+                 * missing=none drops the swatch (the same off-spellings the
+                 * other options take) */
+                skip_ws(p);
+                if (is_quote(p)) {
+                    o->missing = string_lit(p);
+                    if (!o->missing || !*o->missing)
+                        return fail(p, "missing= expects a quoted label, or none", "");
+                } else {
+                    char *v = word(p);
+                    if (v && (!strcmp(v, "none") || !strcmp(v, "off") || !strcmp(v, "FALSE")
+                              || !strcmp(v, "false"))) o->missing_off = 1;
+                    else return fail(p, "missing= expects a quoted label (missing=\"Missing\") "
+                                     "or none", "");
+                }
             } else if (!strcmp(key, "data")) {
                 char *v = string_lit(p);
                 if (!v) return fail(p, "data= expects a quoted path", "");
@@ -1072,25 +1100,77 @@ static int parse_colour_values(P *p, Col *cols, char **names, int cap, int *n,
     return 0;
 }
 
+/* The body of labels=c(...) after its `c(`: the shape parse_colour_values
+ * reads, with a quoted label where the colour would be. "name"="label" keys
+ * a level as the data writes it; a bare "label" is positional. */
+static int parse_label_values(P *p, char **labs, char **names, int cap, int *n) {
+    *n = 0;
+    for (;;) {
+        skip_ws(p);
+        if (*p->s == ')') { p->s++; break; }
+        char *nm = NULL;
+        const char *save = p->s;
+        if (*p->s == '"') {
+            char *s = string_lit(p); skip_ws(p);
+            if (*p->s == '=') { p->s++; nm = s; } else { free(s); p->s = save; }
+        } else {
+            char *id = ident(p); skip_ws(p);
+            if (id && *p->s == '=') { p->s++; nm = id; } else { free(id); p->s = save; }
+        }
+        skip_ws(p);
+        char *lv = string_lit(p);
+        if (!lv) { free(nm); return fail(p, "labels= expects quoted labels: "
+                                         "labels=c(\"0\"=\"Unmethylated\", ...)", ""); }
+        if (*n >= cap) {
+            free(nm); free(lv);
+            char msg[CP_ERRLEN];
+            snprintf(msg, sizeof msg, "labels=c(...) holds at most %d labels", cap);
+            return fail(p, "%s", msg);
+        }
+        labs[*n] = lv; names[*n] = nm;
+        (*n)++;
+        skip_ws(p);
+        if (*p->s == ',') { p->s++; continue; }
+        if (*p->s == ')') { p->s++; break; }
+        return fail(p, "expected , or ) in labels=c(...)", "");
+    }
+    return 0;
+}
+
 static int parse_manual_scale(P *p, PlotSpec *spec, const char *fn) {
-    spec->n_manual = 0; spec->has_manual = 1;
-    spec->brewer_disc = NULL;    /* a later manual palette replaces a brewer one */
+    /* has_manual follows values=: labels= alone renames a key drawn in the
+     * default palette, and must not read as an empty colour list */
+    int seen = 0;
     skip_ws(p);
     while (*p->s != ')') {
         char *key = ident(p);
         if (!key || expect(p, '=')) return fail(p, "%s expects values=c(...)", fn);
-        if (strcmp(key, "values"))
-            return fail(p, "scale_*_manual option `%s` not implemented (only values=)", key);
         skip_ws(p);
-        if (p->s[0] == 'c' && p->s[1] == '(') p->s += 2;
-        else return fail(p, "values= expects c(\"#..\", ...)", "");
-        if (parse_colour_values(p, spec->manual_cols, spec->manual_names, MAX_MANUAL_COLS,
-                                &spec->n_manual, "values=c(...)"))
-            return -1;
+        seen++;
+        if (!strcmp(key, "values")) {
+            spec->n_manual = 0; spec->has_manual = 1;
+            spec->brewer_disc = NULL;    /* a later manual palette replaces a brewer one */
+            if (p->s[0] == 'c' && p->s[1] == '(') p->s += 2;
+            else return fail(p, "values= expects c(\"#..\", ...)", "");
+            if (parse_colour_values(p, spec->manual_cols, spec->manual_names, MAX_MANUAL_COLS,
+                                    &spec->n_manual, "values=c(...)"))
+                return -1;
+        } else if (!strcmp(key, "labels")) {
+            /* ggplot2's labels= on a manual scale: what the key prints per
+             * level. Honoured by the discrete keys of heatmap and track mode;
+             * the grammar-mode legend refuses it below rather than drop it. */
+            if (p->s[0] == 'c' && p->s[1] == '(') p->s += 2;
+            else return fail(p, "labels= expects c(\"level\"=\"label\", ...)", "");
+            if (parse_label_values(p, spec->manual_labs, spec->manual_lab_names,
+                                   MAX_MANUAL_COLS, &spec->n_manual_labs))
+                return -1;
+        } else
+            return fail(p, "scale_*_manual option `%s` not implemented (only values= and labels=)", key);
         skip_ws(p);
         if (*p->s == ',') { p->s++; skip_ws(p); }
     }
     p->s++;                                            /* consume ')' */
+    if (!seen) return fail(p, "%s expects values=c(...) and/or labels=c(...)", fn);
     return 0;
 }
 
@@ -2521,7 +2601,7 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
             return fail(&p, "chord() draws no axes or legend; only labs(title=) applies", "");
         if (spec->has_xlim || spec->has_ylim || spec->log_x || spec->log_y
             || spec->has_colour_scale || spec->has_fill || spec->no_legend
-            || spec->legend_inside)
+            || spec->legend_inside || spec->n_manual_labs)
             return fail(&p, "chord() takes no scales or guides beyond "
                         "scale_*_manual(values=) for the sector colours", "");
         return 0;                                /* chord mode: nothing else to check */
@@ -2563,7 +2643,31 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
                     "aes()/geom_*", "");
 
     if (spec->ntracks > 0) {           /* track (locus-browser) mode */
-        if (any_grammar || spec->nhobjs)
+        int nmat = 0, nleg = 0;
+        for (int i = 0; i < spec->ntracks; i++) nmat += spec->tobjs[i].type == TRK_MATRIX;
+        /* legend() is the one heatmap-mode object the browser takes: it keys
+         * the matrix() track and sits in the right margin, so the anchor
+         * placements and the anchor name mean nothing here and are refused
+         * rather than dropped. */
+        for (int i = 0; i < spec->nhobjs; i++) {
+            const HMObj *o = &spec->hobjs[i];
+            if (o->type != HM_LEGEND) break;
+            nleg++;
+            if (nmat == 0)
+                return fail(&p, "legend() on the track browser keys a matrix() track, and "
+                            "there is none in this spec", "");
+            if (o->place.given)
+                return fail(&p, "legend() on the track browser sits in the right margin "
+                            "beside the matrix() track; placements (right_of/left_of/"
+                            "top_of/beneath) are heatmap-mode", "");
+            if (o->name_given)
+                return fail(&p, "legend(name=) names an anchor for heatmap-mode placements; "
+                            "the track legend has none (title= names the key)", "");
+            if (nleg > 1)
+                return fail(&p, "one legend() per track figure: it describes the "
+                            "matrix() track", "");
+        }
+        if (any_grammar || spec->nhobjs > nleg)
             return fail(&p, "track functions cannot be mixed with grammar/heatmap", "");
         if (spec->polar || spec->coord_flip)
             return fail(&p, "coord_polar()/coord_flip() do not apply to the track browser", "");
@@ -2615,6 +2719,11 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
          * heatmap.c beside the data, and still errors rather than ignoring. */
         if (spec->hobjs[0].type != HM_HEATMAP)
             return fail(&p, "the first placed object must be a heatmap()", "");
+        for (int i = 0; i < spec->nhobjs; i++)
+            if (spec->hobjs[i].type == HM_LEGEND
+                && (spec->hobjs[i].missing || spec->hobjs[i].missing_off))
+                return fail(&p, "legend(missing=) labels the background swatch a matrix() "
+                            "track's key adds; a heatmap() key draws no NA swatch", "");
         if (spec->polar || spec->coord_flip)
             return fail(&p, "coord_polar()/coord_flip() do not apply to heatmap mode "
                         "(cluster=diagonal/symmetric and placements set the layout)", "");
@@ -2625,6 +2734,13 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
                         "frame the cells); only theme_*(base_line_size=) applies", "");
         return 0;
     }
+    if (spec->n_manual_labs)
+        /* the two discrete keys that honour it are heatmap and track mode,
+         * both returned above; the grammar-mode legend prints the factor's
+         * levels and would drop the renames silently */
+        return fail(&p, "scale_*_manual(labels=) renames the levels of a heatmap() or "
+                    "matrix() track key; the grammar-mode legend does not take it -- "
+                    "rename the levels in the data", "");
     if (spec->tree_mode) {          /* tree mode: the topology is the data */
         if (spec->theme || spec->base_line_size > 0)
             return fail(&p, "theme_*() has no effect on a tree (no panel chrome) and "

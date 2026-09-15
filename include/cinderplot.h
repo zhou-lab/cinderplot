@@ -391,6 +391,11 @@ typedef struct {
     int grid;                      /* heatmap/annotation: stroke cell separators (0 = none) */
     Col grid_col;                  /* grid= colour, when grid is set */
     HPlace place;
+    int name_given;                /* name= was written (hm_new assigns one otherwise) */
+    /* legend(missing=) on the track browser: the label of the final swatch a
+     * discrete matrix() key adds for its background/NA colour ("NA" when
+     * unset); missing=none drops that swatch. */
+    char *missing; int missing_off;
 } HMObj;
 #define MAX_HMOBJS 16
 
@@ -487,6 +492,13 @@ typedef struct {
     Col *ser_col; char **ser_name; int nser_col;   /* colour=c("series"="#..", ...);
                                                     * names NULL = positional */
     double line_lw;      /* linewidth= (size=), ggplot units; 0 = 0.5 */
+    /* matrix(discrete=TRUE): the numeric cell values are category CODES (a
+     * 0/1 call matrix), not measurements -- each distinct value becomes a
+     * level with its own colour (scale_fill_manual(values=) by level name,
+     * else the hue wheel), and legend() draws a key instead of a colourbar.
+     * The same switch heatmap(discrete=TRUE) is; the levels come from the
+     * same routine (cp_numeric_levels). */
+    int discrete;
 } TrackObj;
 #define MAX_TRACKS 12
 /* colour=c(...) on a track, and scale_*_manual(values=): the list cap */
@@ -579,6 +591,12 @@ typedef struct {
      * levels grey with no warning. */
     Col manual_cols[MAX_MANUAL_COLS]; char *manual_names[MAX_MANUAL_COLS];   /* names NULL = positional */
     int n_manual, has_manual;
+    /* scale_*_manual(labels=c("0"="Unmethylated", ...)): what the KEY prints
+     * for a level, keyed by the level as written in the data (values= still
+     * keys colours by that); names NULL = positional, one per level. Read by
+     * the discrete keys of heatmap and track mode (cp_key_labels). */
+    char *manual_labs[MAX_MANUAL_COLS]; char *manual_lab_names[MAX_MANUAL_COLS];
+    int n_manual_labs;
     char *brewer_disc;              /* scale_*_brewer(palette=): the set's name,
                                      * for a level-count-vs-palette-size check */
     int identity_scale;             /* scale_*_identity(): the mapped column's
@@ -645,6 +663,49 @@ char *tabix_slurp_region(const char *path, const char *chrom, long beg, long end
 /* ---------- render_tracks.c: locus track-browser mode ---------- */
 int render_tracks(const PlotSpec *spec, const char *out,
                   double w_pt, double h_pt, char *err);
+
+/* ---------- legend.c: the fill legend, shared by heatmap and track modes ----
+ * Legends are RIGID chrome, sized in physical units (never coupled to the
+ * matrix), following ComplexHeatmap: bar 4mm thick, ~28mm long. */
+#define MM       (72.0 / 25.4)
+#define LEG_BAR  (4.0 * MM)         /* colorbar thickness  */
+#define LEG_LEN  (28.0 * MM)        /* colorbar length     */
+#define LEG_GRID (4.0 * MM)         /* discrete key square */
+#define LEG_GAP  (2.0 * MM)         /* gap between keys    */
+#define CP_LEG_MAXBR 16             /* colourbar break slots */
+/* the extended breaks that fall within [lo, hi]; br holds CP_LEG_MAXBR */
+int cp_legend_breaks(double lo, double hi, double *br);
+/* extent across the reading direction (pt) of a vertical key / colourbar */
+double cp_key_across_pt(cairo_t *cr, char *const *labels, int nlev);
+double cp_colourbar_across_pt(cairo_t *cr, double lo, double hi);
+/* Emit a key (swatches down from `top`, left edge `sx`) or a colourbar
+ * (lower-left corner at bx0,by0; `vert` stands it up; `dir` +1 puts the
+ * labels right/above, -1 left/below) as grobs in cell (r, c), whose size in
+ * points converts the physical dimensions to that cell's npc. */
+void cp_key_draw(GTable *T, int r, int c, char *const *labels, const Col *pal,
+                 int nlev, double sx, double top, double cw_pt, double ch_pt);
+void cp_colourbar_draw(GTable *T, int r, int c, const FillScale *fs,
+                       double lo, double hi, int vert, int dir,
+                       double bx0, double by0, double cw_pt, double ch_pt);
+/* The discrete fill over NUMERIC codes, shared by heatmap(discrete=TRUE) and
+ * matrix(discrete=TRUE): the distinct finite values of v[0..n) become the
+ * levels, sorted ascending and labelled as fmt_num prints them, and every
+ * cell of v is rewritten to its level index (NaN stays NaN). Capped at
+ * HM_MAXLEV; `what` heads the messages. Returns the level count or -1. */
+int cp_numeric_levels(double *v, long n, char ***labels, double **values,
+                      const char *what, char *err);
+/* Rewrite a second array of the same codes onto an existing level set (a
+ * matrix re-read for another window); a value outside it is an error. */
+int cp_levels_apply(double *v, long n, const double *values, int nlev,
+                    const char *what, char *err);
+/* The palette a discrete fill paints with: the hue wheel, overridden by
+ * scale_*_manual(values=) / scale_*_brewer(); pal holds nlev. */
+int cp_discrete_palette(const PlotSpec *spec, char *const *levels, int nlev,
+                        Col *pal, char *err);
+/* The labels a key prints for `levels`: the levels themselves, renamed by
+ * scale_*_manual(labels=) where it names them. A new array, or NULL with
+ * err set (a label for a level the data does not hold). */
+char **cp_key_labels(const PlotSpec *spec, char *const *levels, int nlev, char *err);
 
 /* ---------- cluster.c: hclust ward.D2, R-compatible ---------- */
 typedef struct {

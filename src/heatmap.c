@@ -39,13 +39,8 @@ static uint32_t col_argb(Col c) {
     return 0xFF000000u | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
 }
 
-/* Legends are RIGID chrome, sized in physical units (never coupled to the
- * matrix), following ComplexHeatmap: bar 4mm thick, ~28mm long. */
-#define MM       (72.0 / 25.4)
-#define LEG_BAR  (4.0 * MM)         /* colorbar thickness  */
-#define LEG_LEN  (28.0 * MM)        /* colorbar length     */
-#define LEG_GRID (4.0 * MM)         /* discrete key square */
-#define LEG_GAP  (2.0 * MM)         /* gap between keys    */
+/* Legend geometry (LEG_*) lives in the header beside legend.c, which draws
+ * the key and the colourbar for this mode and the track browser alike. */
 #define ANN_LEAD (3.5 * MM)         /* in-situ label leader horizontal span (pt) */
 #define HM_CELL_BASE 8.0            /* auto-fit: target heatmap cell edge (pt) */
 #define HM_MIN_PT (2.0 * 72)        /* auto-fit: figure size clamps */
@@ -66,6 +61,8 @@ typedef struct {
      * annotation's factor, or a categorical heatmap's level set. One pair of
      * fields so the key is measured and drawn by one code path. */
     Factor *key_f; Col *key_pal;
+    char **key_lab;                 /* what the key prints per level: the levels,
+                                     * or scale_fill_manual(labels=) renames */
     const char *ann_name;           /* annotation: source column name */
     int ann_continuous;             /* annotation: numeric (own colorbar)? */
     double ann_dmin, ann_dmax;      /* annotation: continuous scale range */
@@ -161,10 +158,6 @@ static int cell_is_na(const char *s) {
 static int cmp_lev_str(const void *a, const void *b) {
     return strcmp(*(char *const *)a, *(char *const *)b);
 }
-static int cmp_lev_num(const void *a, const void *b) {
-    double d = *(const double *)a - *(const double *)b;
-    return d < 0 ? -1 : d > 0 ? 1 : 0;
-}
 
 /* One cell's category label, or NULL for NA. Numeric cells are formatted the
  * way factor_make() formats a numeric factor's levels, so a 0/1/2 call matrix
@@ -180,13 +173,26 @@ static const char *cell_level(const Column *col, int r, char *buf, size_t cap) {
 /* Fill a DISCRETE matrix: every value column's cells become level indices.
  * Levels sort numerically when every value column is numeric (the coded-call
  * matrix) and lexically otherwise, which is factor_make()'s rule and therefore
- * R's. The level set is per-matrix here; render_heatmap() unifies it across
- * heatmaps afterwards. */
+ * R's. The numeric case is cp_numeric_levels, the routine a matrix() track's
+ * discrete=TRUE uses too, so the two modes key a 0/1/2 file identically. The
+ * level set is per-matrix here; render_heatmap() unifies it across heatmaps
+ * afterwards. */
 static int matrix_levels(Matrix *m, const DataFrame *df, int c0, int all_num, char *err) {
+    if (all_num) {
+        for (int c = 0; c < m->nc; c++)
+            for (int r = 0; r < df->nrow; r++)
+                m->v[(size_t)r * m->nc + c] = df->cols[c + c0].num[r];
+        char **lv; double *uv;
+        int n = cp_numeric_levels(m->v, (long)m->nr * m->nc, &lv, &uv,
+                                  "discrete heatmap fill", err);
+        if (n < 0) return -1;
+        free(uv);
+        m->discrete = 1; m->nlev = n; m->levels = lv;
+        return 0;
+    }
     long cells = (long)df->nrow * m->nc;
     int cap = cells < HM_MAXLEV ? (int)cells : HM_MAXLEV + 1;
     char **lv = cp_xcalloc((size_t)cap, sizeof(char *));
-    double *uv = cp_xmalloc((size_t)cap * sizeof(double));
     int n = 0;
     for (int c = 0; c < m->nc; c++) {
         const Column *col = &df->cols[c + c0];
@@ -195,8 +201,7 @@ static int matrix_levels(Matrix *m, const DataFrame *df, int c0, int all_num, ch
             const char *s = cell_level(col, r, buf, sizeof buf);
             if (!s) continue;
             int seen = 0;
-            for (int i = 0; i < n && !seen; i++)
-                seen = all_num ? uv[i] == col->num[r] : !strcmp(lv[i], s);
+            for (int i = 0; i < n && !seen; i++) seen = !strcmp(lv[i], s);
             if (seen) continue;
             if (n == cap) {
                 /* A categorical fill with this many keys is not a figure a
@@ -207,30 +212,20 @@ static int matrix_levels(Matrix *m, const DataFrame *df, int c0, int all_num, ch
                          "categorical key that long is unreadable -- collapse the rare "
                          "categories, or drop discrete=TRUE if the values are measurements",
                          HM_MAXLEV);
-                free(lv); free(uv);
+                free(lv);
                 return -1;
             }
-            if (all_num) uv[n] = col->num[r];
-            else lv[n] = cp_xstrdup(s);
-            n++;
+            lv[n++] = cp_xstrdup(s);
         }
     }
     if (n == 0) {
         snprintf(err, CP_ERRLEN, "discrete heatmap fill: every cell of the matrix is NA, "
                  "so there are no categories to colour");
-        free(lv); free(uv);
+        free(lv);
         return -1;
     }
-    if (all_num) {
-        qsort(uv, n, sizeof(double), cmp_lev_num);
-        for (int i = 0; i < n; i++) { lv[i] = cp_xmalloc(32); fmt_num(uv[i], lv[i], 32); }
-    } else {
-        qsort(lv, n, sizeof(char *), cmp_lev_str);
-    }
+    qsort(lv, n, sizeof(char *), cmp_lev_str);
     m->discrete = 1; m->nlev = n; m->levels = lv;
-    /* Numeric codes are looked up by VALUE, not by their formatted label: two
-     * near-equal doubles can print the same and would otherwise collapse into
-     * one level while the key still listed two. */
     for (int c = 0; c < m->nc; c++) {
         const Column *col = &df->cols[c + c0];
         for (int r = 0; r < df->nrow; r++) {
@@ -238,11 +233,10 @@ static int matrix_levels(Matrix *m, const DataFrame *df, int c0, int all_num, ch
             const char *s = cell_level(col, r, buf, sizeof buf);
             double slot = NAN;
             for (int i = 0; s && i < n; i++)
-                if (all_num ? uv[i] == col->num[r] : !strcmp(lv[i], s)) { slot = i; break; }
+                if (!strcmp(lv[i], s)) { slot = i; break; }
             m->v[(size_t)r * m->nc + c] = slot;
         }
     }
-    free(uv);
     return 0;
 }
 
@@ -345,17 +339,6 @@ static const char *legend_title(const PlotSpec *spec, const RObj *lg, const RObj
     if (lg->o->title) return lg->o->title;
     if (src->o->type == HM_ANNOTATION) return src->ann_name;
     return spec->lab_fill;
-}
-
-/* colourbar breaks: the extended breaks that fall within [lo, hi]. The
- * fence is a hair wider than the range, because 3 * 0.1 is 0.30000000000000004
- * and a bar for [0, 0.3] lost its top label to that ulp. */
-static int legend_breaks(double lo, double hi, double *br) {
-    int nb = extended_breaks(lo, hi, 5, br, 16), nf = 0;
-    double eps = 1e-9 * (hi - lo);
-    for (int k = 0; k < nb; k++)
-        if (br[k] >= lo - eps && br[k] <= hi + eps) br[nf++] = br[k];
-    return nf;
 }
 
 /* the scale a continuous legend draws: a numeric annotation uses its own
@@ -514,25 +497,16 @@ static void draw_one_legend(GTable *T, const RObj *r, const RObj *tg,
 
     if (r->leg_discrete) {                          /* categorical key */
         Factor *f = tg->key_f; Col *pal = tg->key_pal;
-        double gw = LPTX(LEG_GRID), gh = LPTY(LEG_GRID), gap = LPTY(LEG_GAP);
+        double gw = LPTX(LEG_GRID);
         double topEdge = blockTop - titleSpace;
         double sx = pk == PL_RIGHT_OF ? 1 + LPTX(gapx) : 0 - LPTX(gapx) - gw;
-        for (int k = 0; k < f->nlev; k++) {
-            double y1 = topEdge - k * (gh + gap);
-            g = gt_add(T, G_RECT, T->nrow - 2, 1, T->nrow - 2, 1);
-            g->sub = 1; g->col = pal[k];
-            g->x0 = sx; g->x1 = sx + gw; g->y1 = y1; g->y0 = y1 - gh;
-            g = gt_add(T, G_TEXT, T->nrow - 2, 1, T->nrow - 2, 1);
-            g->str = f->levels[k]; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
-            g->tx = sx + gw + LPTX(TXT_GAP); g->ty = y1 - gh / 2; g->hj = 0; g->va = V_INKCENTER;
-        }
+        cp_key_draw(T, T->nrow - 2, 1, tg->key_lab, pal, f->nlev, sx, topEdge, cw_pt, ch_pt);
         topY = blockTop; leftX = sx;
     } else {                                        /* continuous colorbar */
         double lo, hi; const FillScale *fs;
         legend_scale(tg, spec, dmin, dmax, &lo, &hi, &fs);
         double barT = vert ? LPTX(LEG_BAR) : LPTY(LEG_BAR);
         double barL = vert ? LPTY(LEG_LEN) : LPTX(LEG_LEN);
-        const int NSTEP = 64, RR = T->nrow - 2, CCc = 1;
         double bx0, by0;
         if (vert) {
             by0 = blockTop - titleSpace - barL;
@@ -544,45 +518,9 @@ static void draw_one_legend(GTable *T, const RObj *r, const RObj *tg,
             by0 = pk == PL_BENEATH ? 0 - LPTY(gapx) - hts - barT
                                    : 1 + LPTY(gapx) + hts;
         }
-        /* painted by VALUE through the same mapping the cells use, so a
-         * gradient2 bar (piecewise about its midpoint) puts white where the
-         * matrix does; ticks below stay linear in value */
-        for (int k = 0; k < NSTEP; k++) {
-            double v = lo + (hi - lo) * (k + 0.5) / NSTEP;
-            g = gt_add(T, G_RECT, RR, CCc, RR, CCc);
-            g->sub = 1; g->col = fill_map_value(fs, v, lo, hi);
-            if (vert) { g->x0 = bx0; g->x1 = bx0 + barT;
-                        g->y0 = by0 + barL * k / NSTEP; g->y1 = by0 + barL * (k + 1) / NSTEP; }
-            else { g->y0 = by0; g->y1 = by0 + barT;
-                   g->x0 = bx0 + barL * k / NSTEP; g->x1 = bx0 + barL * (k + 1) / NSTEP; }
-        }
-        double br[16];
-        int nf = legend_breaks(lo, hi, br);
-        int dec = axis_decimals(br, nf);
-        for (int k = 0; k < nf; k++) {
-            double frac = hi > lo ? (br[k] - lo) / (hi - lo) : 0.5;
-            char *lab = cp_xmalloc(32);
-            fmt_break(br[k], dec, lab, 32);
-            g = gt_add(T, G_LINE, RR, CCc, RR, CCc);
-            g->col = C_TICK; g->lw = lw_pt(0.5);
-            if (vert) {
-                double y = by0 + frac * barL;
-                double tx = pk == PL_RIGHT_OF ? bx0 + barT : bx0, dir = pk == PL_RIGHT_OF ? 1 : -1;
-                g->x0 = tx; g->x1 = tx + dir * LPTX(TICK_LEN); g->y0 = g->y1 = y;
-                g = gt_add(T, G_TEXT, RR, CCc, RR, CCc);
-                g->str = lab; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
-                g->tx = tx + dir * LPTX(TICK_LEN + TXT_GAP); g->ty = y;
-                g->hj = pk == PL_RIGHT_OF ? 0 : 1; g->va = V_INKCENTER;
-            } else {
-                double x = bx0 + frac * barL;
-                double ty = pk == PL_BENEATH ? by0 : by0 + barT, dir = pk == PL_BENEATH ? -1 : 1;
-                g->y0 = ty; g->y1 = ty + dir * LPTY(TICK_LEN); g->x0 = g->x1 = x;
-                g = gt_add(T, G_TEXT, RR, CCc, RR, CCc);
-                g->str = lab; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
-                g->tx = x; g->ty = ty + dir * LPTY(TICK_LEN + TXT_GAP);
-                g->hj = 0.5; g->va = pk == PL_BENEATH ? V_TOP : V_BOTTOM;
-            }
-        }
+        /* labels sit outward: right of a right-hand bar, above a top one */
+        int dir = pk == PL_RIGHT_OF || pk == PL_TOP_OF ? 1 : -1;
+        cp_colourbar_draw(T, T->nrow - 2, 1, fs, lo, hi, vert, dir, bx0, by0, cw_pt, ch_pt);
         topY = vert ? blockTop : by0 + barT;
         leftX = bx0;
     }
@@ -702,44 +640,6 @@ static int unify_levels(RObj *ro, int n, Factor *key, char *err) {
             if (!isnan(m->v[c])) m->v[c] = map[(int)m->v[c]];
         m->nlev = nl; m->levels = key->levels;
     }
-    return 0;
-}
-
-/* The palette a discrete fill paints with: ggplot's hue wheel, then whatever
- * scale_fill_manual(values=) says over the top. A NAMED values= list maps the
- * levels it names and leaves the rest on their hue colour -- so a two-category
- * highlight does not have to enumerate the other eight. A POSITIONAL list is
- * read level by level and must be long enough, because a short one would paint
- * the tail levels silently, which is the failure the grammar-mode scale
- * already refuses. */
-static int discrete_palette(const PlotSpec *spec, const Factor *key, Col *pal, char *err) {
-    hue_palette(key->nlev, pal);
-    if (!spec->has_manual) return 0;
-    int named = spec->n_manual > 0 && spec->manual_names[0] != NULL;
-    if (!named) {
-        if (spec->n_manual < key->nlev) {
-            if (spec->brewer_disc)
-                snprintf(err, CP_ERRLEN, "palette `%s` has %d colours; the matrix has %d "
-                         "categories (`%s`, ...); pick a larger palette or name the "
-                         "colours with scale_fill_manual(values=)", spec->brewer_disc,
-                         spec->n_manual, key->nlev, key->levels[0]);
-            else
-                snprintf(err, CP_ERRLEN, "scale_fill_manual(values=) gives %d colours; the "
-                         "matrix has %d categories (`%s`, ...); give one colour per "
-                         "category, or name them -- values=c(\"%s\"=\"red\", ...) -- and "
-                         "the rest keep the default palette", spec->n_manual, key->nlev,
-                         key->levels[0], key->levels[0]);
-            return -1;
-        }
-        for (int i = 0; i < key->nlev; i++) pal[i] = spec->manual_cols[i];
-        return 0;
-    }
-    for (int i = 0; i < key->nlev; i++)
-        for (int k = 0; k < spec->n_manual; k++)
-            if (spec->manual_names[k] && !strcmp(spec->manual_names[k], key->levels[i])) {
-                pal[i] = spec->manual_cols[k];
-                break;
-            }
     return 0;
 }
 
@@ -1003,7 +903,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                 for (int r = 0; r < df->nrow; r++)
                     ro[i].ann_col[r] = f->idx[r] >= 0 ? pal[f->idx[r]] : C_NA;
                 ro[i].ann_f = f; ro[i].ann_pal = pal;   /* for a discrete legend */
-                ro[i].key_f = f; ro[i].key_pal = pal;
+                ro[i].key_f = f; ro[i].key_pal = pal; ro[i].key_lab = f->levels;
             } else {
                 double lo = 1e300, hi = -1e300;
                 for (int r = 0; r < df->nrow; r++) {
@@ -1226,9 +1126,19 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             return -1;
         }
         if (unify_levels(ro, n, &hm_key, err)) return -1;
-        if (discrete_palette(spec, &hm_key, hm_pal, err)) return -1;
+        if (cp_discrete_palette(spec, hm_key.levels, hm_key.nlev, hm_pal, err)) return -1;
+        char **hm_lab = cp_key_labels(spec, hm_key.levels, hm_key.nlev, err);
+        if (!hm_lab) return -1;
         for (int i = 0; i < n; i++)
-            if (ro[i].o->type == HM_HEATMAP) { ro[i].key_f = &hm_key; ro[i].key_pal = hm_pal; }
+            if (ro[i].o->type == HM_HEATMAP) {
+                ro[i].key_f = &hm_key; ro[i].key_pal = hm_pal; ro[i].key_lab = hm_lab;
+            }
+    } else if (spec->n_manual_labs) {
+        snprintf(err, CP_ERRLEN, "scale_*_manual(labels=) renames the levels of a "
+                 "categorical heatmap's key, and this matrix is numeric (a colourbar "
+                 "has no levels to rename); read the cells as codes with "
+                 "heatmap(discrete=TRUE), or drop labels=");
+        return -1;
     } else if (spec->has_manual) {
         /* The old parser-level refusal, now that there is something to refuse
          * FOR: a manual palette is a discrete scale, and these cells are
@@ -1307,26 +1217,12 @@ int render_heatmap(const PlotSpec *spec, const char *out,
         double titleW = title ? text_w(cr, SZ_BASE, title) : 0;
         double across;                       /* extent perpendicular to bar */
         if (r->leg_discrete) {
-            double wmax = 0;
-            Factor *f = ro[r->target].key_f;
-            for (int k = 0; k < f->nlev; k++) {
-                double tw = text_w(cr, SZ_AXIS_TEXT, f->levels[k]);
-                if (tw > wmax) wmax = tw;
-            }
-            across = fmax(LEG_GRID + TXT_GAP + wmax, titleW);
+            const RObj *tg = &ro[r->target];
+            across = fmax(cp_key_across_pt(cr, tg->key_lab, tg->key_f->nlev), titleW);
         } else {
             double lo, hi; const FillScale *fs;
             legend_scale(&ro[r->target], spec, dmin, dmax, &lo, &hi, &fs);
-            double br[16];
-            int nf = legend_breaks(lo, hi, br);
-            int dec = axis_decimals(br, nf);
-            double wmax = 0;
-            for (int k = 0; k < nf; k++) {
-                char b[32]; fmt_break(br[k], dec, b, sizeof b);
-                double tw = text_w(cr, SZ_AXIS_TEXT, b);
-                if (tw > wmax) wmax = tw;
-            }
-            double barW = LEG_BAR + TICK_LEN + TXT_GAP + wmax;
+            double barW = cp_colourbar_across_pt(cr, lo, hi);
             across = (pk == PL_BENEATH || pk == PL_TOP_OF)
                    ? LEG_BAR + TICK_LEN + TXT_GAP + axH
                      + (title ? baseH + TXT_GAP : 0)                          /* height */
