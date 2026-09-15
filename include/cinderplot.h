@@ -2,7 +2,7 @@
 #ifndef CINDERPLOT_H
 #define CINDERPLOT_H
 
-#define CINDERPLOT_VERSION "0.23.0"
+#define CINDERPLOT_VERSION "0.24.0"
 
 /* Size of the caller-supplied error buffer passed to every *_read / render /
  * dsl_parse entry point (see main.c: char err[CP_ERRLEN]). All error
@@ -435,6 +435,23 @@ typedef struct {
     int hide_rownames;   /* matrix track: 1 = don't draw sample row labels */
     int hide_colnames;   /* matrix track: 1 = don't draw per-probe column labels */
     int all_transcripts; /* genes track: 1 = all isoforms; 0 = canonical (longest/gene) */
+    /* matrix(x=genomic): draw each cell at the probe's own coordinate instead
+     * of in probe-index space. Index space gives every column equal width and
+     * a fan of leader lines to its true position -- readable when the columns
+     * are the point, useless when the LOCUS is: 550 CpGs in 20 kb become a
+     * uniform grid that no longer lines up with the gene models above it.
+     * Genomic space draws only the cells that exist, so a dense CpG cluster
+     * reads dense and a gap reads as a gap. */
+    int genomic_x;       /* 1 = cells at their coordinate; 0 = probe-index grid */
+    double bar_bp;       /* x=genomic: cell width in bp (<=0 = the probe's own
+                          * span, widened to stay visible at the panel's scale) */
+    Col bg_color; int has_bg;   /* background where there is no probe */
+    /* matrix(rowgroup="SEP"): split each sample name on SEP -- the part before
+     * is the group (a cell type), the part after is the row's own label. Sixty
+     * rows of "Bladder-Epithelial | truth" is an unreadable stack of repeated
+     * prefixes; the group is written once beside its run, each row keeps only
+     * what distinguishes it, and a rule separates one run from the next. */
+    char *rowgroup;
 } TrackObj;
 #define MAX_TRACKS 12
 

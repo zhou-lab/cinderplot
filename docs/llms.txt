@@ -448,7 +448,34 @@ cinderplot 'region("chr20:44616522-44655233")
 
 Track verbs: `coverage() interval() genes() arcs() matrix() cytoband()`, each
 taking a file plus `name= height= max= color= data= cluster= rownames=
-colnames= transcripts=`. Inputs are BED/bedGraph/BEDPE/BED12/matrix TSV, tabix
+colnames= transcripts=`, and `matrix()` also `x= bar= background= rowgroup=`. Inputs are BED/bedGraph/BEDPE/BED12/matrix TSV, tabix
+**`matrix(x=genomic)` puts each cell at its own coordinate** instead of in
+probe-index space. The default (`x=index`) gives every probe an equal-width
+column and draws a leader fan to its true position — right when the columns
+are the point, wrong when the *locus* is: 550 CpGs in a 20 kb window become a
+uniform grid that no longer lines up with the gene models above it. Genomic
+space draws only the cells that exist, so a dense CpG cluster reads dense and
+a gap reads as a gap; there is no fan and no per-probe label band, because
+there are no columns to lead to or label. A CpG is 2 bp in a window tens of kb
+wide, far under a pixel, so a cell is widened to stay visible — `bar=N` sets
+the width in bp explicitly. `background=` colours the stretches with no probe
+(default the missing-value grey); an NA cell draws nothing, so the background
+shows through.
+
+**`rowgroup="SEP"` splits each sample name** on the separator: the part before
+it is a group, the part after is that row's label. Sixty rows of
+`Bladder-Epithelial | truth` are a stack of repeated prefixes; grouped, the
+cell type is written once beside its run, each row keeps only what
+distinguishes it, and a rule separates one run from the next. Runs are
+*consecutive* rows, so the display order decides them — a scattered group
+shows as several runs rather than being silently merged. A name without the
+separator keeps its whole label and forms no group.
+
+```sh
+cinderplot 'region("chr1:202004435-202019137") + genes("genes.bed.gz", height=0.6)
+  + matrix("betas_long.tsv", x=genomic, rowgroup=" | ", cluster=none, height=5)' locus.pdf
+```
+
 `.gz` allowed. `region()` with no argument infers the window from `matrix()`,
 and `-r chr:start-end` / `--region` on the command line supplies it from
 outside the expression (a shell loop over loci). Region strings are 0-based,

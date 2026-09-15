@@ -388,7 +388,9 @@ static int trk_opt_ok(TrackType t, const char *key) {
     if (!strcmp(key, "max")) return t == TRK_COVERAGE;
     if (!strcmp(key, "color") || !strcmp(key, "colour"))
         return t == TRK_COVERAGE || t == TRK_INTERVAL || t == TRK_GENES || t == TRK_ARCS;
-    if (!strcmp(key, "cluster") || !strcmp(key, "rownames") || !strcmp(key, "colnames"))
+    if (!strcmp(key, "cluster") || !strcmp(key, "rownames") || !strcmp(key, "colnames")
+        || !strcmp(key, "x") || !strcmp(key, "bar") || !strcmp(key, "background")
+        || !strcmp(key, "rowgroup"))
         return t == TRK_MATRIX;
     if (!strcmp(key, "transcripts")) return t == TRK_GENES;
     return 0;
@@ -398,7 +400,8 @@ static const char *trk_opt_menu(TrackType t) {
     case TRK_COVERAGE: return "name=, height=, data=, color=, max=";
     case TRK_INTERVAL: case TRK_ARCS: return "name=, height=, data=, color=";
     case TRK_GENES: return "name=, height=, data=, color=, transcripts=";
-    case TRK_MATRIX: return "name=, height=, data=, cluster=, rownames=, colnames=";
+    case TRK_MATRIX: return "name=, height=, data=, cluster=, rownames=, colnames=, "
+                            "x=, bar=, background=, rowgroup=";
     default: return "name=, height=, data=";
     }
 }
@@ -467,6 +470,34 @@ static int parse_trk_args(P *p, TrackObj *o) {
                          || !strcmp(v, "bottom") || !strcmp(v, "TRUE") || !strcmp(v, "true"))
                     o->hide_colnames = 0;
                 else return fail(p, "colnames=%s invalid; use on or off", v);
+            } else if (!strcmp(key, "x")) {
+                /* x=genomic puts each cell at its own coordinate; x=index is
+                 * the probe-index grid, and stays the default because it is
+                 * what makes every column readable when there are few. */
+                char *v = word(p);
+                if (!v) return fail(p, "x= expects genomic or index", "");
+                if (!strcmp(v, "genomic") || !strcmp(v, "coord") || !strcmp(v, "bp"))
+                    o->genomic_x = 1;
+                else if (!strcmp(v, "index") || !strcmp(v, "column") || !strcmp(v, "even"))
+                    o->genomic_x = 0;
+                else return fail(p, "x=%s invalid; use genomic or index", v);
+            } else if (!strcmp(key, "bar")) {
+                skip_ws(p);
+                const char *save = p->s;
+                double w = strtod(p->s, (char **)&p->s);
+                if (p->s == save || !(w > 0))
+                    return fail(p, "bar= expects a width in bp > 0", "");
+                o->bar_bp = w;
+            } else if (!strcmp(key, "rowgroup")) {
+                o->rowgroup = string_lit(p);
+                if (!o->rowgroup || !*o->rowgroup)
+                    return fail(p, "rowgroup= expects the quoted separator that "
+                                "splits a sample name, e.g. rowgroup=\" | \"", "");
+            } else if (!strcmp(key, "background")) {
+                char *v = string_lit(p);
+                if (!v || parse_color(v, &o->bg_color))
+                    return fail(p, "background= expects a colour (names or #RRGGBB)", "");
+                o->has_bg = 1;
             } else if (!strcmp(key, "transcripts")) {
                 char *v = word(p);
                 if (!v) return fail(p, "transcripts= expects all or canonical", "");

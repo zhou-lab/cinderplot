@@ -80,7 +80,10 @@ static uint32_t col_argb(Col c) {
 typedef struct {
     int nr, nc;
     double *mv;        /* nr x nc row-major, NaN = missing */
-    double *colpos;    /* nc probe genomic positions (sorted) */
+    double *colpos;    /* nc probe genomic positions (midpoints, sorted) */
+    double *colbeg, *colend;   /* nc probe spans, for matrix(x=genomic): a cell
+                                * drawn at its coordinate wants the probe's own
+                                * width, which the midpoint alone cannot give */
     char **colid;      /* nc probe IDs (may be NULL entries) */
     char **rowname;    /* nr sample names */
     int *roword;       /* nr display order (cluster or identity) */
@@ -88,6 +91,22 @@ typedef struct {
     long gbeg, gend;   /* min(beg), max(end) over probes — for region() inference */
     int multichrom;    /* input spans >1 chromosome (inference is ambiguous) */
 } MatData;
+
+/* matrix(rowgroup="SEP"): the part of a sample name after the LAST separator
+ * is what distinguishes the row; everything before it is the group. Returns the
+ * leaf, and reports the group's length through *glen. With no separator in the
+ * name the whole thing is the leaf and the group is empty, so an ungrouped row
+ * simply keeps its label. */
+static const char *row_leaf(const char *name, const char *sep, size_t *glen) {
+    *glen = 0;
+    if (!sep || !*sep || !name) return name;
+    const char *hit = NULL, *p = name;
+    size_t n = strlen(sep);
+    while ((p = strstr(p, sep))) { hit = p; p += n; }
+    if (!hit) return name;
+    *glen = (size_t)(hit - name);
+    return hit + n;
+}
 
 /* Return a chromosome cell as text, formatting numeric chromosomes such as 1.
  * The caller supplies scratch space because text columns remain borrowed. */
@@ -184,6 +203,8 @@ static MatData *read_matrix(const TrackObj *t, const char *win_chrom,
         if (!val) { snprintf(err, CP_ERRLEN, "long matrix needs a numeric value column"); return NULL; }
         char **pn = cp_xmalloc(mf->nrow * sizeof(char *));
         double *pp = cp_xmalloc(mf->nrow * sizeof(double));
+        double *pb_ = cp_xmalloc(mf->nrow * sizeof(double));
+        double *pe_ = cp_xmalloc(mf->nrow * sizeof(double));
         char **sn = cp_xmalloc(mf->nrow * sizeof(char *));
 #define IN_WIN(r) matrix_in_window(chr_c, sc, ec, r, win_chrom, \
                                     win_beg, win_end)
@@ -196,7 +217,8 @@ static MatData *read_matrix(const TrackObj *t, const char *win_chrom,
                 return NULL;
             }
             for (int i = 0; i < nc; i++) if (!strcmp(pn[i], id)) { f = i; break; }
-            if (f < 0) { pn[nc] = (char *)id; pp[nc] = (sc->num[r] + ec->num[r]) * 0.5; nc++; }
+            if (f < 0) { pn[nc] = (char *)id; pb_[nc] = sc->num[r]; pe_[nc] = ec->num[r];
+                         pp[nc] = (sc->num[r] + ec->num[r]) * 0.5; nc++; }
             const char *s = samp->str[r]; f = -1;
             for (int i = 0; i < nr; i++) if (!strcmp(sn[i], s)) { f = i; break; }
             if (f < 0) sn[nr++] = (char *)s;
@@ -216,7 +238,9 @@ static MatData *read_matrix(const TrackObj *t, const char *win_chrom,
         for (int a = 1; a < nc; a++) { int k = ord[a]; double kp = pp[k]; int b2 = a - 1;
             while (b2 >= 0 && pp[ord[b2]] > kp) { ord[b2+1] = ord[b2]; b2--; } ord[b2+1] = k; }
         m->colpos = cp_xmalloc(nc * sizeof(double)); m->colid = cp_xmalloc(nc * sizeof(char *));
-        for (int c = 0; c < nc; c++) { m->colpos[c] = pp[ord[c]]; m->colid[c] = pn[ord[c]]; }
+        m->colbeg = cp_xmalloc(nc * sizeof(double)); m->colend = cp_xmalloc(nc * sizeof(double));
+        for (int c = 0; c < nc; c++) { m->colpos[c] = pp[ord[c]]; m->colid[c] = pn[ord[c]];
+                                       m->colbeg[c] = pb_[ord[c]]; m->colend[c] = pe_[ord[c]]; }
         m->rowname = sn;
         m->mv = cp_xmalloc((size_t)nr * nc * sizeof(double));
         for (size_t i = 0; i < (size_t)nr * nc; i++) m->mv[i] = NAN;
@@ -256,7 +280,9 @@ static MatData *read_matrix(const TrackObj *t, const char *win_chrom,
             while (b2 >= 0 && pp[ord[b2]] > kp) { ord[b2+1] = ord[b2]; b2--; } ord[b2+1] = k; }
         nr = ns;
         m->colpos = cp_xmalloc(nc * sizeof(double)); m->colid = cp_xmalloc(nc * sizeof(char *));
-        for (int c = 0; c < nc; c++) { m->colpos[c] = pp[ord[c]]; m->colid[c] = pidstr ? pidstr[ord[c]] : NULL; }
+        m->colbeg = cp_xmalloc(nc * sizeof(double)); m->colend = cp_xmalloc(nc * sizeof(double));
+        for (int c = 0; c < nc; c++) { m->colpos[c] = pp[ord[c]]; m->colid[c] = pidstr ? pidstr[ord[c]] : NULL;
+                                       m->colbeg[c] = sc->num[ord[c]]; m->colend[c] = ec->num[ord[c]]; }
         m->rowname = cp_xmalloc(nr * sizeof(char *));
         for (int r = 0; r < nr; r++) m->rowname[r] = mf->cols[scol[r]].name;
         m->mv = cp_xmalloc((size_t)nr * nc * sizeof(double));
@@ -701,11 +727,26 @@ int render_tracks(const PlotSpec *spec, const char *out,
             double w = text_w(cr, SZ_AXIS_TEXT, spec->tobjs[i].name);
             if (w > labw) labw = w;
         }
-        if (md[i] && !spec->tobjs[i].hide_rownames)
+        if (md[i] && !spec->tobjs[i].hide_rownames) {
+            const char *rg = spec->tobjs[i].rowgroup;
+            double leafw = 0, grpw = 0;
             for (int r = 0; r < md[i]->nr; r++) {
-                double w = text_w(cr, sz_samp, md[i]->rowname[r]);
-                if (w > labw) labw = w;
+                size_t gl = 0;
+                const char *leaf = row_leaf(md[i]->rowname[r], rg, &gl);
+                double w = text_w(cr, sz_samp, leaf);
+                if (w > leafw) leafw = w;
+                if (gl) {
+                    char g8[256];
+                    snprintf(g8, sizeof g8, "%.*s", (int)(gl < sizeof g8 ? gl : sizeof g8 - 1),
+                             md[i]->rowname[r]);
+                    double gw = text_w(cr, sz_samp, g8);
+                    if (gw > grpw) grpw = gw;
+                }
             }
+            /* group name sits left of the leaf labels, with a gap between */
+            double w = leafw + (grpw > 0 ? grpw + TXT_GAP * 2 : 0);
+            if (w > labw) labw = w;
+        }
     }
     const char *title = spec->lab_title ? spec->lab_title : (spec->region ? spec->region : rgn_disp);
     double titleh = title ? font_h(cr, sz_title) : 0;
@@ -1148,10 +1189,58 @@ int render_tracks(const PlotSpec *spec, const char *out,
             if (!spec->tobjs[i].hide_colnames)
                 for (int c = 0; c < nc; c++)
                     if (m->colid[c]) { double w = text_w(cr, sz_samp, m->colid[c]); if (w > lbl_pt) lbl_pt = w; }
+            /* x=genomic needs no leader fan (the cells are already at their
+             * coordinate) and no per-probe label band (there is no column to
+             * label), so the heatmap takes the space both would have used. */
+            int gx_mode = spec->tobjs[i].genomic_x;
+            if (gx_mode) { mapband_pt = 0; lbl_pt = 0; }
             double axline  = cell_pt > 0 ? 1 - axtop_pt / cell_pt : 0.94;
             double hmtop   = cell_pt > 0 ? axline - mapband_pt / cell_pt : 0.80;
             double lblband = cell_pt > 0 ? (lbl_pt + lab_pad) / cell_pt : 0.10;  /* labels + lab_pad gap */
             double lbltop  = cell_pt > 0 ? lbl_pt / cell_pt : lblband * 0.85;    /* label tops = lab_pad below heatmap */
+            if (gx_mode) {
+                /* Draw ONLY the cells that exist, each at its own coordinate.
+                 * Not a full-width raster: a 20 kb window is mostly not-a-CpG,
+                 * and painting every pixel column would be both wasteful and a
+                 * lie about where the data is. The background shows through the
+                 * gaps, so density reads as density. */
+                double bgspan = hmtop - lblband;
+                g = gt_add(T, G_RECT, R, CC, R, CC);
+                g->col = spec->tobjs[i].has_bg ? spec->tobjs[i].bg_color : C_NA;
+                g->sub = 1; g->clip = 1;
+                g->x0 = 0; g->x1 = 1; g->y0 = lblband; g->y1 = hmtop;
+                /* A CpG is 2 bp in a window tens of kb wide -- far under a
+                 * pixel -- so a cell gets at least a hairline of width or the
+                 * track renders blank. bar= overrides in bp. */
+                double span = x1 - x0;
+                double minw = span > 0 ? (0.75 / fmax(win_pt, 1.0)) * span : 1;
+                for (int c = 0; c < nc; c++) {
+                    double pb, pe;
+                    if (spec->tobjs[i].bar_bp > 0) {
+                        pb = m->colpos[c] - spec->tobjs[i].bar_bp / 2;
+                        pe = pb + spec->tobjs[i].bar_bp;
+                    } else {
+                        pb = m->colbeg ? m->colbeg[c] : m->colpos[c];
+                        pe = m->colend ? m->colend[c] : m->colpos[c] + 1;
+                        if (pe - pb < minw) {
+                            double mid = (pb + pe) / 2;
+                            pb = mid - minw / 2; pe = mid + minw / 2;
+                        }
+                    }
+                    double cx0 = NPCX(pb), cx1 = NPCX(pe);
+                    if (cx1 <= 0 || cx0 >= 1) continue;          /* outside the window */
+                    for (int rr = 0; rr < nr; rr++) {
+                        double v = m->mv[(size_t)m->roword[rr] * nc + c];
+                        if (isnan(v)) continue;                  /* background shows through */
+                        g = gt_add(T, G_RECT, R, CC, R, CC);
+                        g->col = fill_map_value(&fs, v, 0, 1);
+                        g->sub = 1; g->clip = 1;
+                        g->x0 = cx0; g->x1 = cx1;
+                        g->y1 = hmtop - (double)rr / nr * bgspan;
+                        g->y0 = hmtop - (double)(rr + 1) / nr * bgspan;
+                    }
+                }
+            } else {
             int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, nc);
             unsigned char *buf = cp_xmalloc((size_t)nr * stride);
             for (int rr = 0; rr < nr; rr++) {
@@ -1165,6 +1254,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
             g = gt_add(T, G_IMAGE, R, CC, R, CC);
             g->img = buf; g->img_w = nc; g->img_h = nr; g->clip = 1;
             g->x0 = 0; g->x1 = 1; g->y0 = lblband; g->y1 = hmtop;
+            }
             g = gt_add(T, G_RECT, R, CC, R, CC);             /* heatmap bounding box */
             Col bbh = {0.4, 0.4, 0.4};
             g->col = bbh; g->sub = 1; g->stroke = 1; g->lw = lw_pt(0.5) * cp_line_scale; g->clip = 1;
@@ -1228,7 +1318,8 @@ int render_tracks(const PlotSpec *spec, const char *out,
                 g->tx = xtxt[b]; g->ty = axline + txtoff; g->hj = 0.5; g->va = V_BOTTOM;
             }
             Col mapc = {0.45, 0.45, 0.45};
-            const int NB = 24;                                /* map lines: cubic-bezier
+            const int NB = 24;
+            if (gx_mode) goto gx_no_fan;   /* nothing to lead to: cells sit at their own x */                                /* map lines: cubic-bezier
                 * flow from the probe's genomic position to its column, with vertical
                 * tangents at both ends (control points stacked below/above each end). */
             for (int c = 0; c < nc; c++) {
@@ -1243,7 +1334,10 @@ int render_tracks(const PlotSpec *spec, const char *out,
                 g = gt_add(T, G_POLYLINE, R, CC, R, CC);
                 g->n = NB; g->px = px; g->py = py; g->col = mapc; g->lw = lw_pt(0.4); g->clip = 1;
             }
-            for (int c = 0; c < nc && !t->hide_colnames; c++) {   /* probe IDs (rotated) */
+gx_no_fan:
+            /* Probe IDs label COLUMNS; in genomic space there are none -- 550
+             * ids over a 20 kb window would be an unreadable band regardless. */
+            for (int c = 0; c < nc && !t->hide_colnames && !gx_mode; c++) {   /* probe IDs (rotated) */
                 if (!m->colid[c]) continue;
                 double lwn = cell_pt > 0 ? text_w(cr, sz_samp, m->colid[c]) / cell_pt : 0;
                 g = gt_add(T, G_TEXT, R, CC, R, CC);
@@ -1256,10 +1350,57 @@ int render_tracks(const PlotSpec *spec, const char *out,
              * same names over the last. */
             if (!t->hide_rownames && wi == 0)
                 for (int rr = 0; rr < nr; rr++) {
+                    size_t gl = 0;
+                    const char *leaf = row_leaf(m->rowname[m->roword[rr]], t->rowgroup, &gl);
                     g = gt_add(T, G_TEXT, R, 1, R, 1);
-                    g->str = m->rowname[m->roword[rr]]; g->size = sz_samp; g->col = C_BLACK;
+                    g->str = (char *)leaf; g->size = sz_samp; g->col = C_BLACK;
                     g->tx = 1; g->ty = hmtop - (rr + 0.5) / nr * hh; g->hj = 1; g->va = V_INKCENTER;
                 }
+            /* Group runs: the name once beside its rows, and a rule between one
+             * run and the next. Runs are CONSECUTIVE rows sharing a prefix --
+             * the display order decides them, so clustering or a hand-ordered
+             * file groups exactly as the reader sees it, and a scattered group
+             * legitimately shows up as several runs rather than being merged
+             * behind the reader's back. */
+            if (t->rowgroup && nr > 0) {
+                double leafw = 0;
+                for (int rr = 0; rr < nr; rr++) {
+                    size_t gl = 0;
+                    const char *leaf = row_leaf(m->rowname[m->roword[rr]], t->rowgroup, &gl);
+                    double w = text_w(cr, sz_samp, leaf);
+                    if (w > leafw) leafw = w;
+                }
+                int rs = 0;
+                while (rs < nr) {
+                    size_t gl = 0;
+                    const char *nm = m->rowname[m->roword[rs]];
+                    row_leaf(nm, t->rowgroup, &gl);
+                    int re = rs;
+                    while (re + 1 < nr) {
+                        size_t gl2 = 0;
+                        const char *nm2 = m->rowname[m->roword[re + 1]];
+                        row_leaf(nm2, t->rowgroup, &gl2);
+                        if (gl2 != gl || (gl && strncmp(nm, nm2, gl))) break;
+                        re++;
+                    }
+                    if (gl && !t->hide_rownames && wi == 0) {
+                        char *gname = cp_xmalloc(gl + 1);
+                        memcpy(gname, nm, gl); gname[gl] = 0;
+                        g = gt_add(T, G_TEXT, R, 1, R, 1);
+                        g->str = gname; g->size = sz_samp; g->col = C_BLACK;
+                        g->tx = labw > 0 ? 1 - (leafw + TXT_GAP * 2) / labw : 0;
+                        g->ty = hmtop - (rs + re + 1) / 2.0 / nr * hh;
+                        g->hj = 1; g->va = V_INKCENTER;
+                    }
+                    if (re + 1 < nr) {            /* rule below this run */
+                        g = gt_add(T, G_LINE, R, CC, R, CC);
+                        g->col = C_BLACK; g->lw = lw_pt(0.5) * cp_line_scale; g->clip = 1;
+                        g->x0 = 0; g->x1 = 1;
+                        g->y0 = g->y1 = hmtop - (double)(re + 1) / nr * hh;
+                    }
+                    rs = re + 1;
+                }
+            }
         }
     }
       if (!has_matrix) {
