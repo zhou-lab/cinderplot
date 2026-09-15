@@ -27,10 +27,14 @@
 #                                       when one exists for this version.
 #   scripts/release.sh watch            follow the CI run for the pushed commit
 #                                       and print the failing log if it is red.
+#   scripts/release.sh release          check -> tag -> push -> watch -> deploy
+#                                       -> status, each gated on the last. Use
+#                                       this rather than chaining the verbs by
+#                                       hand, which masks their exit codes.
 #   scripts/release.sh status           what is deployed where vs. HEAD.
 #
 # The whole sequence:
-#   bump X.Y.Z -> (commit) -> check -> tag -> push -> watch -> deploy -> status
+#   bump X.Y.Z -> (commit) -> release
 #
 # Environment:
 #   CINDERPLOT_BUILD_PREFIX   conda env holding cairo for the HPC build
@@ -358,6 +362,20 @@ do_watch() {
     echo "Next:  scripts/release.sh deploy   # the lab binary; CI does not do this"
 }
 
+# -------------------------------------------------------------- release ----
+# The whole sequence after the bump commit, each verb gated on the last.
+# Hand-chaining the verbs is how 0.25.0 went out on a red run: a `check |
+# tail -1 && tag` runs tag whatever check said, because the pipe's status is
+# tail's. The verbs exit correctly; the chaining was the hazard, so make the
+# chaining a verb.
+do_release() {
+    for v in check tag push watch deploy status; do
+        step "release: $v"
+        "do_$v" || fail "stopped at \`$v\` -- fix, then re-run from that verb"
+    done
+    green "release complete"
+}
+
 # --------------------------------------------------------------- status ----
 do_status() {
     v=$(header_version)
@@ -381,7 +399,7 @@ do_status() {
 # only when someone came to cut a release. Check the wiring on every run: it
 # costs nothing and it is exactly the kind of unexercised path this script
 # exists to stop trusting.
-for _v in check bump deploy tag push watch status; do
+for _v in check bump deploy tag push watch release status; do
     command -v "do_$_v" >/dev/null || fail "internal: verb \`$_v\` has no do_$_v function"
 done
 
@@ -392,6 +410,7 @@ case "${1:-}" in
     tag)    do_tag ;;
     push)   do_push ;;
     watch)  do_watch ;;
+    release) do_release ;;
     status) do_status ;;
     *) sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac
