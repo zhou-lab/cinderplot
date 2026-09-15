@@ -324,6 +324,10 @@ typedef struct {
                           * (transformed space; 0 = the 0.25 default) */
     double tile_lw;      /* geom_tile(linewidth=): border stroke width in
                           * ggplot linewidth units (0 = the 0.1 default) */
+    double line_lw;      /* linewidth= (size= alias) on the stroke geoms --
+                          * line, smooth, segment, hline/vline/abline,
+                          * errorbar/linerange -- in ggplot linewidth units
+                          * (0 = the geom's default: 0.5, or 1 for smooth) */
     double txt_angle;    /* geom_text(angle=): degrees CCW; hjust= anchors in
                           * the rotated frame. Not on geom_label (the box does
                           * not rotate) or the repel geoms (they measure
@@ -452,6 +456,15 @@ typedef struct {
      * prefixes; the group is written once beside its run, each row keeps only
      * what distinguishes it, and a rule separates one run from the next. */
     char *rowgroup;
+    /* matrix(rowcolour="file.tsv"): a `group colour` table. Each group name in
+     * the gutter is written in its colour with a filled swatch beside it, so a
+     * lineage reads at a glance; a group absent from the file stays black. */
+    char *rowcolour;
+    /* interval(labels=): 0 = auto -- a feature's name is drawn only where it
+     * fits before the next feature in its lane, so 380 CpG ticks do not print
+     * 380 names over one another; 1 = on draws every name regardless;
+     * -1 = off draws none. */
+    int labels;
 } TrackObj;
 #define MAX_TRACKS 12
 
@@ -463,6 +476,8 @@ typedef struct {
     AesEntry label;                 /* geom_text/geom_label label column */
     AesEntry size;                  /* geom_point size: numeric -> point area */
     AesEntry shape;                 /* geom_point shape: discrete -> point glyph */
+    AesEntry group;                 /* geom_line/geom_smooth series key: discrete,
+                                     * no legend; crossed with a discrete colour */
     AesEntry chrom;                 /* genome scale: chromosome column */
     int coord_flip;                 /* coord_flip(): swap the x and y axes */
     /* chord mode: chord("links.csv") — a circlize-style chord diagram from a

@@ -228,7 +228,7 @@ static int parse_aes(P *p, PlotSpec *spec) {
      * fill= is colour). A second mapping onto an occupied slot used to win
      * silently -- aes(x=hp, xmin=wt) plotted wt -- so remember which key
      * claimed each slot and refuse the collision, naming both. */
-    const char *claimed[10] = {0};
+    const char *claimed[11] = {0};
     skip_ws(p);
     if (*p->s == ')') { p->s++; return 0; }
     for (;;) {
@@ -255,11 +255,14 @@ static int parse_aes(P *p, PlotSpec *spec) {
                 e = &spec->colour; slot = 9;
                 spec->colour.is_fill = key[0] == 'f';
             }
-            else if (!strcmp(key, "group") || !strcmp(key, "linetype") || !strcmp(key, "alpha")
+            else if (!strcmp(key, "group")) { e = &spec->group; slot = 10; }
+            else if (!strcmp(key, "linetype") || !strcmp(key, "alpha")
                      || !strcmp(key, "weight") || !strcmp(key, "linewidth"))
-                return fail(p, "aes(%s=...) is not implemented; a discrete colour= "
-                            "already groups lines and sets the legend", key);
-            else return fail(p, "aes(%s=...) is not implemented; supported: x, y, xend, yend, ymin, ymax, label, size, shape, chrom, colour, fill", key);
+                return fail(p, "aes(%s=...) is not implemented as a mapping; a "
+                            "discrete colour= groups lines and sets the legend, "
+                            "group= groups without a legend, and linetype=/alpha=/"
+                            "linewidth= are per-layer constants (geom_line(linewidth=0.3))", key);
+            else return fail(p, "aes(%s=...) is not implemented; supported: x, y, xend, yend, ymin, ymax, label, size, shape, group, chrom, colour, fill", key);
         } else {
             /* positional: the first unclaimed of x, y -- R's matching, so
              * aes(x=factor(g), v) puts v on y */
@@ -390,18 +393,20 @@ static int trk_opt_ok(TrackType t, const char *key) {
         return t == TRK_COVERAGE || t == TRK_INTERVAL || t == TRK_GENES || t == TRK_ARCS;
     if (!strcmp(key, "cluster") || !strcmp(key, "rownames") || !strcmp(key, "colnames")
         || !strcmp(key, "x") || !strcmp(key, "bar") || !strcmp(key, "background")
-        || !strcmp(key, "rowgroup"))
+        || !strcmp(key, "rowgroup") || !strcmp(key, "rowcolour") || !strcmp(key, "rowcolor"))
         return t == TRK_MATRIX;
     if (!strcmp(key, "transcripts")) return t == TRK_GENES;
+    if (!strcmp(key, "labels")) return t == TRK_INTERVAL;
     return 0;
 }
 static const char *trk_opt_menu(TrackType t) {
     switch (t) {
     case TRK_COVERAGE: return "name=, height=, data=, color=, max=";
-    case TRK_INTERVAL: case TRK_ARCS: return "name=, height=, data=, color=";
+    case TRK_INTERVAL: return "name=, height=, data=, color=, labels=";
+    case TRK_ARCS: return "name=, height=, data=, color=";
     case TRK_GENES: return "name=, height=, data=, color=, transcripts=";
     case TRK_MATRIX: return "name=, height=, data=, cluster=, rownames=, colnames=, "
-                            "x=, bar=, background=, rowgroup=";
+                            "x=, bar=, background=, rowgroup=, rowcolour=";
     default: return "name=, height=, data=";
     }
 }
@@ -420,7 +425,9 @@ static int parse_trk_args(P *p, TrackObj *o) {
                 char msg[CP_ERRLEN];
                 int known = !strcmp(key, "max") || !strcmp(key, "color") || !strcmp(key, "colour")
                          || !strcmp(key, "cluster") || !strcmp(key, "rownames")
-                         || !strcmp(key, "colnames") || !strcmp(key, "transcripts");
+                         || !strcmp(key, "colnames") || !strcmp(key, "transcripts")
+                         || !strcmp(key, "labels") || !strcmp(key, "rowgroup")
+                         || !strcmp(key, "rowcolour") || !strcmp(key, "rowcolor");
                 snprintf(msg, sizeof msg, "option `%s` is %s %s(); supported: %s", key,
                          known ? "not valid for" : "not implemented on",
                          trk_name(o->type), trk_opt_menu(o->type));
@@ -493,6 +500,22 @@ static int parse_trk_args(P *p, TrackObj *o) {
                 if (!o->rowgroup || !*o->rowgroup)
                     return fail(p, "rowgroup= expects the quoted separator that "
                                 "splits a sample name, e.g. rowgroup=\" | \"", "");
+            } else if (!strcmp(key, "rowcolour") || !strcmp(key, "rowcolor")) {
+                o->rowcolour = string_lit(p);
+                if (!o->rowcolour || !*o->rowcolour)
+                    return fail(p, "rowcolour= expects the quoted path of a `group colour` "
+                                "table, e.g. rowcolour=\"colours.tsv\"", "");
+            } else if (!strcmp(key, "labels")) {
+                /* The same spellings rownames= takes, so a reader who knows one
+                 * knows the other. */
+                char *v = word(p);
+                if (!v) return fail(p, "labels= expects on or off", "");
+                if (!strcmp(v, "off") || !strcmp(v, "none") || !strcmp(v, "hide")
+                    || !strcmp(v, "FALSE") || !strcmp(v, "false")) o->labels = -1;
+                else if (!strcmp(v, "on") || !strcmp(v, "show") || !strcmp(v, "all")
+                         || !strcmp(v, "TRUE") || !strcmp(v, "true")) o->labels = 1;
+                else if (!strcmp(v, "auto")) o->labels = 0;
+                else return fail(p, "labels=%s invalid; use on or off", v);
             } else if (!strcmp(key, "background")) {
                 char *v = string_lit(p);
                 if (!v || parse_color(v, &o->bg_color))
@@ -523,6 +546,10 @@ static int parse_trk_args(P *p, TrackObj *o) {
     }
 done:
     if (!o->data) return fail(p, "this track needs a data file", "");
+    if (o->rowcolour && !o->rowgroup)
+        return fail(p, "rowcolour= colours the group names that rowgroup= splits off, "
+                    "so it needs rowgroup=\"SEP\" too; without groups there is "
+                    "nothing to colour", "");
     return 0;
 }
 
@@ -1118,11 +1145,25 @@ static int parse_term(P *p, PlotSpec *spec) {
                                || !strcmp(key, "closed") || !strcmp(key, "position"))) {
                     return fail(p, "geom_histogram(%s=) is not implemented; only bins=N "
                                 "chooses the binning", key);
-                } else if ((gt == GEOM_LINE || gt == GEOM_SMOOTH)
+                } else if ((gt == GEOM_LINE || gt == GEOM_SMOOTH || gt == GEOM_SEGMENT
+                            || gt == GEOM_HLINE || gt == GEOM_VLINE || gt == GEOM_ABLINE
+                            || gt == GEOM_ERRORBAR || gt == GEOM_LINERANGE)
                            && (!strcmp(key, "size") || !strcmp(key, "linewidth"))) {
-                    /* the stroke is a fixed 0.5; saying "layer option not
-                     * implemented" hid that it is the WIDTH that is missing */
-                    return fail(p, "line width on %s() (size=/linewidth=) is not implemented", name);
+                    /* the stroke width of a line geom, in ggplot's linewidth
+                     * units (0.5 = geom_line's default, 1 = geom_smooth's).
+                     * size= is the pre-3.4 spelling and means the same. */
+                    skip_ws(p);
+                    char *end;
+                    double v = strtod(p->s, &end);
+                    if (end == p->s || !(v > 0)) {
+                        char msg[CP_ERRLEN];
+                        snprintf(msg, sizeof msg, "%s(%s=) expects a number > 0, in "
+                                 "ggplot linewidth units (0.5 is geom_line's default)",
+                                 name, key);
+                        return fail(p, "%s", msg);
+                    }
+                    p->s = end;
+                    l->line_lw = v;
                 } else if (!strcmp(key, "color") || !strcmp(key, "colour") || !strcmp(key, "fill")) {
                     char *v = string_lit(p);
                     if (!v || parse_color(v, &l->color))

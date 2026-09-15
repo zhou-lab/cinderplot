@@ -87,13 +87,20 @@ cinderplot 'ggplot("mtcars.csv", aes(hp, mpg, colour=factor(cyl))) + geom_point(
 and ignored (the output path is a command-line argument here).
 
 - **aes**: `x`, `y` positionally, then named — `colour`/`color`/`fill`, `size`,
-  `shape`, `label`, `xend`/`xmax`, `ymin`, `yend`/`ymax`, `chrom`. `shape=` maps a
+  `shape`, `group`, `label`, `xend`/`xmax`, `ymin`, `yend`/`ymax`, `chrom`. `shape=` maps a
   **discrete** column to point glyphs (circle, triangle, square, diamond,
   triangle-down, plus) with its own legend, so a scatter can carry two factors
   at once — colour for one, shape for the other. Six levels maximum, as in
   ggplot2: past that the glyphs stop being tellable apart, so it errors rather
   than inventing a seventh. Needs a point layer. A value is a bare column name
   or `factor(col[, levels=c(...)])`.
+- **`aes(group=col)`** partitions the rows into series for `geom_line()` and
+  `geom_smooth()` WITHOUT touching colour or the legend, as in ggplot2 — five
+  reconstructions in one colour, each its own line or loess fit, with no
+  palette hack. With a discrete `colour=` too, a series is one (colour level,
+  group level) pair. The column must be discrete (`factor(col)` for a numeric
+  id); it needs a line or smooth layer, and errors beside the stat geoms
+  (boxplot, bar, col, histogram, density, tile), which group by colour only.
 - **geoms**: `point jitter line smooth col histogram boxplot bar segment rect
   density tile raster hline vline abline text label errorbar linerange`, plus
   `text_repel`/`label_repel`.
@@ -105,6 +112,10 @@ and ignored (the output path is a command-line argument here).
   `coord_flip()`, log axes and facets; a bound that is not positive on a log
   axis drops that row with a stderr note.
 - **layer options**: `size=`, `alpha=`, `linetype="solid"|"dashed"|"dotted"`,
+  `linewidth=` (`size=` is its pre-3.4 alias) on every stroke geom — line,
+  smooth, segment, hline/vline/abline, errorbar/linerange — in ggplot
+  linewidth units (0.5 is `geom_line()`'s default, 1 is `geom_smooth()`'s;
+  must be > 0),
   `bins=` (histogram; ggplot2's default binning — right-closed bins whose
   edges sit on the (k+½)·width lattice — so counts match `ggplot_build()`),
   `bw=`/`adjust=` (density, R's `bw.nrd0` scaled by `adjust`),
@@ -130,7 +141,7 @@ and ignored (the output path is a command-line argument here).
   `scale_y_continuous(breaks=c(0.5, 1))` + `ylim(0,1)`). geom_line()/
   geom_point() only; bars under polar (pie/rose) error — general polar
   coordinates are on the roadmap. `colour=` implies the series grouping,
-  as in ggplot2 (no `aes(group=)` needed).
+  as in ggplot2; `aes(group=)` partitions further without a legend.
 - `annotate("text", x=, y=, label=[, colour=][, size=][, hjust=][, vjust=])`
   places one literal mark, ggplot2's verb — also `"segment"` (x/y/xend/yend)
   and `"rect"` (xmin/xmax/ymin/ymax; colour= sets the fill, default grey85).
@@ -146,8 +157,9 @@ and ignored (the output path is a command-line argument here).
   part in scale training, work on log axes and under coord_flip, repeat the
   verb for several, and draw OVER the geoms (a shading rect behind points is
   not expressible yet). The usual use: labelling a geom_hline() reference.
-- **`geom_smooth(se=FALSE, span=)`** fits a LOESS (local quadratic, tricube
-weights) per colour group per panel — the points-plus-trend idiom for a noisy
+- **`geom_smooth(se=FALSE, span=[, linewidth=])`** fits a LOESS (local quadratic,
+tricube weights) per series — colour level, and `aes(group=)` when given — per
+panel: the points-plus-trend idiom for a noisy
 signal. `span=` is the fraction of the data in each local fit, default `0.75` as
 in ggplot2. **Treat the default as a starting point, not an answer**: over a
 wide window it will flatten real structure into one broad arc. On a genomic
@@ -448,7 +460,8 @@ cinderplot 'region("chr20:44616522-44655233")
 
 Track verbs: `coverage() interval() genes() arcs() matrix() cytoband()`, each
 taking a file plus `name= height= max= color= data= cluster= rownames=
-colnames= transcripts=`, and `matrix()` also `x= bar= background= rowgroup=`. Inputs are BED/bedGraph/BEDPE/BED12/matrix TSV, tabix
+colnames= transcripts=`; `interval()` also `labels=` and `matrix()` also
+`x= bar= background= rowgroup= rowcolour=`. Inputs are BED/bedGraph/BEDPE/BED12/matrix TSV, tabix
 **`matrix(x=genomic)` puts each cell at its own coordinate** instead of in
 probe-index space. The default (`x=index`) gives every probe an equal-width
 column and draws a leader fan to its true position — right when the columns
@@ -475,6 +488,27 @@ separator keeps its whole label and forms no group.
 cinderplot 'region("chr1:202004435-202019137") + genes("genes.bed.gz", height=0.6)
   + matrix("betas_long.tsv", x=genomic, rowgroup=" | ", cluster=none, height=5)' locus.pdf
 ```
+
+**`rowcolour="colours.tsv"` colours the group names** (also `rowcolor=`): a
+two-column table headed `group colour` (or `color`), one line per group, and
+the name is written in that colour with a filled swatch beside it, so a lineage
+reads at a glance. Groups the table does not name keep black and get no swatch;
+a colour that does not parse is an error naming the row. It needs `rowgroup=`,
+since without groups there is nothing to colour.
+
+```sh
+printf 'group\tcolour\nNeuron\t#d62728\nHepatocyte\tsteelblue\n' > colours.tsv
+cinderplot 'region("chr1:202004435-202019137")
+  + matrix("betas_long.tsv", x=genomic, rowgroup=" | ", rowcolour="colours.tsv",
+           cluster=none, height=5)' locus.pdf
+```
+
+**`interval()` names each feature from its 4th BED column**, to the right of
+the box — but only where the name fits before the next feature in its lane.
+A CpG tick track of 380 named 2-bp features would otherwise print 380 names
+over one another; by default the crowded names are dropped and the boxes stay
+(the way `genes()` keeps names from colliding). `labels=on` draws every name
+regardless, `labels=off` draws none; a 3-column BED has no names to draw.
 
 `.gz` allowed. `region()` with no argument infers the window from `matrix()`,
 and `-r chr:start-end` / `--region` on the command line supplies it from

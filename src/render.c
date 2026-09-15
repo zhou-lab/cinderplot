@@ -662,6 +662,10 @@ static int train_ref_lines(const PlotSpec *spec, int train_x, int train_y,
     return drop;
 }
 
+/* a stroke geom's line width: the layer's linewidth= (size=) when given,
+ * else the geom's ggplot default, both in linewidth units */
+#define LAYER_LW(L, dflt) lw_pt((L)->line_lw > 0 ? (L)->line_lw : (dflt))
+
 int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 double w_pt, double h_pt, char *err) {
     /* ---- layer summary ---- */
@@ -919,6 +923,56 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         }
     }
 
+    /* aes(group=): a discrete column that partitions the rows into series
+     * for geom_line()/geom_smooth() without touching colour or the legend --
+     * five reconstructions in one colour, each its own line. With a discrete
+     * colour= as well, a series is one (colour level, group level) pair, as
+     * in ggplot2. series[r] is the row's series and ngf the group stride, so
+     * series s draws in pal[s / ngf]; with no group= that is the colour index
+     * unchanged, and the line geoms below never look at cf directly. */
+    Factor *gf = NULL;
+    if (spec->group.col) {
+        const Column *gc = df_col(df, spec->group.col);
+        if (!gc) {
+            snprintf(err, CP_ERRLEN, "column `%s` not found", spec->group.col);
+            return -1;
+        }
+        if (!spec->group.is_factor && gc->type == COL_NUM) {
+            /* ggplot2 would silently treat it as discrete; say so instead */
+            snprintf(err, CP_ERRLEN, "aes(group=%s) is a numeric column; group= "
+                     "partitions rows by a discrete key -- write factor(%s) to "
+                     "say so", spec->group.col, spec->group.col);
+            return -1;
+        }
+        if (!hasline) {
+            snprintf(err, CP_ERRLEN, "aes(group=) needs a geom_line() or "
+                     "geom_smooth() layer to partition into series; points, "
+                     "segments and text are drawn per row and need no grouping");
+            return -1;
+        }
+        /* the stat geoms group by colour= only; a group= they ignore would
+         * be a silent no-op, and on geom_density() a wrong answer */
+        const char *ungrouped = hasdens ? "geom_density()" : hasbox ? "geom_boxplot()"
+                              : hasbar ? "geom_bar()" : hascol ? "geom_col()"
+                              : nhist ? "geom_histogram()" : hastile ? "geom_tile()" : NULL;
+        if (ungrouped) {
+            snprintf(err, CP_ERRLEN, "aes(group=) with %s is not implemented; "
+                     "that layer groups by colour= only", ungrouped);
+            return -1;
+        }
+        gf = factor_make(df, gc);
+        if (spec->group.nlevels
+            && factor_relevel(gf, df->nrow, spec->group.levels,
+                              spec->group.nlevels, "group", err)) return -1;
+    }
+    int ngf = gf ? gf->nlev : 1;
+    int nseries = (cf ? cf->nlev : 1) * ngf;
+    int *series = cp_xmalloc(df->nrow * sizeof(int));
+    for (int r = 0; r < df->nrow; r++) {
+        int ci = cf ? cf->idx[r] : 0, gi = gf ? gf->idx[r] : 0;
+        series[r] = (ci < 0 || gi < 0) ? -1 : ci * ngf + gi;
+    }
+
     /* aes(size=): numeric column mapped to point area (geom_point) */
     const Column *szc = NULL;
     if (spec->size.col) {
@@ -1044,6 +1098,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 : isfinite(xc->num[r]);
         int ok = xok && (!yc || (disc_y ? yf->idx[r] >= 0 : isfinite(yc->num[r])))
               && (!cf || cf->idx[r] >= 0) && (!shf || shf->idx[r] >= 0)
+              && (!gf || gf->idx[r] >= 0)
               && (!cont_col || isfinite(colc->num[r]))
               && (!ff || ff->idx[r] >= 0)
               && (!szc || isfinite(szc->num[r]))
@@ -2867,13 +2922,12 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             /* series, in layer order */
             for (int li = 0; li < spec->nlayers; li++) {
                 const Layer *L = &spec->layers[li];
-                int ngrp = cf ? cf->nlev : 1;
-                for (int grp = 0; grp < ngrp; grp++) {
+                for (int grp = 0; grp < nseries; grp++) {
                     int np = 0;
                     for (int cat = 0; cat < k; cat++)
                         for (int r2 = 0; r2 < df->nrow; r2++)
                             if (use[r2] && xf->idx[r2] == cat
-                                && (!cf || cf->idx[r2] == grp)) np++;
+                                && series[r2] == grp) np++;
                     if (!np) continue;
                     double *px = cp_xmalloc((np + 1) * sizeof(double));
                     double *py = cp_xmalloc((np + 1) * sizeof(double));
@@ -2881,7 +2935,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     for (int cat = 0; cat < k; cat++)
                         for (int r2 = 0; r2 < df->nrow; r2++) {
                             if (!use[r2] || xf->idx[r2] != cat
-                                || (cf && cf->idx[r2] != grp)) continue;
+                                || series[r2] != grp) continue;
                             double ang = spec->polar_start + TAU * cat / k;
                             double rr = (TY(yc->num[r2]) - y0) / (y1 - y0);
                             if (rr < 0) rr = 0;
@@ -2890,12 +2944,12 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                             m2++;
                         }
                     Col sc2 = L->has_color ? L->color
-                            : cf ? pal[grp] : C_BLACK;
+                            : cf ? pal[grp / ngf] : C_BLACK;
                     if (L->type == GEOM_LINE && m2 >= 2) {
                         px[m2] = px[0]; py[m2] = py[0];   /* CLOSE the series */
                         g = gt_add(T, G_POLYLINE, R, C, R, C);
                         g->n = m2 + 1; g->px = px; g->py = py;
-                        g->col = sc2; g->lw = lw_pt(0.5); g->clip = 1;
+                        g->col = sc2; g->lw = LAYER_LW(L, 0.5); g->clip = 1;
                         g->alpha = L->alpha; g->dash = L->dash;
                     } else if (L->type == GEOM_POINT) {
                         Col *pc2 = cp_xmalloc(m2 * sizeof(Col));
@@ -3087,24 +3141,23 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                  * quadratic. Degree 2 rather than 1 because a local line
                  * flattens peaks, and a methylation trace is mostly peaks.
                  *
-                 * One curve per colour group per panel, like geom_line -- a
-                 * single smooth across groups would average away the very
-                 * difference the layer is there to show. */
+                 * One curve per series (colour x group) per panel, like
+                 * geom_line -- a single smooth across groups would average
+                 * away the very difference the layer is there to show. */
                 const Layer *SL = &spec->layers[li];
                 double span = SL->span > 0 ? SL->span : 0.75;
-                int ngrp = cf ? cf->nlev : 1;
-                for (int grp = 0; grp < ngrp; grp++) {
+                for (int grp = 0; grp < nseries; grp++) {
                     int nn = 0;
                     for (int r = 0; r < df->nrow; r++)
                         if (use[r] && (!ff || ff->idx[r] == p)
-                                   && (!cf || cf->idx[r] == grp)) nn++;
+                                   && series[r] == grp) nn++;
                     if (nn < 4) continue;          /* nothing to fit through */
                     double *sx = cp_xmalloc(nn * sizeof(double));
                     double *sy = cp_xmalloc(nn * sizeof(double));
                     nn = 0;
                     for (int r = 0; r < df->nrow; r++) {
                         if (!use[r] || (ff && ff->idx[r] != p)) continue;
-                        if (cf && cf->idx[r] != grp) continue;
+                        if (series[r] != grp) continue;
                         sx[nn] = TXR(r); sy[nn] = TY(yc->num[r]); nn++;
                     }
                     /* sort by x: the neighbourhood is a window over sorted x */
@@ -3183,8 +3236,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         double *ly = cp_xmalloc(npt * sizeof(double));
                         for (int k = 0; k < npt; k++) { lx[k] = pts[k].x; ly[k] = pts[k].y; }
                         g->n = npt; g->px = lx; g->py = ly;
-                        g->col = SL->has_color ? SL->color : cf ? pal[grp] : C_BLACK;
-                        g->lw = lw_pt(SL->point_size > 0 ? SL->point_size : 1.0);
+                        g->col = SL->has_color ? SL->color : cf ? pal[grp / ngf] : C_BLACK;
+                        g->lw = lw_pt(SL->line_lw > 0 ? SL->line_lw : 1.0);
                         g->dash = SL->dash; g->alpha = SL->alpha; g->clip = 1;
                     }
                     free(sx); free(sy); free(pts);
@@ -3198,18 +3251,17 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                              "is not implemented; use factor()");
                     return -1;
                 }
-                int ngrp = cf ? cf->nlev : 1;
-                for (int grp = 0; grp < ngrp; grp++) {
+                for (int grp = 0; grp < nseries; grp++) {
                     int np = 0;
                     for (int r = 0; r < df->nrow; r++)
                         if (use[r] && (!ff || ff->idx[r] == p)
-                                   && (!cf || cf->idx[r] == grp)) np++;
+                                   && series[r] == grp) np++;
                     if (np < 2) continue;
                     Pt *pts = cp_xmalloc(np * sizeof(Pt));
                     np = 0;
                     for (int r = 0; r < df->nrow; r++) {
                         if (!use[r] || (ff && ff->idx[r] != p)
-                                    || (cf && cf->idx[r] != grp)) continue;
+                                    || series[r] != grp) continue;
                         pts[np].x = NPCX(TXR(r));
                         pts[np].y = NPCY(TY(yc->num[r]));
                         np++;
@@ -3221,8 +3273,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     g = gt_add(T, G_POLYLINE, R, C, R, C);
                     g->n = np; g->px = px; g->py = py;
                     g->col = spec->layers[li].has_color ? spec->layers[li].color
-                           : cf ? pal[grp] : C_BLACK;
-                    g->lw = lw_pt(0.5); g->clip = 1;
+                           : cf ? pal[grp / ngf] : C_BLACK;
+                    g->lw = LAYER_LW(&spec->layers[li], 0.5); g->clip = 1;
                 }
             } else if (gt == GEOM_ERRORBAR || gt == GEOM_LINERANGE) {
                 /* a vertical range per row, ymin..ymax at x; errorbar adds
@@ -3243,14 +3295,15 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     Col ec = spec->layers[li].has_color ? spec->layers[li].color
                            : !mapped ? C_BLACK
                            : cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BLACK;
+                    double elw = LAYER_LW(&spec->layers[li], 0.5);
                     g = gt_add(T, G_LINE, R, C, R, C);
-                    g->col = ec; g->lw = lw_pt(0.5); g->clip = 1;
+                    g->col = ec; g->lw = elw; g->clip = 1;
                     g->x0 = g->x1 = NPCX(tx);
                     g->y0 = ylo; g->y1 = yhi;
                     if (gt == GEOM_ERRORBAR) {
                         for (int e2 = 0; e2 < 2; e2++) {
                             g = gt_add(T, G_LINE, R, C, R, C);
-                            g->col = ec; g->lw = lw_pt(0.5); g->clip = 1;
+                            g->col = ec; g->lw = elw; g->clip = 1;
                             g->x0 = NPCX(tx - wda / 2);
                             g->x1 = NPCX(tx + wda / 2);
                             g->y0 = g->y1 = e2 ? yhi : ylo;
@@ -3280,7 +3333,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     if (genome_x && off < 0) continue;
                     if (isnan(c_x->num[r2]) || isnan(c_y->num[r2])) continue;
                     g = gt_add(T, G_LINE, R, C, R, C);
-                    g->col = lcol; g->lw = lw_pt(0.6); g->clip = 1;
+                    g->col = lcol; g->lw = LAYER_LW(L, 0.6); g->clip = 1;
                     /* through the log transform like geom_rect(data=); a
                      * 10..100 segment used to land off a log10 panel */
                     g->x0 = NPCX(genome_x ? off + c_x->num[r2]
@@ -3314,7 +3367,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     g = gt_add(T, G_LINE, R, C, R, C);
                     g->col = spec->layers[li].has_color ? spec->layers[li].color
                            : cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BLACK;
-                    g->lw = lw_pt(0.5); g->clip = 1;
+                    g->lw = LAYER_LW(&spec->layers[li], 0.5); g->clip = 1;
                     g->x0 = NPCX(TXR(r));
                     g->x1 = NPCX(xec ? (genome_x ? GX(r, xec->num[r])
                                       : cp_logt(spec->log_x, xec->num[r]))
@@ -3569,7 +3622,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 if (L->has_intercept && isfinite(yt)) {
                     g = gt_add(T, G_LINE, R, C, R, C);
                     g->col = L->has_color ? L->color : C_BLACK;
-                    g->lw = lw_pt(0.5); g->clip = 1;
+                    g->lw = LAYER_LW(L, 0.5); g->clip = 1;
                     g->x0 = 0; g->x1 = 1; g->y0 = g->y1 = yt;
                 }
             } else if (gt == GEOM_VLINE) {
@@ -3579,7 +3632,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 if (L->has_intercept && isfinite(xn)) {
                     g = gt_add(T, G_LINE, R, C, R, C);
                     g->col = L->has_color ? L->color : C_BLACK;
-                    g->lw = lw_pt(0.5); g->clip = 1;
+                    g->lw = LAYER_LW(L, 0.5); g->clip = 1;
                     g->y0 = 0; g->y1 = 1; g->x0 = g->x1 = xn;
                 }
             } else if (gt == GEOM_ABLINE) {
@@ -3592,7 +3645,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 if (isfinite(yl) && isfinite(yr)) {
                     g = gt_add(T, G_LINE, R, C, R, C);
                     g->col = L->has_color ? L->color : C_BLACK;
-                    g->lw = lw_pt(0.5); g->clip = 1;
+                    g->lw = LAYER_LW(L, 0.5); g->clip = 1;
                     g->x0 = 0; g->x1 = 1;
                     g->y0 = yl; g->y1 = yr;
                 }

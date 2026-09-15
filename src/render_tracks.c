@@ -566,6 +566,62 @@ static int trk_boxes_load(const PlotSpec *spec, TBox **out, int *n_out, char *er
     return 0;
 }
 
+/* ---- matrix(rowcolour="file.tsv"): `group colour` per line. The group name
+ * in the gutter is written in that colour with a swatch beside it, so a
+ * lineage reads at a glance without a legend. Groups the file does not name
+ * keep black, so a partial table is not an error; a colour that does not
+ * parse is, naming the row. ---- */
+typedef struct { const char *group; Col col; } RowCol;
+
+/* swatch beside a coloured group name: a square about the x-height of the
+ * label, and the gap it keeps from the name */
+#define SWATCH_PT 5.0
+
+static int trk_rowcolours_load(const TrackObj *t, RowCol **out, int *n_out, char *err) {
+    DataFrame *df = df_read_csv(t->rowcolour, err);
+    if (!df) return -1;
+    const Column *gc = df_col(df, "group");
+    const Column *kc = df_col(df, "colour"); if (!kc) kc = df_col(df, "color");
+    if (!gc || !kc) {
+        snprintf(err, CP_ERRLEN, "rowcolour(\"%s\"): needs columns group and colour "
+                 "(one line per rowgroup= name)", t->rowcolour);
+        return -1;
+    }
+    if (kc->type != COL_STR) {
+        snprintf(err, CP_ERRLEN, "rowcolour(\"%s\"): column `colour` must be text "
+                 "(names or #RRGGBB)", t->rowcolour);
+        return -1;
+    }
+    RowCol *rc = cp_xcalloc(df->nrow > 0 ? df->nrow : 1, sizeof *rc);
+    int n = 0;
+    for (int r = 0; r < df->nrow; r++) {
+        const char *gname = gc->type == COL_STR ? gc->str[r] : NULL;
+        if (!gname) {                        /* a numeric group column */
+            char *tmp = cp_xmalloc(32);
+            snprintf(tmp, 32, "%.15g", gc->num[r]);
+            gname = tmp;
+        }
+        if (!*gname) continue;
+        if (!kc->str[r] || !*kc->str[r] || parse_color(kc->str[r], &rc[n].col)) {
+            snprintf(err, CP_ERRLEN, "rowcolour(\"%s\"): row %d (group `%s`) colour `%s` "
+                     "invalid (names or #RRGGBB)", t->rowcolour, r + 2, gname,
+                     kc->str[r] ? kc->str[r] : "");
+            return -1;
+        }
+        rc[n++].group = gname;
+    }
+    *out = rc; *n_out = n;
+    return 0;
+}
+
+/* the colour for a group name of length gl, or NULL when the file does not
+ * name it (the caller keeps black and draws no swatch) */
+static const Col *rowcolour_of(const RowCol *rc, int nrc, const char *name, size_t gl) {
+    for (int k = 0; k < nrc; k++)
+        if (strlen(rc[k].group) == gl && !strncmp(rc[k].group, name, gl)) return &rc[k].col;
+    return NULL;
+}
+
 int render_tracks(const PlotSpec *spec, const char *out,
                   double w_pt, double h_pt, char *err) {
     int ntr = spec->ntracks;
@@ -596,6 +652,11 @@ int render_tracks(const PlotSpec *spec, const char *out,
             rowref[i] = md[i];
             has_matrix = 1;
         }
+    /* rowcolour= tables, read once: the swatch widens the label gutter below */
+    RowCol *rcs[MAX_TRACKS] = {0}; int nrcs[MAX_TRACKS] = {0};
+    for (int i = 0; i < ntr; i++)
+        if (spec->tobjs[i].type == TRK_MATRIX && spec->tobjs[i].rowcolour
+            && trk_rowcolours_load(&spec->tobjs[i], &rcs[i], &nrcs[i], err)) return -1;
 
     /* ---- windows: regions() gives several, region() one ---- */
     Window *wins = NULL; int nwin = 1;
@@ -743,8 +804,10 @@ int render_tracks(const PlotSpec *spec, const char *out,
                     if (gw > grpw) grpw = gw;
                 }
             }
-            /* group name sits left of the leaf labels, with a gap between */
+            /* group name sits left of the leaf labels, with a gap between;
+             * a rowcolour= swatch sits left of the name again */
             double w = leafw + (grpw > 0 ? grpw + TXT_GAP * 2 : 0);
+            if (grpw > 0 && spec->tobjs[i].rowcolour) w += SWATCH_PT + TXT_GAP;
             if (w > labw) labw = w;
         }
     }
@@ -1079,6 +1142,21 @@ int render_tracks(const PlotSpec *spec, const char *out,
                 if (L < 0) L = nlanes - 1;               /* cap: pile into last lane */
                 lane[k] = L; laneend[L] = iv[k].end;
             }
+            /* Where the next feature in the same lane begins (npc), so a
+             * name is drawn only where it fits before it. genes() reserves
+             * the label width while lane-packing; interval boxes keep their
+             * packing -- a CpG tick track is one lane of 380 boxes, and the
+             * tick spacing, not the names, is what it shows -- and drop the
+             * names that would overprint instead. labels=on forces them. */
+            double *nextx = cp_xmalloc((ni > 0 ? ni : 1) * sizeof(double));
+            {
+                double lanenext[64];
+                for (int j = 0; j < 64; j++) lanenext[j] = 2.0;   /* nothing follows */
+                for (int k = ni - 1; k >= 0; k--) {
+                    nextx[k] = lanenext[lane[k]];
+                    lanenext[lane[k]] = NPCX(iv[k].start);
+                }
+            }
             Col col = t->has_color ? t->color : C_IVAL;
             double lh = 1.0 / nlanes;
             for (int k = 0; k < ni; k++) {
@@ -1087,10 +1165,11 @@ int render_tracks(const PlotSpec *spec, const char *out,
                 g->col = col; g->sub = 1; g->clip = 1;
                 g->x0 = NPCX(iv[k].start); g->x1 = NPCX(iv[k].end);
                 g->y0 = yb + 0.18 * lh; g->y1 = yb + 0.82 * lh;
-                if (iv[k].name) {                        /* name to the right */
+                if (iv[k].name && t->labels >= 0) {      /* name to the right */
                     double tx = NPCX(iv[k].end) + 0.004;
                     double need = text_w(cr, SZ_AXIS_TEXT, iv[k].name) / win_pt;
-                    if (!wins || tx + need <= 1.0) {       /* else it lands in the neighbour */
+                    int crowded = t->labels == 0 && tx + need > nextx[k];
+                    if (!crowded && (!wins || tx + need <= 1.0)) {   /* else it lands in the neighbour */
                         g = gt_add(T, G_TEXT, R, CC, R, CC);
                         g->str = iv[k].name; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
                         g->tx = tx; g->ty = yb + 0.5 * lh;
@@ -1386,11 +1465,22 @@ gx_no_fan:
                     if (gl && !t->hide_rownames && wi == 0) {
                         char *gname = cp_xmalloc(gl + 1);
                         memcpy(gname, nm, gl); gname[gl] = 0;
+                        const Col *gc = rowcolour_of(rcs[i], nrcs[i], nm, gl);
+                        double gx = labw > 0 ? 1 - (leafw + TXT_GAP * 2) / labw : 0;
+                        double gy = hmtop - (rs + re + 1) / 2.0 / nr * hh;
                         g = gt_add(T, G_TEXT, R, 1, R, 1);
-                        g->str = gname; g->size = sz_samp; g->col = C_BLACK;
-                        g->tx = labw > 0 ? 1 - (leafw + TXT_GAP * 2) / labw : 0;
-                        g->ty = hmtop - (rs + re + 1) / 2.0 / nr * hh;
+                        g->str = gname; g->size = sz_samp; g->col = gc ? *gc : C_BLACK;
+                        g->tx = gx; g->ty = gy;
                         g->hj = 1; g->va = V_INKCENTER;
+                        if (gc && labw > 0 && cell_pt > 0) {   /* swatch left of the name */
+                            double gw = text_w(cr, sz_samp, gname);
+                            g = gt_add(T, G_RECT, R, 1, R, 1);
+                            g->col = *gc; g->sub = 1;
+                            g->x1 = gx - (gw + TXT_GAP) / labw;
+                            g->x0 = g->x1 - SWATCH_PT / labw;
+                            g->y0 = gy - SWATCH_PT / 2 / cell_pt;
+                            g->y1 = gy + SWATCH_PT / 2 / cell_pt;
+                        }
                     }
                     if (re + 1 < nr) {            /* rule below this run */
                         g = gt_add(T, G_LINE, R, CC, R, CC);

@@ -492,7 +492,7 @@ int main(int argc, char **argv) {
     int nneeded = 0;
     const AesEntry *aes[] = { &spec.x, &spec.y, &spec.colour, &spec.xend,
                               &spec.yend, &spec.ymin, &spec.label, &spec.size,
-                              &spec.shape, &spec.chrom };
+                              &spec.shape, &spec.chrom, &spec.group };
     for (size_t i = 0; i < sizeof aes / sizeof *aes; i++)
         if (aes[i]->col) needed[nneeded++] = aes[i]->col;
     if (spec.facet_var) needed[nneeded++] = spec.facet_var;
