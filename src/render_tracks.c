@@ -1886,7 +1886,14 @@ gx_no_fan:
             const SigData *d = sd[i];
             int ns = d->nstrip;
             double cell_pt = (t->height > 0 ? t->height : 1) * per_h;
-            double sh = 1.0 / ns, pad = 0.12 * sh;
+            double sh = 1.0 / ns;
+            /* A proportional inner pad keeps a trace off its own lane's edges;
+             * the gap= is a FIXED blank between one lane and the next, so two
+             * strips read as two lanes rather than one trace crossing a
+             * baseline -- and it stays the same hairline at any track height. */
+            double gap_npc = cell_pt > 0 ? (t->gap_pt >= 0 ? t->gap_pt : 2.0) / cell_pt : 0;
+            if (gap_npc > sh * 0.4) gap_npc = sh * 0.4;         /* never eat the lane */
+            double pad = 0.12 * sh + gap_npc / 2;
             double lw = lw_pt(t->line_lw > 0 ? t->line_lw : 0.5);
             if (t->name) {                                    /* rotated, gutter's left edge */
                 double fh = font_h(cr, SZ_AXIS_TEXT);

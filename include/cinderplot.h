@@ -2,7 +2,7 @@
 #ifndef CINDERPLOT_H
 #define CINDERPLOT_H
 
-#define CINDERPLOT_VERSION "0.24.0"
+#define CINDERPLOT_VERSION "0.25.0"
 
 /* Size of the caller-supplied error buffer passed to every *_read / render /
  * dsl_parse entry point (see main.c: char err[CP_ERRLEN]). All error
@@ -485,6 +485,10 @@ typedef struct {
      * like matrix() rows, one line per series inside a strip, on the same
      * genomic x as the tracks above. The manuscript case is a ground-truth
      * trace over N reconstructions per cell type, under the binary matrix. */
+    double gap_pt;       /* signal(gap=): blank space between adjacent strips,
+                          * in pt (<0 = the 2pt default). Two lanes that butt
+                          * read as one trace crossing a baseline; a hairline of
+                          * white between them reads as two lanes. */
     double smooth;       /* loess span in (0, 1]; 0 = the raw polyline */
     int points;          /* 1 = the raw points behind the lines (small, faint) */
     double ylim_lo, ylim_hi; int has_ylim;   /* pin every strip's value range;

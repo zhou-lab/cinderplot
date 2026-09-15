@@ -383,6 +383,7 @@ static TrackObj *trk_new(P *p, PlotSpec *spec, TrackType t) {
     }
     TrackObj *o = &spec->tobjs[spec->ntracks++];
     memset(o, 0, sizeof *o);
+    o->gap_pt = -1;                     /* signal(gap=): unset, so 0 can mean none */
     o->type = t;
     return o;
 }
@@ -409,7 +410,7 @@ static int trk_opt_ok(TrackType t, const char *key) {
     if (!strcmp(key, "transcripts")) return t == TRK_GENES;
     if (!strcmp(key, "labels")) return t == TRK_INTERVAL;
     if (!strcmp(key, "smooth") || !strcmp(key, "points") || !strcmp(key, "ylim")
-        || !strcmp(key, "linewidth") || !strcmp(key, "size"))
+        || !strcmp(key, "linewidth") || !strcmp(key, "size") || !strcmp(key, "gap"))
         return t == TRK_SIGNAL;
     return 0;
 }
@@ -422,7 +423,7 @@ static const char *trk_opt_menu(TrackType t) {
     case TRK_MATRIX: return "name=, height=, data=, cluster=, rownames=, colnames=, "
                             "x=, bar=, background=, rowgroup=, rowcolour=, discrete=";
     case TRK_SIGNAL: return "name=, height=, data=, rowgroup=, rowcolour=, smooth=, "
-                            "points=, colour=c(...), ylim=c(lo, hi), linewidth=";
+                            "points=, colour=c(...), ylim=c(lo, hi), linewidth=, gap=";
     default: return "name=, height=, data=";
     }
 }
@@ -483,6 +484,14 @@ static int parse_trk_args(P *p, TrackObj *o) {
                                     : "bad track colour", "");
                     o->has_color = 1;
                 }
+            } else if (!strcmp(key, "gap")) {
+                skip_ws(p);
+                const char *save = p->s;
+                double gp = strtod(p->s, (char **)&p->s);
+                if (p->s == save || gp < 0)
+                    return fail(p, "gap= expects the blank space between strips in "
+                                "points, >= 0 (default 2)", "");
+                o->gap_pt = gp;
             } else if (!strcmp(key, "smooth")) {
                 /* the loess span, as geom_smooth(span=); 0 draws the raw
                  * polyline through the points in position order */

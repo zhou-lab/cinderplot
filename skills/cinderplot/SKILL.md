@@ -567,7 +567,7 @@ strips own the label column. `height=` is a row weight like the matrix's, and
 the strips share it equally; `linewidth=` (or `size=`) is in ggplot units,
 default 0.5. Under `regions()` each window draws the rows inside it, and the
 strip order and ranges come from the whole file so a strip means the same row
-in every window. A faint baseline marks each strip's low end.
+in every window. A faint baseline marks each strip's low end. `gap=PT` is the fixed blank between strips (default 2 pt), so adjacent lanes read as two lanes rather than one trace crossing a baseline; `gap=0` removes it.
 
 ```sh
 cinderplot 'regions("windows.bed") + genes("genes.bed.gz", height=0.8)
