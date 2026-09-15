@@ -134,6 +134,14 @@ void fmt_break(double v, int decimals, char *buf, size_t cap);
 int log_breaks(int base, double tlo, double thi, double *tmaj, char **labs,
                int max_out);
 
+/* ---------- smooth.c: LOESS (local quadratic, tricube weights) ----------
+ * Fit y ~ x at `nout` evenly spaced x over the data's range with the nearest
+ * `span` fraction of the n points; writes the curve to ox/oy (each at least
+ * nout long) and returns how many points it holds, or -1 with `err` set.
+ * geom_smooth() and the signal() track both draw this. */
+int cp_loess(const double *x, const double *y, int n, double span, int nout,
+             double *ox, double *oy, char *err);
+
 /* Data value -> log axis space. base 0 is the identity, so call sites can pass
  * spec->log_x straight through instead of branching on whether it is set. */
 static inline double cp_logt(int base, double v) {
@@ -215,6 +223,9 @@ typedef struct {
     GType type;
     int r0, c0, r1, c1;                        /* cell span, inclusive */
     int clip;
+    int band_clip; double band_y0, band_y1;    /* with clip: restrict the clip to
+                                                * this npc y-band of the cell (a
+                                                * strip inside a track row) */
     Col col;
     double x0, y0, x1, y1, lw;                 /* line / sub-rect, npc */
     int sub;                                   /* G_RECT: use x0..y1 sub-rect */
@@ -427,7 +438,7 @@ typedef struct {
 
 /* track (locus-browser) mode: stacked tracks over one genomic region */
 typedef enum { TRK_COVERAGE, TRK_INTERVAL, TRK_GENES, TRK_ARCS,
-               TRK_MATRIX, TRK_CYTOBAND } TrackType;
+               TRK_MATRIX, TRK_CYTOBAND, TRK_SIGNAL } TrackType;
 typedef struct {
     TrackType type;
     char *data;          /* input file (BED/bedGraph/GFF/BEDPE/matrix TSV/cytoband) */
@@ -465,8 +476,21 @@ typedef struct {
      * 380 names over one another; 1 = on draws every name regardless;
      * -1 = off draws none. */
     int labels;
+    /* signal("long.tsv"): continuous traces, one strip per sample stacked
+     * like matrix() rows, one line per series inside a strip, on the same
+     * genomic x as the tracks above. The manuscript case is a ground-truth
+     * trace over N reconstructions per cell type, under the binary matrix. */
+    double smooth;       /* loess span in (0, 1]; 0 = the raw polyline */
+    int points;          /* 1 = the raw points behind the lines (small, faint) */
+    double ylim_lo, ylim_hi; int has_ylim;   /* pin every strip's value range;
+                                              * else each strip's own min..max */
+    Col *ser_col; char **ser_name; int nser_col;   /* colour=c("series"="#..", ...);
+                                                    * names NULL = positional */
+    double line_lw;      /* linewidth= (size=), ggplot units; 0 = 0.5 */
 } TrackObj;
 #define MAX_TRACKS 12
+/* colour=c(...) on a track, and scale_*_manual(values=): the list cap */
+#define MAX_MANUAL_COLS 64
 
 typedef struct {
     char *data_path;
@@ -553,7 +577,7 @@ typedef struct {
     /* scale_colour/fill_manual(values=): discrete palette override. 64 slots:
      * 16 silently dropped the rest, and a 20-level figure painted its tail
      * levels grey with no warning. */
-    Col manual_cols[64]; char *manual_names[64];  /* names NULL = positional */
+    Col manual_cols[MAX_MANUAL_COLS]; char *manual_names[MAX_MANUAL_COLS];   /* names NULL = positional */
     int n_manual, has_manual;
     char *brewer_disc;              /* scale_*_brewer(palette=): the set's name,
                                      * for a level-count-vs-palette-size check */

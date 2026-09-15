@@ -458,10 +458,11 @@ cinderplot 'region("chr20:44616522-44655233")
            colnames=off, height=10)' locus.pdf
 ```
 
-Track verbs: `coverage() interval() genes() arcs() matrix() cytoband()`, each
-taking a file plus `name= height= max= color= data= cluster= rownames=
-colnames= transcripts=`; `interval()` also `labels=` and `matrix()` also
-`x= bar= background= rowgroup= rowcolour=`. Inputs are BED/bedGraph/BEDPE/BED12/matrix TSV, tabix
+Track verbs: `coverage() interval() genes() arcs() matrix() signal() cytoband()`,
+each taking a file plus `name= height= max= color= data= cluster= rownames=
+colnames= transcripts=`; `interval()` also `labels=`, `matrix()` also
+`x= bar= background= rowgroup= rowcolour=`, and `signal()` `rowgroup= rowcolour=
+smooth= points= colour=c(...) ylim= linewidth=`. Inputs are BED/bedGraph/BEDPE/BED12/matrix TSV, tabix
 **`matrix(x=genomic)` puts each cell at its own coordinate** instead of in
 probe-index space. The default (`x=index`) gives every probe an equal-width
 column and draws a leader fan to its true position — right when the columns
@@ -510,6 +511,41 @@ over one another; by default the crowded names are dropped and the boxes stay
 (the way `genes()` keeps names from colliding). `labels=on` draws every name
 regardless, `labels=off` draws none; a 3-column BED has no names to draw.
 
+**`signal()` draws continuous traces under the same axis** — the manuscript's
+bottom panel: per cell type one strip, the ground truth as a black line over N
+reconstructions in orange, points behind, loess-smoothed, on the genomic x of
+the `matrix()` above it. It reads the long shape `matrix()` reads,
+`chrom beg end value sample [series]` (`beta` heads the value column just as
+well): one strip per `sample`, stacked top to bottom in file order like matrix
+rows, and within a strip one line per `series` through that series' rows in
+position order (no `series` column: one line per strip). `smooth=SPAN` draws
+each series as its loess with that span, the fit `geom_smooth(span=)` draws;
+`smooth=0` (the default) is the raw polyline. `points=on` puts the raw points
+behind the lines, small and translucent. `ylim=c(lo, hi)` pins every strip to
+one value range (betas want `c(0, 1)`); otherwise each strip spans its own
+min..max, and a value outside `ylim=` is clipped to its strip, never rescaled.
+`colour=c("Ground Truth"="#000000", "Reconstruction 1"="#e69f00", ...)` names a
+colour per series, the list `scale_colour_manual(values=)` takes; series it
+does not name keep a hue, a name it gives that is not in the data is an error,
+and a positional list must cover every series. A single `colour="grey40"`
+paints every series alike. The first series — in `colour=c(...)` when it names
+them, else in the file — is drawn on top, so a reference trace listed first
+does not vanish under the rest. `rowgroup=` and `rowcolour=` work exactly as on
+`matrix()` (the group once beside its run, a rule between runs, a coloured
+name and swatch); a `name=` stands rotated at the gutter's left edge, since the
+strips own the label column. `height=` is a row weight like the matrix's, and
+the strips share it equally; `linewidth=` (or `size=`) is in ggplot units,
+default 0.5. Under `regions()` each window draws the rows inside it, and the
+strip order and ranges come from the whole file so a strip means the same row
+in every window. A faint baseline marks each strip's low end.
+
+```sh
+cinderplot 'regions("windows.bed") + genes("genes.bed.gz", height=0.8)
+  + matrix("calls_long.tsv", x=genomic, rowgroup=" | ", cluster=none, colnames=off, height=3)
+  + signal("betas_long.tsv", height=2.5, smooth=0.25, points=on, ylim=c(0, 1),
+           colour=c("Ground Truth"="#000000", "Reconstruction 1"="#e69f00"))' fig.pdf
+```
+
 `.gz` allowed. `region()` with no argument infers the window from `matrix()`,
 and `-r chr:start-end` / `--region` on the command line supplies it from
 outside the expression (a shell loop over loci). Region strings are 0-based,
@@ -527,7 +563,8 @@ cinderplot 'regions("windows.bed") + genes("genes.bed.gz", height=1.4)
 `windows.bed` is `chrom start end [name]`; the optional name titles the panel.
 A header row is tolerated. Panel widths follow the matrix column count when a
 matrix track is present, so a cell is about the same width in every window.
-Supported inside `regions()` so far: `matrix()`, `genes()`, `interval()`.
+Supported inside `regions()` so far: `matrix()`, `genes()`, `interval()`,
+`signal()`.
 
 **Marking calls on a `matrix()` track** — `highlight()` again, addressed by
 sample row and genomic span rather than row and column:

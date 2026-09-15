@@ -1,6 +1,6 @@
 /* render_tracks.c — locus track-browser mode: a stack of heterogeneous
- * tracks (coverage / interval / gene-model / arc) sharing one genomic
- * x-axis over a single region. A third assembler alongside render.c
+ * tracks (coverage / interval / gene-model / arc / matrix / signal) sharing
+ * one genomic x-axis over a single region. A third assembler alongside render.c
  * (grammar) and heatmap.c (matrix); the gtable engine is unchanged.
  *
  * Genomic bp/kb/Mb axis; coverage/interval/arc renderers fill each track
@@ -45,6 +45,7 @@ static double font_h(cairo_t *cr, double size) {
  * anchors the height, the default region panel width, and overall clamps. */
 #define AUTO_MIN_CELL 3.2
 #define AUTO_ROW_PAD  1.18
+#define AUTO_STRIP_LINES 3.0   /* signal(): label lines per strip, at least */
 #define AUTO_UNIT_H   46.0
 #define AUTO_PANEL_W  (5.0 * 72)
 #define AUTO_MIN_PT   (2.0 * 72)
@@ -622,6 +623,329 @@ static const Col *rowcolour_of(const RowCol *rc, int nrc, const char *name, size
     return NULL;
 }
 
+/* ---- The row-label gutter matrix() and signal() share: a leaf label per
+ * row, and with rowgroup= the group name once beside each run of consecutive
+ * rows, its rowcolour= swatch, and a rule between one run and the next. ---- */
+
+/* widest leaf label and widest group name over `names`, at font size sz */
+static void rowlabel_widths(cairo_t *cr, double sz, char **names, int n, const char *sep,
+                            double *leafw, double *grpw) {
+    *leafw = 0; *grpw = 0;
+    for (int r = 0; r < n; r++) {
+        size_t gl = 0;
+        const char *leaf = row_leaf(names[r], sep, &gl);
+        double w = text_w(cr, sz, leaf);
+        if (w > *leafw) *leafw = w;
+        if (gl) {
+            char g8[256];
+            snprintf(g8, sizeof g8, "%.*s", (int)(gl < sizeof g8 ? gl : sizeof g8 - 1), names[r]);
+            double gw = text_w(cr, sz, g8);
+            if (gw > *grpw) *grpw = gw;
+        }
+    }
+}
+
+/* the gutter width the labels need: leaves, then the group names left of
+ * them with a gap, then a rowcolour= swatch left of the names again */
+static double rowlabel_gutter(const TrackObj *t, double leafw, double grpw) {
+    double w = leafw + (grpw > 0 ? grpw + TXT_GAP * 2 : 0);
+    if (grpw > 0 && t->rowcolour) w += SWATCH_PT + TXT_GAP;
+    return w;
+}
+
+/* Rows rr = 0..n-1 run top to bottom over the band [top - hh, top] (npc, y
+ * up) of track row R; names[ord[rr]] is row rr's name. Labels are written
+ * only when write_labels (the left-most window, rownames shown): the gutter
+ * is shared by every window, and each would otherwise stamp the same names
+ * over the last. The rules between runs are per window, in column CC.
+ *
+ * Runs are CONSECUTIVE rows sharing a prefix -- the display order decides
+ * them, so clustering or a hand-ordered file groups exactly as the reader
+ * sees it, and a scattered group legitimately shows up as several runs
+ * rather than being merged behind the reader's back. */
+static void draw_row_gutter(GTable *T, cairo_t *cr, int R, int CC, const TrackObj *t,
+                            const RowCol *rc, int nrc, char **names, const int *ord,
+                            int n, double top, double hh, double labw, double cell_pt,
+                            double sz, int write_labels) {
+    Grob *g;
+    if (write_labels)
+        for (int rr = 0; rr < n; rr++) {
+            size_t gl = 0;
+            const char *leaf = row_leaf(names[ord[rr]], t->rowgroup, &gl);
+            g = gt_add(T, G_TEXT, R, 1, R, 1);
+            g->str = (char *)leaf; g->size = sz; g->col = C_BLACK;
+            g->tx = 1; g->ty = top - (rr + 0.5) / n * hh; g->hj = 1; g->va = V_INKCENTER;
+        }
+    if (!t->rowgroup || n < 1) return;
+    double leafw = 0;
+    for (int rr = 0; rr < n; rr++) {
+        size_t gl = 0;
+        const char *leaf = row_leaf(names[ord[rr]], t->rowgroup, &gl);
+        double w = text_w(cr, sz, leaf);
+        if (w > leafw) leafw = w;
+    }
+    int rs = 0;
+    while (rs < n) {
+        size_t gl = 0;
+        const char *nm = names[ord[rs]];
+        row_leaf(nm, t->rowgroup, &gl);
+        int re = rs;
+        while (re + 1 < n) {
+            size_t gl2 = 0;
+            const char *nm2 = names[ord[re + 1]];
+            row_leaf(nm2, t->rowgroup, &gl2);
+            if (gl2 != gl || (gl && strncmp(nm, nm2, gl))) break;
+            re++;
+        }
+        if (gl && write_labels) {
+            char *gname = cp_xmalloc(gl + 1);
+            memcpy(gname, nm, gl); gname[gl] = 0;
+            const Col *gc = rowcolour_of(rc, nrc, nm, gl);
+            double gx = labw > 0 ? 1 - (leafw + TXT_GAP * 2) / labw : 0;
+            double gy = top - (rs + re + 1) / 2.0 / n * hh;
+            g = gt_add(T, G_TEXT, R, 1, R, 1);
+            g->str = gname; g->size = sz; g->col = gc ? *gc : C_BLACK;
+            g->tx = gx; g->ty = gy;
+            g->hj = 1; g->va = V_INKCENTER;
+            if (gc && labw > 0 && cell_pt > 0) {   /* swatch left of the name */
+                double gw = text_w(cr, sz, gname);
+                g = gt_add(T, G_RECT, R, 1, R, 1);
+                g->col = *gc; g->sub = 1;
+                g->x1 = gx - (gw + TXT_GAP) / labw;
+                g->x0 = g->x1 - SWATCH_PT / labw;
+                g->y0 = gy - SWATCH_PT / 2 / cell_pt;
+                g->y1 = gy + SWATCH_PT / 2 / cell_pt;
+            }
+        }
+        if (re + 1 < n) {            /* rule below this run */
+            g = gt_add(T, G_LINE, R, CC, R, CC);
+            g->col = C_BLACK; g->lw = lw_pt(0.5) * cp_line_scale; g->clip = 1;
+            g->x0 = 0; g->x1 = 1;
+            g->y0 = g->y1 = top - (double)(re + 1) / n * hh;
+        }
+        rs = re + 1;
+    }
+}
+
+/* ---- signal("long.tsv"): continuous traces. The long shape matrix() reads,
+ * `chrom beg end value sample [series]` (value may be headed beta, as a
+ * methylation table is), with an optional series column telling the lines
+ * within a strip apart. One strip per sample, one line per series.
+ *
+ * The file is read once and kept unfiltered: the strip order (first
+ * appearance of each sample), the series order and each strip's value range
+ * must be the same in every regions() window, so they come from the whole
+ * file; each window then draws the rows inside it. ---- */
+typedef struct {
+    int n;
+    const char **chrom;     /* per row; borrowed from the file, or formatted */
+    double *beg, *end, *val;
+    int *strip, *series;    /* per row */
+    int nstrip; char **stripname;
+    int nser; char **sername;   /* a lone "" series when there is no column */
+    Col *sercol;
+    int *draworder;         /* series indices, the one drawn ON TOP first */
+    double *lo, *hi;        /* per strip: value range over the whole file */
+} SigData;
+
+/* a text-or-number cell as text, so a numeric sample/series column works */
+static const char *cell_text(const Column *c, int r, char *buf, size_t cap) {
+    if (c->type == COL_STR) return c->str[r];
+    if (!isfinite(c->num[r])) return NULL;
+    snprintf(buf, cap, "%.15g", c->num[r]);
+    return buf;
+}
+
+static int name_index(char **names, int n, const char *s) {
+    for (int i = 0; i < n; i++) if (!strcmp(names[i], s)) return i;
+    return -1;
+}
+
+static SigData *read_signal(const TrackObj *t, char *err) {
+    const char *path = strcmp(t->data, "stdin") == 0 ? "-" : t->data;
+    DataFrame *df = df_read_csv(path, err);
+    if (!df) return NULL;
+    const Column *chr_c = df_col(df, "chrom");
+    const Column *sc = df_col(df, "beg"); if (!sc) sc = df_col(df, "start");
+    const Column *ec = df_col(df, "end");
+    const Column *pid = df_col(df, "Probe_ID");
+    const Column *vc = df_col(df, "value"); if (!vc) vc = df_col(df, "beta");
+    const Column *samp = df_col(df, "sample");
+    const Column *ser = df_col(df, "series");
+    if (!chr_c) {
+        snprintf(err, CP_ERRLEN, "signal `%s`: needs a chrom column (the columns are "
+                 "chrom beg end value sample [series])", t->data);
+        return NULL;
+    }
+    if (!sc || !ec || sc->type != COL_NUM || ec->type != COL_NUM) {
+        snprintf(err, CP_ERRLEN, "signal `%s`: needs numeric position columns beg (or "
+                 "start) and end", t->data);
+        return NULL;
+    }
+    /* the value: `value` or `beta` by name, else the first numeric column
+     * that is not a position, as matrix() takes it */
+    if (!vc)
+        for (int c = 0; c < df->ncol; c++) {
+            const Column *col = &df->cols[c];
+            if (col->type == COL_NUM && col != chr_c && col != sc && col != ec
+                && col != pid && col != samp && col != ser) { vc = col; break; }
+        }
+    if (!vc) {
+        snprintf(err, CP_ERRLEN, "signal `%s`: needs a numeric value column (`value` or "
+                 "`beta`)", t->data);
+        return NULL;
+    }
+    if (vc->type != COL_NUM) {
+        snprintf(err, CP_ERRLEN, "signal `%s`: column `%s` must be numeric throughout "
+                 "(write NA for a missing value)", t->data, vc->name);
+        return NULL;
+    }
+    /* the strip: `sample` by name, else the first text column that is not
+     * chrom / Probe_ID / series */
+    if (!samp)
+        for (int c = 0; c < df->ncol; c++) {
+            const Column *col = &df->cols[c];
+            if (col->type == COL_STR && col != chr_c && col != pid && col != ser
+                && col != vc) { samp = col; break; }
+        }
+    if (!samp) {
+        snprintf(err, CP_ERRLEN, "signal `%s`: needs a sample column naming each row's "
+                 "strip", t->data);
+        return NULL;
+    }
+    SigData *d = cp_xcalloc(1, sizeof *d);
+    int nrow = df->nrow;
+    d->chrom = cp_xmalloc((size_t)nrow * sizeof(char *));
+    d->beg = cp_xmalloc((size_t)nrow * sizeof(double));
+    d->end = cp_xmalloc((size_t)nrow * sizeof(double));
+    d->val = cp_xmalloc((size_t)nrow * sizeof(double));
+    d->strip = cp_xmalloc((size_t)nrow * sizeof(int));
+    d->series = cp_xmalloc((size_t)nrow * sizeof(int));
+    d->stripname = cp_xmalloc((size_t)(nrow ? nrow : 1) * sizeof(char *));
+    d->sername = cp_xmalloc((size_t)(nrow ? nrow : 1) * sizeof(char *));
+    if (!ser) { d->sername[0] = ""; d->nser = 1; }
+    for (int r = 0; r < nrow; r++) {
+        if (isnan(vc->num[r])) continue;                 /* a missing value: no point */
+        if (isnan(sc->num[r]) || isnan(ec->num[r])) {
+            snprintf(err, CP_ERRLEN, "signal `%s`: row %d has no position (beg/end)",
+                     t->data, r + 2);
+            return NULL;
+        }
+        char buf[64];
+        const char *cv = matrix_chrom_value(chr_c, r, buf, sizeof buf);
+        if (!cv) {
+            snprintf(err, CP_ERRLEN, "signal `%s`: row %d has an empty chrom", t->data, r + 2);
+            return NULL;
+        }
+        char sbuf[64], ebuf[64];
+        const char *sn = cell_text(samp, r, sbuf, sizeof sbuf);
+        if (!sn || !*sn) {
+            snprintf(err, CP_ERRLEN, "signal `%s`: row %d has an empty sample", t->data, r + 2);
+            return NULL;
+        }
+        const char *en = ser ? cell_text(ser, r, ebuf, sizeof ebuf) : "";
+        if (!en) {
+            snprintf(err, CP_ERRLEN, "signal `%s`: row %d has an empty series", t->data, r + 2);
+            return NULL;
+        }
+        int k = d->n;
+        d->chrom[k] = cv == buf ? cp_xstrdup(buf) : cv;
+        d->beg[k] = sc->num[r]; d->end[k] = ec->num[r]; d->val[k] = vc->num[r];
+        int si = name_index(d->stripname, d->nstrip, sn);
+        if (si < 0) { si = d->nstrip++; d->stripname[si] = sn == sbuf ? cp_xstrdup(sn) : (char *)sn; }
+        int ei = ser ? name_index(d->sername, d->nser, en) : 0;
+        if (ei < 0) { ei = d->nser++; d->sername[ei] = en == ebuf ? cp_xstrdup(en) : (char *)en; }
+        d->strip[k] = si; d->series[k] = ei;
+        d->n++;
+    }
+    if (d->n < 1) {
+        snprintf(err, CP_ERRLEN, "signal `%s` has no rows with a value", t->data);
+        return NULL;
+    }
+    d->lo = cp_xmalloc((size_t)d->nstrip * sizeof(double));
+    d->hi = cp_xmalloc((size_t)d->nstrip * sizeof(double));
+    for (int k = 0; k < d->nstrip; k++) { d->lo[k] = INFINITY; d->hi[k] = -INFINITY; }
+    for (int k = 0; k < d->n; k++) {
+        if (d->val[k] < d->lo[d->strip[k]]) d->lo[d->strip[k]] = d->val[k];
+        if (d->val[k] > d->hi[d->strip[k]]) d->hi[d->strip[k]] = d->val[k];
+    }
+    return d;                          /* df leaked: names borrow from it */
+}
+
+/* Series colours: colour="one" paints every series alike; colour=c(...)
+ * names them (a name absent from the data is an error, a series absent from
+ * the list keeps its hue) or lists them positionally, one per series in
+ * file order; with neither, hue_palette(). The draw order is settled here
+ * too: the first series -- in colour=c(...) when it names them, else in the
+ * file -- is drawn on top, since the reference trace is the one listed
+ * first and it must not vanish under the others. */
+static int sig_colours(const TrackObj *t, SigData *d, char *err) {
+    int ns = d->nser;
+    d->sercol = cp_xmalloc((size_t)ns * sizeof(Col));
+    d->draworder = cp_xmalloc((size_t)ns * sizeof(int));
+    for (int i = 0; i < ns; i++) d->draworder[i] = i;
+    hue_palette(ns, d->sercol);
+    if (t->has_color) {
+        for (int i = 0; i < ns; i++) d->sercol[i] = t->color;
+        return 0;
+    }
+    if (t->nser_col == 0) return 0;
+    int named = 0, positional = 0;
+    for (int k = 0; k < t->nser_col; k++) {
+        if (t->ser_name[k]) named++; else positional++;
+    }
+    if (named && positional) {
+        snprintf(err, CP_ERRLEN, "signal(colour=c(...)): name every colour or none; "
+                 "%d of %d are named", named, t->nser_col);
+        return -1;
+    }
+    if (positional) {
+        if (t->nser_col < ns) {
+            snprintf(err, CP_ERRLEN, "signal(colour=c(...)) gives %d colours; `%s` has %d "
+                     "series", t->nser_col, t->data, ns);
+            return -1;
+        }
+        for (int i = 0; i < ns; i++) d->sercol[i] = t->ser_col[i];
+        return 0;
+    }
+    int nord = 0;
+    for (int k = 0; k < t->nser_col; k++) {
+        int si = name_index(d->sername, ns, t->ser_name[k]);
+        if (si < 0) {
+            char have[512]; size_t o = 0;
+            for (int i = 0; i < ns && o < sizeof have - 4; i++) {
+                int w = snprintf(have + o, sizeof have - o, "%s`%s`", i ? ", " : "", d->sername[i]);
+                if (w < 0 || (size_t)w >= sizeof have - o) { snprintf(have + o, sizeof have - o, "..."); break; }
+                o += (size_t)w;
+            }
+            if (ns == 1 && !*d->sername[0])
+                snprintf(err, CP_ERRLEN, "signal(colour=): series `%s` is not in `%s`, "
+                         "which has no series column", t->ser_name[k], t->data);
+            else
+                snprintf(err, CP_ERRLEN, "signal(colour=): series `%s` is not in `%s`; "
+                         "its series are %s", t->ser_name[k], t->data, have);
+            return -1;
+        }
+        d->sercol[si] = t->ser_col[k];
+        int seen = 0;
+        for (int i = 0; i < nord; i++) if (d->draworder[i] == si) seen = 1;
+        if (!seen) d->draworder[nord++] = si;
+    }
+    for (int i = 0; i < ns; i++) {              /* the unnamed follow, in file order */
+        int seen = 0;
+        for (int j = 0; j < nord; j++) if (d->draworder[j] == i) seen = 1;
+        if (!seen) d->draworder[nord++] = i;
+    }
+    return 0;
+}
+
+/* a (position, value) pair, sorted by position for the raw polyline */
+typedef struct { double x, y; } SigPt;
+static int cmp_sigpt(const void *a, const void *b) {
+    double d = ((const SigPt *)a)->x - ((const SigPt *)b)->x;
+    return d < 0 ? -1 : d > 0 ? 1 : 0;
+}
+
 int render_tracks(const PlotSpec *spec, const char *out,
                   double w_pt, double h_pt, char *err) {
     int ntr = spec->ntracks;
@@ -652,10 +976,17 @@ int render_tracks(const PlotSpec *spec, const char *out,
             rowref[i] = md[i];
             has_matrix = 1;
         }
+    /* signal tracks: read whole, once; each window draws its own rows */
+    SigData *sd[MAX_TRACKS] = {0};
+    for (int i = 0; i < ntr; i++)
+        if (spec->tobjs[i].type == TRK_SIGNAL) {
+            sd[i] = read_signal(&spec->tobjs[i], err);
+            if (!sd[i] || sig_colours(&spec->tobjs[i], sd[i], err)) return -1;
+        }
     /* rowcolour= tables, read once: the swatch widens the label gutter below */
     RowCol *rcs[MAX_TRACKS] = {0}; int nrcs[MAX_TRACKS] = {0};
     for (int i = 0; i < ntr; i++)
-        if (spec->tobjs[i].type == TRK_MATRIX && spec->tobjs[i].rowcolour
+        if (spec->tobjs[i].rowcolour
             && trk_rowcolours_load(&spec->tobjs[i], &rcs[i], &nrcs[i], err)) return -1;
 
     /* ---- windows: regions() gives several, region() one ---- */
@@ -672,10 +1003,11 @@ int render_tracks(const PlotSpec *spec, const char *out,
         for (int i = 0; i < ntr; i++)
             if (spec->tobjs[i].type != TRK_MATRIX
                 && spec->tobjs[i].type != TRK_GENES
-                && spec->tobjs[i].type != TRK_INTERVAL) {
-                snprintf(err, CP_ERRLEN, "regions() supports matrix(), genes() and "
-                         "interval() tracks so far; the remaining track types are "
-                         "being added one at a time");
+                && spec->tobjs[i].type != TRK_INTERVAL
+                && spec->tobjs[i].type != TRK_SIGNAL) {
+                snprintf(err, CP_ERRLEN, "regions() supports matrix(), genes(), "
+                         "interval() and signal() tracks so far; the remaining track "
+                         "types are being added one at a time");
                 return -1;
             }
         if (3 + 2 * nwin >= GT_MAXDIM) {
@@ -784,30 +1116,24 @@ int render_tracks(const PlotSpec *spec, const char *out,
     /* ---- measure left label column from track names + matrix sample names ---- */
     double labw = 0;
     for (int i = 0; i < ntr; i++) {
-        if (spec->tobjs[i].name && spec->tobjs[i].type != TRK_MATRIX) {
-            double w = text_w(cr, SZ_AXIS_TEXT, spec->tobjs[i].name);
+        const TrackObj *t = &spec->tobjs[i];
+        if (t->name && t->type != TRK_MATRIX && t->type != TRK_SIGNAL) {
+            double w = text_w(cr, SZ_AXIS_TEXT, t->name);
             if (w > labw) labw = w;
         }
-        if (md[i] && !spec->tobjs[i].hide_rownames) {
-            const char *rg = spec->tobjs[i].rowgroup;
-            double leafw = 0, grpw = 0;
-            for (int r = 0; r < md[i]->nr; r++) {
-                size_t gl = 0;
-                const char *leaf = row_leaf(md[i]->rowname[r], rg, &gl);
-                double w = text_w(cr, sz_samp, leaf);
-                if (w > leafw) leafw = w;
-                if (gl) {
-                    char g8[256];
-                    snprintf(g8, sizeof g8, "%.*s", (int)(gl < sizeof g8 ? gl : sizeof g8 - 1),
-                             md[i]->rowname[r]);
-                    double gw = text_w(cr, sz_samp, g8);
-                    if (gw > grpw) grpw = gw;
-                }
-            }
-            /* group name sits left of the leaf labels, with a gap between;
-             * a rowcolour= swatch sits left of the name again */
-            double w = leafw + (grpw > 0 ? grpw + TXT_GAP * 2 : 0);
-            if (grpw > 0 && spec->tobjs[i].rowcolour) w += SWATCH_PT + TXT_GAP;
+        if (md[i] && !t->hide_rownames) {
+            double leafw, grpw;
+            rowlabel_widths(cr, sz_samp, md[i]->rowname, md[i]->nr, t->rowgroup, &leafw, &grpw);
+            double w = rowlabel_gutter(t, leafw, grpw);
+            if (w > labw) labw = w;
+        }
+        if (sd[i]) {
+            /* strip labels as the matrix's rows; a name= stands rotated at the
+             * gutter's left edge, since the strips own the horizontal space */
+            double leafw, grpw;
+            rowlabel_widths(cr, sz_samp, sd[i]->stripname, sd[i]->nstrip, t->rowgroup, &leafw, &grpw);
+            double w = rowlabel_gutter(t, leafw, grpw);
+            if (t->name) w += font_h(cr, SZ_AXIS_TEXT) + TXT_GAP;
             if (w > labw) labw = w;
         }
     }
@@ -835,6 +1161,12 @@ int render_tracks(const PlotSpec *spec, const char *out,
                 double u = (bands + md[i]->nr * row_h) / wgt;
                 if (u > per_u) per_u = u;
                 break;
+            }
+        for (int i = 0; i < ntr; i++)
+            if (sd[i]) {                                 /* a strip is a few label lines tall */
+                double wgt = spec->tobjs[i].height > 0 ? spec->tobjs[i].height : 1;
+                double u = sd[i]->nstrip * samp_line * AUTO_STRIP_LINES / wgt;
+                if (u > per_u) per_u = u;
             }
         double gaps = ntr > 1 ? (ntr - 1) * HALF_LINE * 0.6 : 0;
         double axisr = has_matrix ? HALF_LINE : TICK_LEN + TXT_GAP + axh;
@@ -1027,7 +1359,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
                 g->col = C_TGRID; g->lw = lw_pt(0.5); g->clip = 1;
                 g->x0 = g->x1 = xpos[b]; g->y0 = 0; g->y1 = 1;
             }
-        if (spec->tobjs[i].name && tt != TRK_MATRIX) {           /* left label */
+        if (spec->tobjs[i].name && tt != TRK_MATRIX && tt != TRK_SIGNAL) {   /* left label */
             g = gt_add(T, G_TEXT, R, 1, R, 1);
             g->str = spec->tobjs[i].name; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
             g->tx = 1; g->ty = 0.5; g->hj = 1; g->va = V_INKCENTER;
@@ -1423,74 +1755,113 @@ gx_no_fan:
                 g->str = m->colid[c]; g->size = sz_samp; g->col = C_BLACK;
                 g->tx = (c + 0.5) / nc; g->ty = lbltop - lwn / 2; g->rot90 = 1;
             }
-            double hh = hmtop - lblband;                      /* sample labels (left) */
-            /* The row-label gutter is shared by every window, so only the
-             * left-most one writes into it -- otherwise each window stamps the
-             * same names over the last. */
-            if (!t->hide_rownames && wi == 0)
-                for (int rr = 0; rr < nr; rr++) {
-                    size_t gl = 0;
-                    const char *leaf = row_leaf(m->rowname[m->roword[rr]], t->rowgroup, &gl);
-                    g = gt_add(T, G_TEXT, R, 1, R, 1);
-                    g->str = (char *)leaf; g->size = sz_samp; g->col = C_BLACK;
-                    g->tx = 1; g->ty = hmtop - (rr + 0.5) / nr * hh; g->hj = 1; g->va = V_INKCENTER;
-                }
-            /* Group runs: the name once beside its rows, and a rule between one
-             * run and the next. Runs are CONSECUTIVE rows sharing a prefix --
-             * the display order decides them, so clustering or a hand-ordered
-             * file groups exactly as the reader sees it, and a scattered group
-             * legitimately shows up as several runs rather than being merged
-             * behind the reader's back. */
-            if (t->rowgroup && nr > 0) {
-                double leafw = 0;
-                for (int rr = 0; rr < nr; rr++) {
-                    size_t gl = 0;
-                    const char *leaf = row_leaf(m->rowname[m->roword[rr]], t->rowgroup, &gl);
-                    double w = text_w(cr, sz_samp, leaf);
-                    if (w > leafw) leafw = w;
-                }
-                int rs = 0;
-                while (rs < nr) {
-                    size_t gl = 0;
-                    const char *nm = m->rowname[m->roword[rs]];
-                    row_leaf(nm, t->rowgroup, &gl);
-                    int re = rs;
-                    while (re + 1 < nr) {
-                        size_t gl2 = 0;
-                        const char *nm2 = m->rowname[m->roword[re + 1]];
-                        row_leaf(nm2, t->rowgroup, &gl2);
-                        if (gl2 != gl || (gl && strncmp(nm, nm2, gl))) break;
-                        re++;
-                    }
-                    if (gl && !t->hide_rownames && wi == 0) {
-                        char *gname = cp_xmalloc(gl + 1);
-                        memcpy(gname, nm, gl); gname[gl] = 0;
-                        const Col *gc = rowcolour_of(rcs[i], nrcs[i], nm, gl);
-                        double gx = labw > 0 ? 1 - (leafw + TXT_GAP * 2) / labw : 0;
-                        double gy = hmtop - (rs + re + 1) / 2.0 / nr * hh;
-                        g = gt_add(T, G_TEXT, R, 1, R, 1);
-                        g->str = gname; g->size = sz_samp; g->col = gc ? *gc : C_BLACK;
-                        g->tx = gx; g->ty = gy;
-                        g->hj = 1; g->va = V_INKCENTER;
-                        if (gc && labw > 0 && cell_pt > 0) {   /* swatch left of the name */
-                            double gw = text_w(cr, sz_samp, gname);
-                            g = gt_add(T, G_RECT, R, 1, R, 1);
-                            g->col = *gc; g->sub = 1;
-                            g->x1 = gx - (gw + TXT_GAP) / labw;
-                            g->x0 = g->x1 - SWATCH_PT / labw;
-                            g->y0 = gy - SWATCH_PT / 2 / cell_pt;
-                            g->y1 = gy + SWATCH_PT / 2 / cell_pt;
-                        }
-                    }
-                    if (re + 1 < nr) {            /* rule below this run */
-                        g = gt_add(T, G_LINE, R, CC, R, CC);
-                        g->col = C_BLACK; g->lw = lw_pt(0.5) * cp_line_scale; g->clip = 1;
-                        g->x0 = 0; g->x1 = 1;
-                        g->y0 = g->y1 = hmtop - (double)(re + 1) / nr * hh;
-                    }
-                    rs = re + 1;
-                }
+            /* sample labels (left), group names, swatches and rules: the
+             * gutter shared with signal(); the left-most window writes it */
+            draw_row_gutter(T, cr, R, CC, t, rcs[i], nrcs[i], m->rowname, m->roword, nr,
+                            hmtop, hmtop - lblband, labw, cell_pt, sz_samp,
+                            !t->hide_rownames && wi == 0);
+        } else if (t->type == TRK_SIGNAL) {
+            /* Strips stacked like matrix() rows, one per sample, top to
+             * bottom in file order; inside a strip one line per series at
+             * the row's genomic midpoint, the raw polyline or its loess.
+             * Each strip is its own lane: a value range of its own (or the
+             * ylim= every strip shares), a faint baseline at the range's
+             * low end, and a clip so an overshoot stays in its lane. */
+            const SigData *d = sd[i];
+            int ns = d->nstrip;
+            double cell_pt = (t->height > 0 ? t->height : 1) * per_h;
+            double sh = 1.0 / ns, pad = 0.12 * sh;
+            double lw = lw_pt(t->line_lw > 0 ? t->line_lw : 0.5);
+            if (t->name) {                                    /* rotated, gutter's left edge */
+                double fh = font_h(cr, SZ_AXIS_TEXT);
+                g = gt_add(T, G_TEXT, R, 1, R, 1);
+                g->str = t->name; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
+                g->tx = labw > 0 ? fh / 2 / labw : 0; g->ty = 0.5; g->rot90 = 1;
             }
+            int *ident = cp_xmalloc((size_t)ns * sizeof(int));
+            for (int k = 0; k < ns; k++) ident[k] = k;
+            SigPt *pts = cp_xmalloc((size_t)(d->n ? d->n : 1) * sizeof(SigPt));
+            const int NS = 200;                                /* loess output resolution */
+            double *sx = cp_xmalloc((size_t)(d->n ? d->n : 1) * sizeof(double));
+            double *sy = cp_xmalloc((size_t)(d->n ? d->n : 1) * sizeof(double));
+            for (int k = 0; k < ns; k++) {
+                double ybot = 1 - (k + 1) * sh, lo, hi;
+                if (t->has_ylim) { lo = t->ylim_lo; hi = t->ylim_hi; }
+                else { lo = d->lo[k]; hi = d->hi[k]; }
+                if (!(hi > lo)) hi = lo + 1;                   /* a flat strip still has a lane */
+#define SIG_Y(v) (ybot + pad + ((v) - lo) / (hi - lo) * (sh - 2 * pad))
+                g = gt_add(T, G_LINE, R, CC, R, CC);           /* faint baseline */
+                g->col = C_TGRID; g->lw = lw_pt(0.5) * cp_line_scale; g->clip = 1;
+                g->x0 = 0; g->x1 = 1; g->y0 = g->y1 = SIG_Y(lo);
+                for (int oi = d->nser - 1; oi >= 0; oi--) {   /* draworder[0] lands on top */
+                    int si = d->draworder[oi];
+                    int np = 0;
+                    for (int r = 0; r < d->n; r++) {
+                        if (d->strip[r] != k || d->series[r] != si) continue;
+                        if (strcmp(d->chrom[r], chrom) || d->end[r] <= (double)rstart
+                            || d->beg[r] >= (double)rend) continue;
+                        pts[np].x = (d->beg[r] + d->end[r]) * 0.5;
+                        pts[np].y = d->val[r]; np++;
+                    }
+                    if (np == 0) continue;                     /* nothing of it in this window */
+                    /* stable: tied positions keep file order, so a rerun
+                     * from the same input draws the same line */
+                    for (int a = 1; a < np; a++) {
+                        SigPt kp = pts[a]; int b2 = a - 1;
+                        while (b2 >= 0 && cmp_sigpt(&pts[b2], &kp) > 0) { pts[b2+1] = pts[b2]; b2--; }
+                        pts[b2+1] = kp;
+                    }
+                    Col col = d->sercol[si];
+                    if (t->points) {                           /* the raw points, behind */
+                        double *px = cp_xmalloc((size_t)np * sizeof(double));
+                        double *py = cp_xmalloc((size_t)np * sizeof(double));
+                        Col *pc = cp_xmalloc((size_t)np * sizeof(Col));
+                        for (int q = 0; q < np; q++) { px[q] = NPCX(pts[q].x); py[q] = SIG_Y(pts[q].y); pc[q] = col; }
+                        g = gt_add(T, G_POINTS, R, CC, R, CC);
+                        g->n = np; g->px = px; g->py = py; g->pcol = pc;
+                        g->radius = PT_RADIUS * 0.4; g->alpha = 0.35; g->clip = 1;
+                        g->band_clip = 1; g->band_y0 = ybot; g->band_y1 = ybot + sh;
+                    }
+                    double *lx, *ly; int nl;
+                    if (t->smooth > 0) {
+                        if (np < 4) {
+                            snprintf(err, CP_ERRLEN, "signal(smooth=%g): series `%s` of strip "
+                                     "`%s` has %d point%s in %s:%ld-%ld and loess needs 4; "
+                                     "use smooth=0 for the raw line", t->smooth,
+                                     d->sername[si], d->stripname[k], np, np == 1 ? "" : "s",
+                                     chrom, rstart, rend);
+                            return -1;
+                        }
+                        for (int q = 0; q < np; q++) { sx[q] = pts[q].x; sy[q] = pts[q].y; }
+                        double *ox = cp_xmalloc(NS * sizeof(double));
+                        double *oy = cp_xmalloc(NS * sizeof(double));
+                        nl = cp_loess(sx, sy, np, t->smooth, NS, ox, oy, err);
+                        if (nl < 0) return -1;
+                        lx = ox; ly = oy;
+                    } else {
+                        if (np < 2) {
+                            fprintf(stderr, "cinderplot: signal `%s`: series `%s` of strip `%s` "
+                                    "has one point in %s:%ld-%ld, so no line to draw%s\n",
+                                    t->data, d->sername[si], d->stripname[k], chrom, rstart,
+                                    rend, t->points ? "" : " (points=on would show it)");
+                            continue;
+                        }
+                        nl = np;
+                        lx = cp_xmalloc((size_t)nl * sizeof(double));
+                        ly = cp_xmalloc((size_t)nl * sizeof(double));
+                        for (int q = 0; q < nl; q++) { lx[q] = pts[q].x; ly[q] = pts[q].y; }
+                    }
+                    if (nl < 2) { free(lx); free(ly); continue; }
+                    for (int q = 0; q < nl; q++) { lx[q] = NPCX(lx[q]); ly[q] = SIG_Y(ly[q]); }
+                    g = gt_add(T, G_POLYLINE, R, CC, R, CC);
+                    g->n = nl; g->px = lx; g->py = ly; g->col = col; g->lw = lw; g->clip = 1;
+                    g->band_clip = 1; g->band_y0 = ybot; g->band_y1 = ybot + sh;
+                }
+#undef SIG_Y
+            }
+            free(pts); free(sx); free(sy);
+            draw_row_gutter(T, cr, R, CC, t, rcs[i], nrcs[i], d->stripname, ident, ns,
+                            1.0, 1.0, labw, cell_pt, sz_samp, wi == 0);
         }
     }
       if (!has_matrix) {

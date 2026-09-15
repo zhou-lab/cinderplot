@@ -362,7 +362,13 @@ void gt_render(GTable *t, cairo_t *cr) {
 #define DX(v) (rx + (v) * rw)
 #define DY(v) (ry + rh - (v) * rh)
         cairo_save(cr);
-        if (g->clip) { cairo_rectangle(cr, rx, ry, rw, rh); cairo_clip(cr); }
+        if (g->clip) {
+            if (g->band_clip) {            /* a strip of the cell, not all of it */
+                double by0 = DY(g->band_y1), by1 = DY(g->band_y0);
+                cairo_rectangle(cr, rx, by0, rw, by1 - by0);
+            } else cairo_rectangle(cr, rx, ry, rw, rh);
+            cairo_clip(cr);
+        }
         switch (g->type) {
         case G_RECT:
             set_col_a(cr, g->col, g->alpha);

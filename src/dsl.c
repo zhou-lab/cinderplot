@@ -119,6 +119,8 @@ static char *word(P *p) { return is_quote(p) ? string_lit(p) : ident(p); }
 /* raw value token: filename or bare word (until , ) or whitespace) */
 static char *raw_token(P *p);
 static int parse_lim_pair(P *p, const char *fn, double *lo, double *hi);
+static int parse_colour_values(P *p, Col *cols, char **names, int cap, int *n,
+                               const char *what);
 
 /* levels=c("a", "b", ...) — an explicit discrete order. Elements may be quoted
  * or bare (so numeric levels read as c(8, 4, 6)); they are matched against the
@@ -373,7 +375,12 @@ static int parse_place(P *p, const char *kind, HPlace *pl) {
 
 /* ---- track (locus-browser) mode ---- */
 static TrackObj *trk_new(P *p, PlotSpec *spec, TrackType t) {
-    if (spec->ntracks == MAX_TRACKS) { fail(p, "too many tracks", ""); return NULL; }
+    if (spec->ntracks == MAX_TRACKS) {
+        char msg[CP_ERRLEN];
+        snprintf(msg, sizeof msg, "too many tracks: the figure holds at most %d", MAX_TRACKS);
+        fail(p, "%s", msg);
+        return NULL;
+    }
     TrackObj *o = &spec->tobjs[spec->ntracks++];
     memset(o, 0, sizeof *o);
     o->type = t;
@@ -383,20 +390,26 @@ static TrackObj *trk_new(P *p, PlotSpec *spec, TrackType t) {
 /* Per-track-type option sets, mirroring what render_tracks.c reads: the
  * generic parser accepted coverage(cluster=samples) and dropped it. */
 static const char *trk_name(TrackType t) {
-    static const char *nm[] = { "coverage", "interval", "genes", "arcs", "matrix", "cytoband" };
+    static const char *nm[] = { "coverage", "interval", "genes", "arcs", "matrix", "cytoband",
+                                "signal" };
     return nm[t];
 }
 static int trk_opt_ok(TrackType t, const char *key) {
     if (!strcmp(key, "name") || !strcmp(key, "height") || !strcmp(key, "data")) return 1;
     if (!strcmp(key, "max")) return t == TRK_COVERAGE;
     if (!strcmp(key, "color") || !strcmp(key, "colour"))
-        return t == TRK_COVERAGE || t == TRK_INTERVAL || t == TRK_GENES || t == TRK_ARCS;
+        return t == TRK_COVERAGE || t == TRK_INTERVAL || t == TRK_GENES || t == TRK_ARCS
+            || t == TRK_SIGNAL;
+    if (!strcmp(key, "rowgroup") || !strcmp(key, "rowcolour") || !strcmp(key, "rowcolor"))
+        return t == TRK_MATRIX || t == TRK_SIGNAL;
     if (!strcmp(key, "cluster") || !strcmp(key, "rownames") || !strcmp(key, "colnames")
-        || !strcmp(key, "x") || !strcmp(key, "bar") || !strcmp(key, "background")
-        || !strcmp(key, "rowgroup") || !strcmp(key, "rowcolour") || !strcmp(key, "rowcolor"))
+        || !strcmp(key, "x") || !strcmp(key, "bar") || !strcmp(key, "background"))
         return t == TRK_MATRIX;
     if (!strcmp(key, "transcripts")) return t == TRK_GENES;
     if (!strcmp(key, "labels")) return t == TRK_INTERVAL;
+    if (!strcmp(key, "smooth") || !strcmp(key, "points") || !strcmp(key, "ylim")
+        || !strcmp(key, "linewidth") || !strcmp(key, "size"))
+        return t == TRK_SIGNAL;
     return 0;
 }
 static const char *trk_opt_menu(TrackType t) {
@@ -407,6 +420,8 @@ static const char *trk_opt_menu(TrackType t) {
     case TRK_GENES: return "name=, height=, data=, color=, transcripts=";
     case TRK_MATRIX: return "name=, height=, data=, cluster=, rownames=, colnames=, "
                             "x=, bar=, background=, rowgroup=, rowcolour=";
+    case TRK_SIGNAL: return "name=, height=, data=, rowgroup=, rowcolour=, smooth=, "
+                            "points=, colour=c(...), ylim=c(lo, hi), linewidth=";
     default: return "name=, height=, data=";
     }
 }
@@ -427,7 +442,10 @@ static int parse_trk_args(P *p, TrackObj *o) {
                          || !strcmp(key, "cluster") || !strcmp(key, "rownames")
                          || !strcmp(key, "colnames") || !strcmp(key, "transcripts")
                          || !strcmp(key, "labels") || !strcmp(key, "rowgroup")
-                         || !strcmp(key, "rowcolour") || !strcmp(key, "rowcolor");
+                         || !strcmp(key, "rowcolour") || !strcmp(key, "rowcolor")
+                         || !strcmp(key, "smooth") || !strcmp(key, "points")
+                         || !strcmp(key, "ylim") || !strcmp(key, "linewidth")
+                         || !strcmp(key, "size");
                 snprintf(msg, sizeof msg, "option `%s` is %s %s(); supported: %s", key,
                          known ? "not valid for" : "not implemented on",
                          trk_name(o->type), trk_opt_menu(o->type));
@@ -441,9 +459,60 @@ static int parse_trk_args(P *p, TrackObj *o) {
             } else if (!strcmp(key, "max")) {
                 skip_ws(p); o->max_value = strtod(p->s, (char **)&p->s);
             } else if (!strcmp(key, "color") || !strcmp(key, "colour")) {
-                char *v = string_lit(p);
-                if (!v || parse_color(v, &o->color)) return fail(p, "bad track colour", "");
-                o->has_color = 1;
+                skip_ws(p);
+                if (o->type == TRK_SIGNAL && p->s[0] == 'c' && p->s[1] == '(') {
+                    /* colour=c("series"="#..", ...): one colour per series,
+                     * the list scale_colour_manual(values=) takes. A single
+                     * quoted colour below paints every series alike. */
+                    p->s += 2;
+                    o->ser_col = cp_xmalloc(MAX_MANUAL_COLS * sizeof(Col));
+                    o->ser_name = cp_xmalloc(MAX_MANUAL_COLS * sizeof(char *));
+                    if (parse_colour_values(p, o->ser_col, o->ser_name, MAX_MANUAL_COLS,
+                                            &o->nser_col, "colour=c(...)"))
+                        return -1;
+                    if (o->nser_col < 1)
+                        return fail(p, "signal(colour=c()) names no colours; give one per "
+                                    "series, e.g. colour=c(\"Ground Truth\"=\"black\")", "");
+                } else {
+                    char *v = string_lit(p);
+                    if (!v || parse_color(v, &o->color))
+                        return fail(p, o->type == TRK_SIGNAL
+                                    ? "signal(colour=) expects a quoted colour for every "
+                                      "series, or c(\"series\"=\"colour\", ...) for each"
+                                    : "bad track colour", "");
+                    o->has_color = 1;
+                }
+            } else if (!strcmp(key, "smooth")) {
+                /* the loess span, as geom_smooth(span=); 0 draws the raw
+                 * polyline through the points in position order */
+                skip_ws(p);
+                const char *save = p->s;
+                double v = strtod(p->s, (char **)&p->s);
+                if (p->s == save || v < 0 || v > 1)
+                    return fail(p, "smooth= expects a loess span in (0, 1], or 0 for the "
+                                "raw line through the points", "");
+                o->smooth = v;
+            } else if (!strcmp(key, "points")) {
+                char *v = word(p);
+                if (!v) return fail(p, "points= expects on or off", "");
+                if (!strcmp(v, "on") || !strcmp(v, "show") || !strcmp(v, "TRUE")
+                    || !strcmp(v, "true")) o->points = 1;
+                else if (!strcmp(v, "off") || !strcmp(v, "none") || !strcmp(v, "hide")
+                         || !strcmp(v, "FALSE") || !strcmp(v, "false")) o->points = 0;
+                else return fail(p, "points=%s invalid; use on or off", v);
+            } else if (!strcmp(key, "ylim")) {
+                if (parse_lim_pair(p, "ylim=", &o->ylim_lo, &o->ylim_hi)) return -1;
+                o->has_ylim = 1;
+            } else if (!strcmp(key, "linewidth") || !strcmp(key, "size")) {
+                /* the line geoms' linewidth=, in ggplot units (size= is the
+                 * pre-3.4 spelling); the default 0.5 is geom_line's */
+                skip_ws(p);
+                const char *save = p->s;
+                double v = strtod(p->s, (char **)&p->s);
+                if (p->s == save || !(v > 0))
+                    return fail(p, "%s= expects a number > 0, in ggplot linewidth units "
+                                "(0.5 = geom_line's default)", key);
+                o->line_lw = v;
             } else if (!strcmp(key, "data")) {
                 o->data = string_lit(p);
                 if (!o->data) return fail(p, "data= expects a quoted path", "");
@@ -550,6 +619,9 @@ done:
         return fail(p, "rowcolour= colours the group names that rowgroup= splits off, "
                     "so it needs rowgroup=\"SEP\" too; without groups there is "
                     "nothing to colour", "");
+    if (o->type == TRK_SIGNAL && o->has_color && o->nser_col > 0)
+        return fail(p, "signal(): colour=\"one colour\" and colour=c(...) contradict; "
+                    "give one or the other", "");
     return 0;
 }
 
@@ -957,6 +1029,49 @@ static int parse_brewer_discrete(P *p, PlotSpec *spec) {
     return expect(p, ')');
 }
 
+/* The body of a colour list, after its `c(`: "colour", ... positional, or
+ * "name"="colour" / name="colour" keyed by level. Fills cols/names (a NULL
+ * name = positional) up to cap and consumes the closing ')'. Shared by
+ * scale_*_manual(values=) and signal(colour=), so the two spell colours the
+ * same way; `what` names the caller in the messages. */
+static int parse_colour_values(P *p, Col *cols, char **names, int cap, int *n,
+                               const char *what) {
+    *n = 0;
+    for (;;) {
+        skip_ws(p);
+        if (*p->s == ')') { p->s++; break; }
+        char *nm = NULL;
+        const char *save = p->s;
+        if (*p->s == '"') {                       /* "name" = "colour" ? */
+            char *s = string_lit(p); skip_ws(p);
+            if (*p->s == '=') { p->s++; nm = s; } else { free(s); p->s = save; }
+        } else {                                   /* name = "colour" ? */
+            char *id = ident(p); skip_ws(p);
+            if (id && *p->s == '=') { p->s++; nm = id; } else { free(id); p->s = save; }
+        }
+        char *cv = string_lit(p); Col c;
+        if (!cv || parse_color(cv, &c)) { free(nm); return fail(p, "bad colour in %s", what); }
+        free(cv);
+        if (*n >= cap) {
+            free(nm);
+            /* dropping the excess silently painted level 17 grey (or,
+             * before the positional-shortfall check, in another level's
+             * colour) with no warning -- the wrong-figure class. */
+            char msg[CP_ERRLEN];
+            snprintf(msg, sizeof msg, "%s holds at most %d colours", what, cap);
+            return fail(p, "%s", msg);
+        }
+        cols[*n] = c;
+        names[*n] = nm;
+        (*n)++;
+        skip_ws(p);
+        if (*p->s == ',') { p->s++; continue; }
+        if (*p->s == ')') { p->s++; break; }
+        return fail(p, "expected , or ) in %s", what);
+    }
+    return 0;
+}
+
 static int parse_manual_scale(P *p, PlotSpec *spec, const char *fn) {
     spec->n_manual = 0; spec->has_manual = 1;
     spec->brewer_disc = NULL;    /* a later manual palette replaces a brewer one */
@@ -969,36 +1084,9 @@ static int parse_manual_scale(P *p, PlotSpec *spec, const char *fn) {
         skip_ws(p);
         if (p->s[0] == 'c' && p->s[1] == '(') p->s += 2;
         else return fail(p, "values= expects c(\"#..\", ...)", "");
-        for (;;) {
-            skip_ws(p);
-            if (*p->s == ')') { p->s++; break; }
-            char *nm = NULL;
-            const char *save = p->s;
-            if (*p->s == '"') {                       /* "name" = "colour" ? */
-                char *s = string_lit(p); skip_ws(p);
-                if (*p->s == '=') { p->s++; nm = s; } else { free(s); p->s = save; }
-            } else {                                   /* name = "colour" ? */
-                char *id = ident(p); skip_ws(p);
-                if (id && *p->s == '=') { p->s++; nm = id; } else { free(id); p->s = save; }
-            }
-            char *cv = string_lit(p); Col c;
-            if (!cv || parse_color(cv, &c)) { free(nm); return fail(p, "bad colour in values=c(...)", ""); }
-            free(cv);
-            if (spec->n_manual >= 64) {
-                free(nm);
-                /* dropping the excess silently painted level 17 grey (or,
-                 * before the positional-shortfall check, in another level's
-                 * colour) with no warning -- the wrong-figure class. */
-                return fail(p, "values=c(...) holds at most 64 colours", "");
-            }
-            spec->manual_cols[spec->n_manual] = c;
-            spec->manual_names[spec->n_manual] = nm;
-            spec->n_manual++;
-            skip_ws(p);
-            if (*p->s == ',') { p->s++; continue; }
-            if (*p->s == ')') { p->s++; break; }
-            return fail(p, "expected , or ) in values=c(...)", "");
-        }
+        if (parse_colour_values(p, spec->manual_cols, spec->manual_names, MAX_MANUAL_COLS,
+                                &spec->n_manual, "values=c(...)"))
+            return -1;
         skip_ws(p);
         if (*p->s == ',') { p->s++; skip_ws(p); }
     }
@@ -1489,6 +1577,7 @@ static int parse_term(P *p, PlotSpec *spec) {
     if (!strcmp(name, "arcs"))     { TrackObj *o = trk_new(p, spec, TRK_ARCS);     return o ? parse_trk_args(p, o) : -1; }
     if (!strcmp(name, "matrix"))   { TrackObj *o = trk_new(p, spec, TRK_MATRIX);   return o ? parse_trk_args(p, o) : -1; }
     if (!strcmp(name, "cytoband")) { TrackObj *o = trk_new(p, spec, TRK_CYTOBAND); return o ? parse_trk_args(p, o) : -1; }
+    if (!strcmp(name, "signal"))   { TrackObj *o = trk_new(p, spec, TRK_SIGNAL);   return o ? parse_trk_args(p, o) : -1; }
 
     /* ---- matrix (wheatmap) mode ---- */
     if (!strcmp(name, "heatmap")) {
@@ -2320,7 +2409,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                    "distiller/identity/gradient/gradient2/viridis/magma/...(); theme_bw/minimal/"
                    "classic/...(), theme(legend.position=), guides(); heatmap(), annotation(), "
                    "legend(), dendrogram(), highlight(); region()/regions(), coverage(), interval(), "
-                   "genes(), arcs(), matrix(), cytoband(), ideogram(); geom_tree/tiplab/nodelab/"
+                   "genes(), arcs(), matrix(), signal(), cytoband(), ideogram(); geom_tree/tiplab/nodelab/"
                    "tippoint/nodepoint(); chord()", name);
 }
 
