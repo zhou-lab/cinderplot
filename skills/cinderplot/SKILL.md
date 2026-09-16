@@ -471,11 +471,15 @@ cinderplot 'region("chr20:44616522-44655233")
            colnames=off, height=10)' locus.pdf
 ```
 
-Track verbs: `coverage() interval() genes() arcs() matrix() signal() cytoband()`,
-each taking a file plus `name= height= max= color= data= cluster= rownames=
-colnames= transcripts=`; `interval()` also `labels=`, `matrix()` also
-`x= bar= background= rowgroup= rowmeta= rowcolour= rowbar= discrete=`, and `signal()` `rowgroup= rowmeta= rowcolour= rowbar=
-smooth= points= colour=c(...) ylim= linewidth=`. Inputs are BED/bedGraph/BEDPE/BED12/matrix TSV, tabix
+Track verbs: `coverage() interval() genes() arcs() matrix() signal() cytoband()`.
+Each takes a file plus the three every track shares: `name= height= data=`. The
+rest are per-verb, and an option the verb does not take is refused (the error
+lists the ones it does): `coverage()` adds `color= max=`, `interval()`
+`color= labels=`, `genes()` `color= transcripts=`, `arcs()` `color=`,
+`cytoband()` nothing further, `matrix()` `cluster= rownames= colnames= x= bar=
+background= rowgroup= rowmeta= rowcolour= rowbar= discrete=`, and `signal()`
+`rowgroup= rowmeta= rowcolour= rowbar= smooth= points= colour=c(...)
+ylim=c(lo, hi) linewidth= gap=`. Inputs are BED/bedGraph/BEDPE/BED12/matrix TSV, tabix
 **`matrix(x=genomic)` puts each cell at its own coordinate** instead of in
 probe-index space. The default (`x=index`) gives every probe an equal-width
 column and draws a leader fan to its true position — right when the columns
