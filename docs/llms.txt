@@ -36,6 +36,14 @@ cinderplot data.csv -x hp -y mpg -c cyl -f gear out.pdf      # shortcut flags
 - `--font FAMILY` sets the figure font in every mode (default Arial); use the
   family name `fc-list` reports. A family the backend cannot find warns on
   stderr and falls back rather than failing the render.
+- `--font-size PT` sets the base label size in points for every mode (1..100,
+  default 11 — ggplot2's `base_size`). It scales all text together, so text
+  size and panel size stop being the same knob (shrinking `--size` was the only
+  way before). `theme_*(base_size=PT)` is ggplot2's own spelling and, when
+  given, overrides the flag — exactly as `theme_*(base_line_size=)` overrides
+  the chrome line-width default. In grammar/heatmap/tree/chord modes the size
+  hierarchy (axis title 1.2x, axis text 0.8x of the base) scales from it; **in
+  track mode every label is one size** (see below).
 - `--editable-svg` (with an `.svg` output) writes every label as its own
   `<text>` element with a single x/y — svglite-style, retypable in Inkscape/
   Illustrator, never a per-glyph dx/dy list. Superscript axis labels become a
@@ -220,9 +228,12 @@ for.
   frames — where 0.5 is the ggplot2 default and 0.25 gives half-weight
   axes; data strokes are untouched. `CINDERPLOT_BASE_LINE_SIZE=0.25` in the
   environment makes it a personal default; the spec argument overrides it.
-  The presets themselves are grammar-mode: in heatmap and track modes only
-  `theme_*(base_line_size=)` applies (a bare preset errors), and chord and
-  tree modes refuse `theme_*()` altogether.
+  It also takes `base_size=PT` (ggplot's base font size, default 11): the same
+  knob as `--font-size`, and the spec value overrides the flag. The presets
+  themselves are grammar-mode: in heatmap and track modes only
+  `theme_*(base_line_size=)` and `base_size=` apply (a bare preset errors),
+  chord mode refuses `theme_*()` altogether, and tree mode takes only
+  `base_size=` (no panel chrome to weight).
 - `annotation("meta.tsv"[, column="ighv"])` draws a categorical metadata band
   under the panel — one chip per x category (bar-width, so chips align under
   stacked `geom_col()` bars), with its own palette and its own legend block,
@@ -464,7 +475,7 @@ cinderplot 'region("chr20:44616522-44655233")
 Track verbs: `coverage() interval() genes() arcs() matrix() signal() cytoband()`,
 each taking a file plus `name= height= max= color= data= cluster= rownames=
 colnames= transcripts=`; `interval()` also `labels=`, `matrix()` also
-`x= bar= background= rowgroup= rowcolour= discrete=`, and `signal()` `rowgroup= rowcolour=
+`x= bar= background= rowgroup= rowmeta= rowcolour= rowbar= discrete=`, and `signal()` `rowgroup= rowmeta= rowcolour= rowbar=
 smooth= points= colour=c(...) ylim= linewidth=`. Inputs are BED/bedGraph/BEDPE/BED12/matrix TSV, tabix
 **`matrix(x=genomic)` puts each cell at its own coordinate** instead of in
 probe-index space. The default (`x=index`) gives every probe an equal-width
@@ -521,26 +532,81 @@ cinderplot 'region("chr1:202004435-202019137") + genes("genes.bed.gz", height=0.
   + matrix("betas_long.tsv", x=genomic, rowgroup=" | ", cluster=none, height=5)' locus.pdf
 ```
 
-**`rowcolour="colours.tsv"` colours the group names** (also `rowcolor=`): a
-two-column table headed `group colour` (or `color`), one line per group, and
-the name is written in that colour with a filled swatch beside it, so a lineage
-reads at a glance. Groups the table does not name keep black and get no swatch;
-a colour that does not parse is an error naming the row. It needs `rowgroup=`,
-since without groups there is nothing to colour.
+**`rowcolour="colours.tsv"` colours the annotations** (also `rowcolor=`), in one
+of two shapes chosen by the header:
+
+- with `rowgroup=`, a two-column `group colour` (or `color`) table, one line per
+  group: the group name is written in that colour with a filled swatch beside
+  it (band-only when `rowbar=on`, see below), so a lineage reads at a glance.
+- with `rowmeta=`, a three-column `column value colour` table mapping a value in
+  any annotation column to a colour, so a `cell_type` band and a `source` band
+  draw from one file.
+
+A group/value the table does not name gets the hue palette (per column, over
+that column's distinct values in first-appearance order); a colour that does not
+parse is an error naming the row. `rowcolour=` needs `rowgroup=` or `rowmeta=` —
+without either there is nothing to colour.
+
+**`rowmeta="samples.tsv"` reads annotations from a sample metadata sheet**
+(`matrix()` and `signal()`). Its first column is the sample key (matching the
+`sample` column of the long input); every other column is an annotation
+(`cell_type`, `source`, …). Every sample the track draws must be in the sheet,
+or it errors naming the first missing one. `rowmeta=` and `rowgroup=` are
+mutually exclusive — one splits an annotation out of the name, the other reads a
+sheet.
+
+**`rowbar=` draws annotation bands** against the left edge of the panel — the
+band's *extent*, the way heatmap mode's `annotation(left_of())` reads — in two
+forms:
+
+- **`rowbar=on`** (default off) with `rowgroup=` + `rowcolour=`: the single band
+  that follows the split group. This is now *band-only* — it replaces the swatch
+  rather than adding to it (plain `rowcolour=` without `rowbar=` still draws the
+  swatch beside the name).
+- **`rowbar="cell_type,source"`** with `rowmeta=`: a comma-separated, ordered
+  list of metadata columns, each drawn as its own adjacent band (leftmost band =
+  first name in the list). Each band spans the consecutive run of rows sharing
+  that column's value; the **first** column also gives the group label written
+  once per run and the run-separator rules (so a `source` band alternates
+  truth/reconstruction within a `cell_type` run). A column not in the sheet
+  errors naming it and listing the sheet's columns.
 
 ```sh
+# single band, band-only (rowgroup path)
 printf 'group\tcolour\nNeuron\t#d62728\nHepatocyte\tsteelblue\n' > colours.tsv
 cinderplot 'region("chr1:202004435-202019137")
   + matrix("betas_long.tsv", x=genomic, rowgroup=" | ", rowcolour="colours.tsv",
-           cluster=none, height=5)' locus.pdf
+           rowbar=on, cluster=none, height=5)' locus.pdf
+
+# two bands from a metadata sheet
+printf 'sample\tcell_type\tsource\nBreast|truth\tBreast\tGround truth\n...' > samples.tsv
+printf 'column\tvalue\tcolour\ncell_type\tBreast\t#a6b727\nsource\tGround truth\t#000000\nsource\tReconstruction\t#e69f00\n' > rowcolours.tsv
+cinderplot 'region("chr1:202004435-202019137")
+  + matrix("calls_long.tsv", x=genomic, discrete=TRUE, rowmeta="samples.tsv",
+           rowbar="cell_type,source", rowcolour="rowcolours.tsv", cluster=none, height=5)' locus.pdf
 ```
+
+**Track mode renders every label at one size** — row/strip labels, the track
+`name=`, the `regions()` panel titles, the kb-axis numbers and the legend title
+all share the axis-text size (0.8 × the base), and `--font-size` /
+`theme_*(base_size=)` scale that one size. A locus figure does not rank a panel
+title above a row label the way a grammar figure ranks its axis title above axis
+text; the browser's labels are peers. (Grammar, heatmap and tree modes keep
+their hierarchy.) The one exception is **shrink-to-fit**: a feature label that
+would not fit at the flat size — a `genes()` or `interval()` name that would run
+past its lane or the panel edge, a `matrix()`/`signal()` row label taller than
+its row — is shrunk toward a ~5.5pt floor until it fits, and only dropped if it
+will not fit even at the floor. Lane packing reserves the full-size width, so a
+shrunk name leaves a gap rather than overlapping its neighbour.
 
 **`interval()` names each feature from its 4th BED column**, to the right of
 the box — but only where the name fits before the next feature in its lane.
 A CpG tick track of 380 named 2-bp features would otherwise print 380 names
-over one another; by default the crowded names are dropped and the boxes stay
-(the way `genes()` keeps names from colliding). `labels=on` draws every name
-regardless, `labels=off` draws none; a 3-column BED has no names to draw.
+over one another; by default a crowded name is shrunk toward the ~5.5pt floor to
+fit the gap and only dropped if it still will not (the way `genes()` keeps names
+from colliding), and the boxes stay. `labels=on` draws every name regardless
+(still shrunk to the panel edge), `labels=off` draws none; a 3-column BED has no
+names to draw.
 
 **`signal()` draws continuous traces under the same axis** — the manuscript's
 bottom panel: per cell type one strip, the ground truth as a black line over N
@@ -561,10 +627,11 @@ does not name keep a hue, a name it gives that is not in the data is an error,
 and a positional list must cover every series. A single `colour="grey40"`
 paints every series alike. The first series — in `colour=c(...)` when it names
 them, else in the file — is drawn on top, so a reference trace listed first
-does not vanish under the rest. `rowgroup=` and `rowcolour=` work exactly as on
-`matrix()` (the group once beside its run, a rule between runs, a coloured
-name and swatch); a `name=` stands rotated at the gutter's left edge, since the
-strips own the label column. `height=` is a row weight like the matrix's, and
+does not vanish under the rest. `rowgroup=`/`rowcolour=`/`rowbar=` and the
+`rowmeta=` metadata bands work exactly as on `matrix()` (the group once beside
+its run, a rule between runs, the coloured name and swatch or the annotation
+bands); a `name=` stands rotated at the gutter's left edge, since the strips own
+the label column. `height=` is a row weight like the matrix's, and
 the strips share it equally; `linewidth=` (or `size=`) is in ggplot units,
 default 0.5. Under `regions()` each window draws the rows inside it, and the
 strip order and ranges come from the whole file so a strip means the same row

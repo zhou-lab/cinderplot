@@ -567,12 +567,15 @@ static int trk_boxes_load(const PlotSpec *spec, TBox **out, int *n_out, char *er
     return 0;
 }
 
-/* ---- matrix(rowcolour="file.tsv"): `group colour` per line. The group name
- * in the gutter is written in that colour with a swatch beside it, so a
- * lineage reads at a glance without a legend. Groups the file does not name
- * keep black, so a partial table is not an error; a colour that does not
- * parse is, naming the row. ---- */
-typedef struct { const char *group; Col col; } RowCol;
+/* ---- matrix(rowcolour="file.tsv"): the colour table. Two shapes, chosen by
+ * header:
+ *   - `group colour` (with rowgroup=): one colour per group name; the group in
+ *     the gutter is drawn in it with a swatch beside it. `column` stays NULL.
+ *   - `column value colour` (with rowmeta=): a colour per (annotation column,
+ *     value), so a cell_type band and a source band draw from one table.
+ * A (column,value) or group the file does not name gets the hue palette; a
+ * colour that does not parse is an error, naming the row. ---- */
+typedef struct { const char *column; const char *value; Col col; } RowCol;
 
 /* swatch beside a coloured group name: a square about the x-height of the
  * label, and the gap it keeps from the name */
@@ -581,9 +584,18 @@ typedef struct { const char *group; Col col; } RowCol;
 static int trk_rowcolours_load(const TrackObj *t, RowCol **out, int *n_out, char *err) {
     DataFrame *df = df_read_csv(t->rowcolour, err);
     if (!df) return -1;
-    const Column *gc = df_col(df, "group");
     const Column *kc = df_col(df, "colour"); if (!kc) kc = df_col(df, "color");
-    if (!gc || !kc) {
+    const Column *colc = df_col(df, "column"), *valc = df_col(df, "value");
+    const Column *gc = df_col(df, "group");
+    int three = colc && valc && kc;          /* `column value colour` */
+    int two = gc && kc;                      /* `group colour` */
+    if (t->rowmeta && !three) {
+        snprintf(err, CP_ERRLEN, "rowcolour(\"%s\"): with rowmeta= this table maps a "
+                 "value in an annotation column to a colour, so it needs columns "
+                 "column, value and colour", t->rowcolour);
+        return -1;
+    }
+    if (!t->rowmeta && !two) {
         snprintf(err, CP_ERRLEN, "rowcolour(\"%s\"): needs columns group and colour "
                  "(one line per rowgroup= name)", t->rowcolour);
         return -1;
@@ -596,60 +608,217 @@ static int trk_rowcolours_load(const TrackObj *t, RowCol **out, int *n_out, char
     RowCol *rc = cp_xcalloc(df->nrow > 0 ? df->nrow : 1, sizeof *rc);
     int n = 0;
     for (int r = 0; r < df->nrow; r++) {
-        const char *gname = gc->type == COL_STR ? gc->str[r] : NULL;
-        if (!gname) {                        /* a numeric group column */
-            char *tmp = cp_xmalloc(32);
-            snprintf(tmp, 32, "%.15g", gc->num[r]);
-            gname = tmp;
+        const char *column = NULL, *value;
+        if (three) {
+            column = colc->type == COL_STR ? colc->str[r] : NULL;
+            value  = valc->type == COL_STR ? valc->str[r] : NULL;
+            if (!value) {                    /* a numeric value column */
+                char *tmp = cp_xmalloc(32);
+                snprintf(tmp, 32, "%.15g", valc->num[r]);
+                value = tmp;
+            }
+            if (!column || !*column || !*value) continue;
+        } else {
+            value = gc->type == COL_STR ? gc->str[r] : NULL;
+            if (!value) {                    /* a numeric group column */
+                char *tmp = cp_xmalloc(32);
+                snprintf(tmp, 32, "%.15g", gc->num[r]);
+                value = tmp;
+            }
+            if (!*value) continue;
         }
-        if (!*gname) continue;
         if (!kc->str[r] || !*kc->str[r] || parse_color(kc->str[r], &rc[n].col)) {
-            snprintf(err, CP_ERRLEN, "rowcolour(\"%s\"): row %d (group `%s`) colour `%s` "
-                     "invalid (names or #RRGGBB)", t->rowcolour, r + 2, gname,
-                     kc->str[r] ? kc->str[r] : "");
+            snprintf(err, CP_ERRLEN, "rowcolour(\"%s\"): row %d (%s`%s`) colour `%s` "
+                     "invalid (names or #RRGGBB)", t->rowcolour, r + 2,
+                     column ? "value " : "group ", value, kc->str[r] ? kc->str[r] : "");
             return -1;
         }
-        rc[n++].group = gname;
+        rc[n].column = column; rc[n].value = value; n++;
     }
     *out = rc; *n_out = n;
     return 0;
 }
 
-/* the colour for a group name of length gl, or NULL when the file does not
- * name it (the caller keeps black and draws no swatch) */
+/* the colour for a group name of length gl (the rowgroup= path: only the
+ * 2-column `group colour` entries), or NULL when the file does not name it */
 static const Col *rowcolour_of(const RowCol *rc, int nrc, const char *name, size_t gl) {
     for (int k = 0; k < nrc; k++)
-        if (strlen(rc[k].group) == gl && !strncmp(rc[k].group, name, gl)) return &rc[k].col;
+        if (!rc[k].column && strlen(rc[k].value) == gl && !strncmp(rc[k].value, name, gl))
+            return &rc[k].col;
     return NULL;
+}
+
+/* the colour a (column, value) pair is named in the 3-column table, else NULL */
+static const Col *rowcolour_lookup(const RowCol *rc, int nrc, const char *column,
+                                   const char *value) {
+    for (int k = 0; k < nrc; k++)
+        if (rc[k].column && !strcmp(rc[k].column, column) && !strcmp(rc[k].value, value))
+            return &rc[k].col;
+    return NULL;
+}
+
+/* ---- matrix/signal(rowmeta=, rowbar="col,col2"): the metadata bands. For each
+ * band (a rowbar= column) and each sample (indexed as in the track's name
+ * array) the annotation value string and its resolved colour. Built once per
+ * track; draw_row_gutter reads it. ---- */
+typedef struct {
+    int nband;
+    char **bandcol;     /* [nband] rowmeta column name (borrowed from t->rowbar_cols) */
+    char ***val;        /* [nband][nsamp] value string (borrowed from the sheet) */
+    Col **col;          /* [nband][nsamp] resolved colour */
+    int nsamp;
+} RowAnno;
+
+/* smallest a shrink-to-fit label is allowed to reach before it is dropped */
+#define LABEL_MIN_PT 5.5
+
+/* The size at which `s` fits in `avail_pt`, shrinking from `size` toward
+ * LABEL_MIN_PT; 0 when it will not fit even at the floor (caller drops it).
+ * Cairo advance widths scale linearly with the font size, so one division
+ * lands the fit; the floor is re-checked defensively. */
+static double fit_width(cairo_t *cr, double size, const char *s, double avail_pt) {
+    if (avail_pt <= 0) return 0;
+    double w = text_w(cr, size, s);
+    if (w <= avail_pt) return size;
+    double shrunk = size * avail_pt / w;
+    if (shrunk >= LABEL_MIN_PT) return shrunk;
+    return text_w(cr, LABEL_MIN_PT, s) <= avail_pt ? LABEL_MIN_PT : 0;
+}
+
+/* leaf/row labels shrink to their row's height but are never dropped */
+static double fit_height(cairo_t *cr, double size, double avail_pt) {
+    if (avail_pt <= 0) return size;
+    double h = font_h(cr, size);
+    if (h <= avail_pt) return size;
+    double shrunk = size * avail_pt / h;
+    return shrunk < LABEL_MIN_PT ? LABEL_MIN_PT : shrunk;
+}
+
+static RowAnno *trk_rowmeta_load(const TrackObj *t, char **names, const int *ord,
+                                 int nsamp, const RowCol *rc, int nrc, char *err) {
+    DataFrame *df = df_read_csv(t->rowmeta, err);
+    if (!df) return NULL;
+    if (df->ncol < 2) {
+        snprintf(err, CP_ERRLEN, "rowmeta(\"%s\"): needs a sample-key column and at "
+                 "least one annotation column", t->rowmeta);
+        return NULL;
+    }
+    const Column *keyc = &df->cols[0];
+    char kbuf[64];
+    int *mrow = cp_xmalloc((size_t)(nsamp > 0 ? nsamp : 1) * sizeof(int));
+    for (int s = 0; s < nsamp; s++) {              /* every drawn sample must be present */
+        int hit = -1;
+        for (int r = 0; r < df->nrow; r++) {
+            const char *k = keyc->type == COL_STR ? keyc->str[r]
+                          : (snprintf(kbuf, sizeof kbuf, "%.15g", keyc->num[r]), kbuf);
+            if (k && !strcmp(k, names[s])) { hit = r; break; }
+        }
+        if (hit < 0) {
+            snprintf(err, CP_ERRLEN, "rowmeta(\"%s\"): sample \"%s\" is not in the sheet "
+                     "(its first column, `%s`, is the sample key)", t->rowmeta,
+                     names[s], keyc->name ? keyc->name : "sample");
+            return NULL;
+        }
+        mrow[s] = hit;
+    }
+    RowAnno *a = cp_xcalloc(1, sizeof *a);
+    a->nband = t->n_rowbar_cols; a->nsamp = nsamp;
+    a->bandcol = cp_xmalloc((size_t)a->nband * sizeof(char *));
+    a->val = cp_xmalloc((size_t)a->nband * sizeof(char **));
+    a->col = cp_xmalloc((size_t)a->nband * sizeof(Col *));
+    for (int b = 0; b < a->nband; b++) {
+        const char *cn = t->rowbar_cols[b];
+        const Column *c = df_col(df, cn);
+        if (!c) {
+            char cols[CP_ERRLEN]; size_t o = 0; cols[0] = 0;
+            for (int j = 0; j < df->ncol && o < sizeof cols - 2; j++)
+                o += (size_t)snprintf(cols + o, sizeof cols - o, "%s%s",
+                                      j ? ", " : "", df->cols[j].name ? df->cols[j].name : "?");
+            snprintf(err, CP_ERRLEN, "rowbar column \"%s\" is not in rowmeta(\"%s\") "
+                     "(columns: %s)", cn, t->rowmeta, cols);
+            return NULL;
+        }
+        a->bandcol[b] = (char *)cn;
+        a->val[b] = cp_xmalloc((size_t)(nsamp > 0 ? nsamp : 1) * sizeof(char *));
+        a->col[b] = cp_xmalloc((size_t)(nsamp > 0 ? nsamp : 1) * sizeof(Col));
+        char vbuf[64];
+        for (int s = 0; s < nsamp; s++) {
+            const char *v = c->type == COL_STR ? c->str[mrow[s]]
+                          : (snprintf(vbuf, sizeof vbuf, "%.15g", c->num[mrow[s]]),
+                             cp_xstrdup(vbuf));
+            a->val[b][s] = (char *)(v ? v : "");
+        }
+        /* listed (column,value) pairs keep their table colour; the rest get the
+         * hue palette over this column's distinct values in first-appearance
+         * (display) order. */
+        char **unlisted = cp_xmalloc((size_t)(nsamp > 0 ? nsamp : 1) * sizeof(char *));
+        int nunl = 0;
+        for (int rr = 0; rr < nsamp; rr++) {
+            const char *v = a->val[b][ord ? ord[rr] : rr];
+            if (rowcolour_lookup(rc, nrc, cn, v)) continue;
+            int seen = 0;
+            for (int u = 0; u < nunl; u++) if (!strcmp(unlisted[u], v)) { seen = 1; break; }
+            if (!seen) unlisted[nunl++] = (char *)v;
+        }
+        Col *hue = cp_xmalloc((size_t)(nunl > 0 ? nunl : 1) * sizeof(Col));
+        hue_palette(nunl, hue);
+        for (int s = 0; s < nsamp; s++) {
+            const Col *lc = rowcolour_lookup(rc, nrc, cn, a->val[b][s]);
+            if (lc) { a->col[b][s] = *lc; continue; }
+            int hi = 0;
+            for (int u = 0; u < nunl; u++) if (!strcmp(unlisted[u], a->val[b][s])) { hi = u; break; }
+            a->col[b][s] = hue[hi];
+        }
+    }
+    return a;
 }
 
 /* ---- The row-label gutter matrix() and signal() share: a leaf label per
  * row, and with rowgroup= the group name once beside each run of consecutive
  * rows, its rowcolour= swatch, and a rule between one run and the next. ---- */
 
-/* widest leaf label and widest group name over `names`, at font size sz */
-static void rowlabel_widths(cairo_t *cr, double sz, char **names, int n, const char *sep,
-                            double *leafw, double *grpw) {
-    *leafw = 0; *grpw = 0;
-    for (int r = 0; r < n; r++) {
+/* a band column is ROWBAR_PT wide against the panel edge */
+#define ROWBAR_PT 6.0
+
+/* the width (pt) of the band strip against the panel: metadata bands
+ * (rowbar="col,col2") reserve one ROWBAR_PT column per band with a gap between,
+ * the single rowbar=on band reserves one, and a plain rowcolour= reserves none
+ * (its swatch sits beside the group name, counted with the label widths). */
+static double rowbar_strip_pt(const TrackObj *t, const RowAnno *ann) {
+    int nband = ann ? ann->nband : ((t->rowbar && t->rowcolour) ? 1 : 0);
+    if (nband <= 0) return 0;
+    return nband * ROWBAR_PT + (nband - 1) * TXT_GAP + TXT_GAP * 2;
+}
+
+/* the gutter width a track's rows need: the band strip (always, so hidden row
+ * names still leave room for the bands), plus -- when the labels are shown --
+ * the leaf labels, the group name left of them, and a plain rowcolour= swatch. */
+static double measure_gutter(cairo_t *cr, double sz, const TrackObj *t,
+                             const RowAnno *ann, char **names, int n, int show_labels) {
+    double w = rowbar_strip_pt(t, ann);
+    if (!show_labels) return w;
+    double leafw = 0, grpw = 0;
+    int meta = ann && ann->nband > 0;          /* metadata mode: no leaf labels */
+    for (int r = 0; !meta && r < n; r++) {
         size_t gl = 0;
-        const char *leaf = row_leaf(names[r], sep, &gl);
-        double w = text_w(cr, sz, leaf);
-        if (w > *leafw) *leafw = w;
+        const char *leaf = row_leaf(names[r], t->rowgroup, &gl);
+        double lw = text_w(cr, sz, leaf);
+        if (lw > leafw) leafw = lw;
         if (gl) {
             char g8[256];
             snprintf(g8, sizeof g8, "%.*s", (int)(gl < sizeof g8 ? gl : sizeof g8 - 1), names[r]);
             double gw = text_w(cr, sz, g8);
-            if (gw > *grpw) *grpw = gw;
+            if (gw > grpw) grpw = gw;
         }
     }
-}
-
-/* the gutter width the labels need: leaves, then the group names left of
- * them with a gap, then a rowcolour= swatch left of the names again */
-static double rowlabel_gutter(const TrackObj *t, double leafw, double grpw) {
-    double w = leafw + (grpw > 0 ? grpw + TXT_GAP * 2 : 0);
-    if (grpw > 0 && t->rowcolour) w += SWATCH_PT + TXT_GAP;
+    if (ann && ann->nband > 0)                 /* group label = the first band's value */
+        for (int s = 0; s < ann->nsamp; s++) {
+            double gw = text_w(cr, sz, ann->val[0][s]);
+            if (gw > grpw) grpw = gw;
+        }
+    w += leafw + (grpw > 0 ? grpw + TXT_GAP * 2 : 0);
+    if (!ann && grpw > 0 && t->rowcolour && !t->rowbar)
+        w += SWATCH_PT + TXT_GAP;              /* swatch beside a plain rowcolour name */
     return w;
 }
 
@@ -659,31 +828,91 @@ static double rowlabel_gutter(const TrackObj *t, double leafw, double grpw) {
  * is shared by every window, and each would otherwise stamp the same names
  * over the last. The rules between runs are per window, in column CC.
  *
- * Runs are CONSECUTIVE rows sharing a prefix -- the display order decides
- * them, so clustering or a hand-ordered file groups exactly as the reader
- * sees it, and a scattered group legitimately shows up as several runs
+ * Three annotation shapes share this:
+ *   - rowmeta=/rowbar="col,col2" (ann != NULL): one filled band per column
+ *     against the panel edge (leftmost = first in the list), the group label
+ *     and the run rules from the FIRST band's column;
+ *   - rowbar=on + rowgroup= (band-only): one band per run, no swatch;
+ *   - plain rowcolour= + rowgroup=: the coloured group name with a swatch.
+ *
+ * Runs are CONSECUTIVE rows equal in the grouping value -- the display order
+ * decides them, so a hand-ordered or clustered file groups exactly as the
+ * reader sees it, and a scattered value legitimately shows up as several runs
  * rather than being merged behind the reader's back. */
 static void draw_row_gutter(GTable *T, cairo_t *cr, int R, int CC, const TrackObj *t,
-                            const RowCol *rc, int nrc, char **names, const int *ord,
+                            const RowCol *rc, int nrc, const RowAnno *ann,
+                            char **names, const int *ord,
                             int n, double top, double hh, double labw, double cell_pt,
                             double sz, int write_labels) {
     Grob *g;
-    if (write_labels)
-        for (int rr = 0; rr < n; rr++) {
-            size_t gl = 0;
-            const char *leaf = row_leaf(names[ord[rr]], t->rowgroup, &gl);
-            g = gt_add(T, G_TEXT, R, 1, R, 1);
-            g->str = (char *)leaf; g->size = sz; g->col = C_BLACK;
-            g->tx = 1; g->ty = top - (rr + 0.5) / n * hh; g->hj = 1; g->va = V_INKCENTER;
-        }
-    if (!t->rowgroup || n < 1) return;
-    double leafw = 0;
-    for (int rr = 0; rr < n; rr++) {
+    if (n < 1) return;
+    double strip = rowbar_strip_pt(t, ann);          /* band column(s) against the panel */
+    double bshift = labw > 0 ? strip / labw : 0;
+    double rowh_pt = cell_pt > 0 ? hh * cell_pt / n : 0;   /* one row's height */
+    double leafw = 0;                                /* widest leaf label, for group x */
+    for (int rr = 0; !(ann && ann->nband > 0) && rr < n; rr++) {
         size_t gl = 0;
         const char *leaf = row_leaf(names[ord[rr]], t->rowgroup, &gl);
         double w = text_w(cr, sz, leaf);
         if (w > leafw) leafw = w;
     }
+    /* per-row leaf labels, shrunk to their row height so a tall label in a
+     * short row does not overlap its neighbours (shrunk, never dropped). In
+     * metadata mode (rowmeta=) the grouping is the annotation, not the row
+     * name -- the leaves are "truth" and invisible reconstruction markers, a
+     * smear -- so only the coloured group label below is drawn. */
+    if (write_labels && !(ann && ann->nband > 0))
+        for (int rr = 0; rr < n; rr++) {
+            size_t gl = 0;
+            const char *leaf = row_leaf(names[ord[rr]], t->rowgroup, &gl);
+            g = gt_add(T, G_TEXT, R, 1, R, 1);
+            g->str = (char *)leaf; g->size = fit_height(cr, sz, rowh_pt); g->col = C_BLACK;
+            g->tx = 1 - bshift; g->ty = top - (rr + 0.5) / n * hh; g->hj = 1; g->va = V_INKCENTER;
+        }
+    double gx = labw > 0 ? 1 - bshift - (leafw + TXT_GAP * 2) / labw : 0;
+
+    /* ---- metadata bands (rowmeta=, rowbar="col,col2") ---- */
+    if (ann && ann->nband > 0) {
+        if (labw > 0)
+            for (int b = 0; b < ann->nband; b++) {
+                /* band 0 (leftmost of the strip) furthest from the panel; the
+                 * last band butts the panel edge */
+                int bi = ann->nband - 1 - b;
+                double bx1 = 1 - (double)bi * (ROWBAR_PT + TXT_GAP) / labw;
+                double bx0 = bx1 - ROWBAR_PT / labw;
+                for (int rr = 0; rr < n; rr++) {
+                    g = gt_add(T, G_RECT, R, 1, R, 1);
+                    g->col = ann->col[b][ord[rr]]; g->sub = 1;
+                    g->x0 = bx0; g->x1 = bx1;
+                    g->y0 = top - (double)(rr + 1) / n * hh;
+                    g->y1 = top - (double)rr / n * hh;
+                }
+            }
+        int rs = 0;                                  /* runs on the FIRST band's column */
+        while (rs < n) {
+            const char *gv = ann->val[0][ord[rs]];
+            int re = rs;
+            while (re + 1 < n && !strcmp(ann->val[0][ord[re + 1]], gv)) re++;
+            if (write_labels) {
+                double gy = top - (rs + re + 1) / 2.0 / n * hh;
+                g = gt_add(T, G_TEXT, R, 1, R, 1);
+                g->str = (char *)gv; g->size = sz; g->col = ann->col[0][ord[rs]];
+                g->tx = gx; g->ty = gy; g->hj = 1; g->va = V_INKCENTER;
+            }
+            if (re + 1 < n) {                        /* rule below this run */
+                g = gt_add(T, G_LINE, R, CC, R, CC);
+                g->col = C_BLACK; g->lw = lw_pt(0.5) * cp_line_scale; g->clip = 1;
+                g->x0 = 0; g->x1 = 1;
+                g->y0 = g->y1 = top - (double)(re + 1) / n * hh;
+            }
+            rs = re + 1;
+        }
+        return;
+    }
+
+    /* ---- rowgroup= path: one grouping value split out of the sample name ---- */
+    if (!t->rowgroup) return;
+    int bar = t->rowbar && t->rowcolour && labw > 0;   /* band-only when rowbar=on */
     int rs = 0;
     while (rs < n) {
         size_t gl = 0;
@@ -701,20 +930,27 @@ static void draw_row_gutter(GTable *T, cairo_t *cr, int R, int CC, const TrackOb
             char *gname = cp_xmalloc(gl + 1);
             memcpy(gname, nm, gl); gname[gl] = 0;
             const Col *gc = rowcolour_of(rc, nrc, nm, gl);
-            double gx = labw > 0 ? 1 - (leafw + TXT_GAP * 2) / labw : 0;
             double gy = top - (rs + re + 1) / 2.0 / n * hh;
             g = gt_add(T, G_TEXT, R, 1, R, 1);
             g->str = gname; g->size = sz; g->col = gc ? *gc : C_BLACK;
             g->tx = gx; g->ty = gy;
             g->hj = 1; g->va = V_INKCENTER;
-            if (gc && labw > 0 && cell_pt > 0) {   /* swatch left of the name */
-                double gw = text_w(cr, sz, gname);
-                g = gt_add(T, G_RECT, R, 1, R, 1);
-                g->col = *gc; g->sub = 1;
-                g->x1 = gx - (gw + TXT_GAP) / labw;
-                g->x0 = g->x1 - SWATCH_PT / labw;
-                g->y0 = gy - SWATCH_PT / 2 / cell_pt;
-                g->y1 = gy + SWATCH_PT / 2 / cell_pt;
+            if (gc && labw > 0 && cell_pt > 0) {
+                if (bar) {                         /* band spanning the run, at the panel edge */
+                    g = gt_add(T, G_RECT, R, 1, R, 1);
+                    g->col = *gc; g->sub = 1;
+                    g->x1 = 1; g->x0 = 1 - ROWBAR_PT / labw;
+                    g->y0 = top - (double)(re + 1) / n * hh;
+                    g->y1 = top - (double)rs / n * hh;
+                } else {                           /* swatch beside the group name */
+                    double gw = text_w(cr, sz, gname);
+                    g = gt_add(T, G_RECT, R, 1, R, 1);
+                    g->col = *gc; g->sub = 1;
+                    g->x1 = gx - (gw + TXT_GAP) / labw;
+                    g->x0 = g->x1 - SWATCH_PT / labw;
+                    g->y0 = gy - SWATCH_PT / 2 / cell_pt;
+                    g->y1 = gy + SWATCH_PT / 2 / cell_pt;
+                }
             }
         }
         if (re + 1 < n) {            /* rule below this run */
@@ -983,11 +1219,29 @@ int render_tracks(const PlotSpec *spec, const char *out,
             sd[i] = read_signal(&spec->tobjs[i], err);
             if (!sd[i] || sig_colours(&spec->tobjs[i], sd[i], err)) return -1;
         }
-    /* rowcolour= tables, read once: the swatch widens the label gutter below */
+    /* rowcolour= tables, read once: they colour the bands / group names below */
     RowCol *rcs[MAX_TRACKS] = {0}; int nrcs[MAX_TRACKS] = {0};
     for (int i = 0; i < ntr; i++)
         if (spec->tobjs[i].rowcolour
             && trk_rowcolours_load(&spec->tobjs[i], &rcs[i], &nrcs[i], err)) return -1;
+
+    /* rowmeta= metadata bands, built once per track from the sample display
+     * order (matrix: the clustered/file roword; signal: file order). */
+    RowAnno *ann[MAX_TRACKS] = {0};
+    for (int i = 0; i < ntr; i++) {
+        const TrackObj *t = &spec->tobjs[i];
+        if (!t->rowmeta) continue;
+        if (md[i]) {
+            ann[i] = trk_rowmeta_load(t, md[i]->rowname, md[i]->roword, md[i]->nr,
+                                      rcs[i], nrcs[i], err);
+        } else if (sd[i]) {
+            int *ident = cp_xmalloc((size_t)(sd[i]->nstrip > 0 ? sd[i]->nstrip : 1) * sizeof(int));
+            for (int k = 0; k < sd[i]->nstrip; k++) ident[k] = k;
+            ann[i] = trk_rowmeta_load(t, sd[i]->stripname, ident, sd[i]->nstrip,
+                                      rcs[i], nrcs[i], err);
+        }
+        if (!ann[i]) return -1;
+    }
 
     /* ---- the discrete fill: matrix(discrete=TRUE) reads the cell values as
      * category codes. The levels come from the pre-read (the whole file under
@@ -1158,8 +1412,16 @@ int render_tracks(const PlotSpec *spec, const char *out,
         snprintf(xlab[nx - 1], 64, "%s", buf);
     }
 
-    /* font levels within ~1.5x: title 9.5, medium SZ_AXIS_TEXT (8.8), small 6.5. */
-    double sz_title = 9.5, sz_samp = 6.5;             /* per-row sample/probe labels */
+    /* ONE size for every track label. A track figure does not rank a panel
+     * title above a row label the way a grammar figure ranks axis title above
+     * axis text; the browser's labels are all peers, so they share the single
+     * axis-text size and scale together with --font-size / theme_*(base_size=).
+     * (The other three modes keep their hierarchy; only track mode flattens.) */
+    /* One flat size for every track label (the user's house style: a panel
+     * title does not outrank a row label by default). 9pt at the default base
+     * of 11, and --font-size / base_size scale it. */
+    double sz_flat = SZ_BASE * (9.0 / 11.0);
+    double sz_title = sz_flat, sz_samp = sz_flat;
 
     /* widest gene label -> reserved right margin, so transcript names always fit
      * to the right of their model (no left-flip collisions at narrow widths) */
@@ -1181,7 +1443,9 @@ int render_tracks(const PlotSpec *spec, const char *out,
      * background swatch when the track has one to explain); a continuous one
      * the colourbar over the track's fixed 0..1 domain. Drawn after the
      * tracks, centred on the matrix band, below. ---- */
-    double leg_across = 0, leg_h = 0, baseH = font_h(cr, SZ_BASE);
+    /* the legend title shares the single track label size, not the grammar
+     * SZ_BASE — track mode renders every label at one size (see sz_samp above) */
+    double leg_across = 0, leg_h = 0, baseH = font_h(cr, SZ_AXIS_TEXT);
     const char *leg_title = NULL;
     char **klab = NULL; Col *kpal = NULL; int nk = 0, leg_disc = 0;
     if (lg) {
@@ -1210,7 +1474,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
             leg_h = LEG_LEN;
         }
         if (leg_title) {
-            leg_across = fmax(leg_across, text_w(cr, SZ_BASE, leg_title));
+            leg_across = fmax(leg_across, text_w(cr, SZ_AXIS_TEXT, leg_title));
             leg_h += baseH + TXT_GAP;
         }
         rmargin = fmax(rmargin, HALF_LINE + leg_across + MARGIN);
@@ -1224,18 +1488,16 @@ int render_tracks(const PlotSpec *spec, const char *out,
             double w = text_w(cr, SZ_AXIS_TEXT, t->name);
             if (w > labw) labw = w;
         }
-        if (md[i] && !t->hide_rownames) {
-            double leafw, grpw;
-            rowlabel_widths(cr, sz_samp, md[i]->rowname, md[i]->nr, t->rowgroup, &leafw, &grpw);
-            double w = rowlabel_gutter(t, leafw, grpw);
+        if (md[i]) {
+            double w = measure_gutter(cr, sz_samp, t, ann[i], md[i]->rowname,
+                                      md[i]->nr, !t->hide_rownames);
             if (w > labw) labw = w;
         }
         if (sd[i]) {
             /* strip labels as the matrix's rows; a name= stands rotated at the
              * gutter's left edge, since the strips own the horizontal space */
-            double leafw, grpw;
-            rowlabel_widths(cr, sz_samp, sd[i]->stripname, sd[i]->nstrip, t->rowgroup, &leafw, &grpw);
-            double w = rowlabel_gutter(t, leafw, grpw);
+            double w = measure_gutter(cr, sz_samp, t, ann[i], sd[i]->stripname,
+                                      sd[i]->nstrip, 1);
             if (t->name) w += font_h(cr, SZ_AXIS_TEXT) + TXT_GAP;
             if (w > labw) labw = w;
         }
@@ -1524,6 +1786,18 @@ int render_tracks(const PlotSpec *spec, const char *out,
                 if (L < 0) L = nlanes - 1;
                 lane[k] = L; laneend[L] = gm[k].tx_end + lw_bp;
             }
+            /* the next same-lane feature's start (npc), so a name shrinks to the
+             * room before it rather than overprinting it. Genes are tx_start
+             * sorted (load_genes), so a backward sweep per lane gives it. */
+            double *g_nextx = cp_xmalloc((ng > 0 ? ng : 1) * sizeof(double));
+            {
+                double lanenext[64];
+                for (int j = 0; j < 64; j++) lanenext[j] = 2.0;
+                for (int k = ng - 1; k >= 0; k--) {
+                    g_nextx[k] = lanenext[lane[k]];
+                    lanenext[lane[k]] = NPCX(gm[k].tx_start);
+                }
+            }
             Col col = t->has_color ? t->color : C_IVAL;
             Col cds_col = {0.77, 0.20, 0.16};                /* coding regions (red) */
             double lh = 1.0 / nlanes, utr = 0.30 * lh, cds = 0.62 * lh;
@@ -1556,16 +1830,23 @@ int render_tracks(const PlotSpec *spec, const char *out,
                     }
                 }
                 if (gm[k].name) {                            /* name to the right of tx_end */
-                    /* With one window the name may run into the reserved right
-                     * margin unclipped. With several it must not: the margin
-                     * belongs to the next window, and an overflowing name lands
-                     * inside its neighbour's panel. Skip it when it cannot fit,
-                     * and clip what does. */
+                    /* Shrink-to-fit: the name is drawn to the right of tx_end
+                     * at the flat size when it fits, and shrunk toward a floor
+                     * (LABEL_MIN_PT) when it will not -- dropped only if even the
+                     * floor overflows. "Fits" means before the next same-lane
+                     * feature and before the right edge: the window edge with
+                     * several windows (the margin belongs to the next window),
+                     * else the surface edge including the reserved right margin,
+                     * so a lone single-window name still uses that margin.
+                     * Packing reserved the FULL-size width, so a shrunk name can
+                     * only leave a gap, never overlap its neighbour. */
                     double tx = xb + HALF_LINE / win_pt;
-                    double need = text_w(cr, SZ_AXIS_TEXT, gm[k].name) / win_pt;
-                    if (!wins || tx + need <= 1.0) {
+                    double edge = wins ? 1.0 : 1.0 + rmargin / win_pt;
+                    double limit = g_nextx[k] < edge ? g_nextx[k] : edge;
+                    double fs = fit_width(cr, SZ_AXIS_TEXT, gm[k].name, (limit - tx) * win_pt);
+                    if (fs > 0) {
                         g = gt_add(T, G_TEXT, R, CC, R, CC);
-                        g->str = gm[k].name; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
+                        g->str = gm[k].name; g->size = fs; g->col = C_BLACK;
                         g->tx = tx; g->hj = 0; g->ty = yc; g->va = V_INKCENTER;
                         g->clip = wins ? 1 : 0;
                     }
@@ -1609,11 +1890,16 @@ int render_tracks(const PlotSpec *spec, const char *out,
                 g->y0 = yb + 0.18 * lh; g->y1 = yb + 0.82 * lh;
                 if (iv[k].name && t->labels >= 0) {      /* name to the right */
                     double tx = NPCX(iv[k].end) + 0.004;
-                    double need = text_w(cr, SZ_AXIS_TEXT, iv[k].name) / win_pt;
-                    int crowded = t->labels == 0 && tx + need > nextx[k];
-                    if (!crowded && (!wins || tx + need <= 1.0)) {   /* else it lands in the neighbour */
+                    /* fit before the next same-lane feature (labels=auto only)
+                     * and the right edge (the window edge with several windows),
+                     * shrinking toward the floor before dropping, as genes() do.
+                     * labels=on ignores the neighbour and only respects the edge. */
+                    double limit = wins ? 1.0 : 2.0;
+                    if (t->labels == 0 && nextx[k] < limit) limit = nextx[k];
+                    double fs = fit_width(cr, SZ_AXIS_TEXT, iv[k].name, (limit - tx) * win_pt);
+                    if (fs > 0) {
                         g = gt_add(T, G_TEXT, R, CC, R, CC);
-                        g->str = iv[k].name; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
+                        g->str = iv[k].name; g->size = fs; g->col = C_BLACK;
                         g->tx = tx; g->ty = yb + 0.5 * lh;
                         g->hj = 0; g->va = V_INKCENTER;
                         g->clip = wins ? 1 : 0;
@@ -1873,7 +2159,7 @@ gx_no_fan:
             }
             /* sample labels (left), group names, swatches and rules: the
              * gutter shared with signal(); the left-most window writes it */
-            draw_row_gutter(T, cr, R, CC, t, rcs[i], nrcs[i], m->rowname, m->roword, nr,
+            draw_row_gutter(T, cr, R, CC, t, rcs[i], nrcs[i], ann[i], m->rowname, m->roword, nr,
                             hmtop, hmtop - lblband, labw, cell_pt, sz_samp,
                             !t->hide_rownames && wi == 0);
         } else if (t->type == TRK_SIGNAL) {
@@ -1983,7 +2269,11 @@ gx_no_fan:
 #undef SIG_Y
             }
             free(pts); free(sx); free(sy);
-            draw_row_gutter(T, cr, R, CC, t, rcs[i], nrcs[i], d->stripname, ident, ns,
+            g = gt_add(T, G_RECT, R, CC, R, CC);           /* panel frame, like the matrix box */
+            { Col bbh = {0.4, 0.4, 0.4};
+              g->col = bbh; g->sub = 1; g->stroke = 1; g->lw = lw_pt(0.5) * cp_line_scale; g->clip = 1;
+              g->x0 = 0; g->x1 = 1; g->y0 = 0; g->y1 = 1; }
+            draw_row_gutter(T, cr, R, CC, t, rcs[i], nrcs[i], ann[i], d->stripname, ident, ns,
                             1.0, 1.0, labw, cell_pt, sz_samp, wi == 0);
         }
     }
@@ -2023,7 +2313,7 @@ gx_no_fan:
         }
         if (leg_title) {
             g = gt_add(T, G_TEXT, R, C, R, C);
-            g->str = leg_title; g->size = SZ_BASE; g->col = C_BLACK;
+            g->str = leg_title; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
             g->tx = sx; g->ty = top; g->hj = 0; g->va = V_TOP;
         }
     }

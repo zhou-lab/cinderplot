@@ -401,7 +401,8 @@ static int trk_opt_ok(TrackType t, const char *key) {
     if (!strcmp(key, "color") || !strcmp(key, "colour"))
         return t == TRK_COVERAGE || t == TRK_INTERVAL || t == TRK_GENES || t == TRK_ARCS
             || t == TRK_SIGNAL;
-    if (!strcmp(key, "rowgroup") || !strcmp(key, "rowcolour") || !strcmp(key, "rowcolor"))
+    if (!strcmp(key, "rowgroup") || !strcmp(key, "rowcolour") || !strcmp(key, "rowcolor")
+        || !strcmp(key, "rowbar") || !strcmp(key, "rowmeta"))
         return t == TRK_MATRIX || t == TRK_SIGNAL;
     if (!strcmp(key, "cluster") || !strcmp(key, "rownames") || !strcmp(key, "colnames")
         || !strcmp(key, "x") || !strcmp(key, "bar") || !strcmp(key, "background")
@@ -421,8 +422,8 @@ static const char *trk_opt_menu(TrackType t) {
     case TRK_ARCS: return "name=, height=, data=, color=";
     case TRK_GENES: return "name=, height=, data=, color=, transcripts=";
     case TRK_MATRIX: return "name=, height=, data=, cluster=, rownames=, colnames=, "
-                            "x=, bar=, background=, rowgroup=, rowcolour=, discrete=";
-    case TRK_SIGNAL: return "name=, height=, data=, rowgroup=, rowcolour=, smooth=, "
+                            "x=, bar=, background=, rowgroup=, rowmeta=, rowcolour=, rowbar=, discrete=";
+    case TRK_SIGNAL: return "name=, height=, data=, rowgroup=, rowmeta=, rowcolour=, rowbar=, smooth=, "
                             "points=, colour=c(...), ylim=c(lo, hi), linewidth=, gap=";
     default: return "name=, height=, data=";
     }
@@ -445,6 +446,7 @@ static int parse_trk_args(P *p, TrackObj *o) {
                          || !strcmp(key, "colnames") || !strcmp(key, "transcripts")
                          || !strcmp(key, "labels") || !strcmp(key, "rowgroup")
                          || !strcmp(key, "rowcolour") || !strcmp(key, "rowcolor")
+                         || !strcmp(key, "rowbar") || !strcmp(key, "rowmeta")
                          || !strcmp(key, "smooth") || !strcmp(key, "points")
                          || !strcmp(key, "ylim") || !strcmp(key, "linewidth")
                          || !strcmp(key, "size") || !strcmp(key, "discrete");
@@ -579,11 +581,57 @@ static int parse_trk_args(P *p, TrackObj *o) {
                 if (!o->rowgroup || !*o->rowgroup)
                     return fail(p, "rowgroup= expects the quoted separator that "
                                 "splits a sample name, e.g. rowgroup=\" | \"", "");
+            } else if (!strcmp(key, "rowmeta")) {
+                o->rowmeta = string_lit(p);
+                if (!o->rowmeta || !*o->rowmeta)
+                    return fail(p, "rowmeta= expects the quoted path of a sample "
+                                "metadata sheet (first column the sample key, one "
+                                "annotation per further column), e.g. "
+                                "rowmeta=\"samples.tsv\"", "");
             } else if (!strcmp(key, "rowcolour") || !strcmp(key, "rowcolor")) {
                 o->rowcolour = string_lit(p);
                 if (!o->rowcolour || !*o->rowcolour)
-                    return fail(p, "rowcolour= expects the quoted path of a `group colour` "
-                                "table, e.g. rowcolour=\"colours.tsv\"", "");
+                    return fail(p, "rowcolour= expects the quoted path of a colour "
+                                "table (`group colour`, or `column value colour` with "
+                                "rowmeta=), e.g. rowcolour=\"colours.tsv\"", "");
+            } else if (!strcmp(key, "rowbar")) {
+                /* Two forms: the on/off flag (single band following rowgroup=),
+                 * and a comma-separated, ordered list of rowmeta= column names,
+                 * each drawn as its own adjacent band. */
+                char *v = word(p);
+                if (!v || !*v) return fail(p, "rowbar= expects on/off, or a quoted "
+                                           "list of rowmeta= column names, e.g. "
+                                           "rowbar=\"cell_type,source\"", "");
+                if (!strcmp(v, "on") || !strcmp(v, "TRUE") || !strcmp(v, "true")
+                    || !strcmp(v, "T") || !strcmp(v, "1")) o->rowbar = 1;
+                else if (!strcmp(v, "off") || !strcmp(v, "FALSE") || !strcmp(v, "false")
+                         || !strcmp(v, "F") || !strcmp(v, "0")) o->rowbar = 0;
+                else {
+                    /* a column list: split on commas, trimming surrounding blanks */
+                    o->rowbar_cols = cp_xmalloc(MAX_MANUAL_COLS * sizeof(char *));
+                    o->n_rowbar_cols = 0;
+                    char *s = v;
+                    while (*s) {
+                        while (*s == ' ' || *s == '\t') s++;
+                        char *start = s;
+                        while (*s && *s != ',') s++;
+                        char *endp = s;
+                        while (endp > start && (endp[-1] == ' ' || endp[-1] == '\t')) endp--;
+                        if (endp == start)
+                            return fail(p, "rowbar=\"...\" has an empty column name; "
+                                        "list them as rowbar=\"cell_type,source\"", "");
+                        if (o->n_rowbar_cols == MAX_MANUAL_COLS)
+                            return fail(p, "rowbar=\"...\": too many band columns "
+                                        "(at most a handful)", "");
+                        char *col = cp_xmalloc((size_t)(endp - start) + 1);
+                        memcpy(col, start, (size_t)(endp - start));
+                        col[endp - start] = 0;
+                        o->rowbar_cols[o->n_rowbar_cols++] = col;
+                        if (*s == ',') s++;
+                    }
+                    if (o->n_rowbar_cols == 0)
+                        return fail(p, "rowbar=\"...\" listed no columns", "");
+                }
             } else if (!strcmp(key, "labels")) {
                 /* The same spellings rownames= takes, so a reader who knows one
                  * knows the other. */
@@ -635,10 +683,30 @@ static int parse_trk_args(P *p, TrackObj *o) {
     }
 done:
     if (!o->data) return fail(p, "this track needs a data file", "");
-    if (o->rowcolour && !o->rowgroup)
-        return fail(p, "rowcolour= colours the group names that rowgroup= splits off, "
-                    "so it needs rowgroup=\"SEP\" too; without groups there is "
-                    "nothing to colour", "");
+    if (o->rowgroup && o->rowmeta)
+        return fail(p, "rowgroup=\"SEP\" splits an annotation out of the sample name, "
+                    "rowmeta=\"file\" reads annotations from a sheet -- give one or "
+                    "the other, not both", "");
+    if (o->n_rowbar_cols > 0 && !o->rowmeta)
+        return fail(p, "rowbar=\"col,col2\" names metadata columns to draw as bands, "
+                    "so it needs rowmeta=\"samples.tsv\"; use rowbar=on for the single "
+                    "band that follows rowgroup=", "");
+    if (o->rowmeta && o->n_rowbar_cols == 0)
+        return fail(p, "rowmeta=\"samples.tsv\" is drawn through rowbar=; say which "
+                    "columns become bands, e.g. rowbar=\"cell_type,source\"", "");
+    if (o->rowbar && !o->rowgroup)
+        return fail(p, "rowbar=on draws the band that follows rowgroup=, so it needs "
+                    "rowgroup=\"SEP\"; for metadata bands use rowmeta= with "
+                    "rowbar=\"col,col2\"", "");
+    if (o->rowbar && !o->rowcolour)
+        return fail(p, "rowbar=on draws each group's colour as a band spanning its "
+                    "rows, so it needs rowcolour=\"group colour\" (and rowgroup=\"SEP\") "
+                    "to know the colours", "");
+    if (o->rowcolour && !o->rowgroup && !o->rowmeta)
+        return fail(p, "rowcolour= colours the annotations, so it needs rowgroup=\"SEP\" "
+                    "(a `group colour` table) or, for metadata bands, "
+                    "rowmeta=\"samples.tsv\" (a `column value colour` table); without "
+                    "one there is nothing to colour", "");
     if (o->type == TRK_SIGNAL && o->has_color && o->nser_col > 0)
         return fail(p, "signal(): colour=\"one colour\" and colour=c(...) contradict; "
                     "give one or the other", "");
@@ -2320,17 +2388,26 @@ static int parse_term(P *p, PlotSpec *spec) {
         while (*p->s != ')') {
             char *key = ident(p);
             if (!key || expect(p, '=')) return fail(p, "bad theme argument", "");
-            if (strcmp(key, "base_line_size"))
+            int is_bls = !strcmp(key, "base_line_size");
+            int is_bs  = !strcmp(key, "base_size");
+            if (!is_bls && !is_bs)
                 return fail(p, "theme option `%s` not implemented "
-                            "(base_line_size=)", key);
+                            "(base_size=, base_line_size=)", key);
             skip_ws(p);
             char *end;
             double v = strtod(p->s, &end);
             if (end == p->s || !(v > 0))
-                return fail(p, "base_line_size= expects a number > 0 "
-                            "(0.5 = the ggplot2 default)", "");
+                return fail(p, is_bs
+                            ? "base_size= expects a number > 0 (font size in pt; 11 = the ggplot2 default)"
+                            : "base_line_size= expects a number > 0 (0.5 = the ggplot2 default)", "");
             p->s = end;
-            spec->base_line_size = v;
+            if (is_bs) {
+                if (v < 1 || v > 100)
+                    return fail(p, "base_size= is out of range (expected 1..100 pt)", "");
+                spec->base_size = v;
+            } else {
+                spec->base_line_size = v;
+            }
             skip_ws(p);
             if (*p->s == ',') { p->s++; skip_ws(p); }
         }
@@ -2683,9 +2760,10 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
         /* the preset itself (panel, grid, strips) has nothing to act on here,
          * but base_line_size= does: it scales the track frames and ticks
          * through cp_line_scale, so theme_*(base_line_size=) is honoured */
-        if (spec->theme && !(spec->base_line_size > 0))
+        if (spec->theme && !(spec->base_line_size > 0) && !(spec->base_size > 0))
             return fail(&p, "theme_*() presets have no effect on the track browser; "
-                        "only theme_*(base_line_size=) applies (frame and tick width)", "");
+                        "only theme_*(base_line_size=) (frame and tick width) and "
+                        "base_size= (label size) apply", "");
         return 0;
     }
 
@@ -2738,9 +2816,10 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
                         "(cluster=diagonal/symmetric and placements set the layout)", "");
         /* as for tracks: the preset is inert (box=/grid= frame the cells) but
          * base_line_size= scales the frames through cp_line_scale */
-        if (spec->theme && !(spec->base_line_size > 0))
+        if (spec->theme && !(spec->base_line_size > 0) && !(spec->base_size > 0))
             return fail(&p, "theme_*() presets have no effect in heatmap mode (box=/grid= "
-                        "frame the cells); only theme_*(base_line_size=) applies", "");
+                        "frame the cells); only theme_*(base_line_size=) and "
+                        "base_size= (label size) apply", "");
         return 0;
     }
     if (spec->n_manual_labs)
@@ -2751,9 +2830,12 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
                     "matrix() track key; the grammar-mode legend does not take it -- "
                     "rename the levels in the data", "");
     if (spec->tree_mode) {          /* tree mode: the topology is the data */
-        if (spec->theme || spec->base_line_size > 0)
+        if (spec->base_line_size > 0)
+            return fail(&p, "theme_*(base_line_size=) has no effect on a tree (no panel "
+                        "chrome) and is refused rather than ignored; base_size= sets label size", "");
+        if (spec->theme && !(spec->base_size > 0))
             return fail(&p, "theme_*() has no effect on a tree (no panel chrome) and "
-                        "is refused rather than ignored", "");
+                        "is refused rather than ignored; only base_size= applies (label size)", "");
         return 0;
     }
     if (any_tree)
