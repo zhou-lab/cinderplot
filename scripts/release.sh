@@ -300,6 +300,20 @@ do_tag() {
 # checks cinderplot-examples out at its DEFAULT BRANCH, not at a matching
 # commit, so pushing this repo first runs the new binary against the old
 # suite. That is not hypothetical -- it is how the 0.22.0 push first failed.
+# The examples repo must reach its default branch BEFORE this one, or the CI
+# test job runs the new binary against the old suite. Both `push` and `release`
+# go through here; it is idempotent, so running it twice costs nothing.
+push_examples() {
+    step "push $EXAMPLES first (CI reads its default branch)"
+    if ( cd "$EXAMPLES" && git rev-parse --abbrev-ref @{u} >/dev/null 2>&1 ); then
+        ( cd "$EXAMPLES" && git diff --quiet && git diff --cached --quiet ) \
+            || fail "uncommitted changes in $EXAMPLES"
+        ( cd "$EXAMPLES" && git push origin HEAD )
+    else
+        echo "no upstream configured; skipping"
+    fi
+}
+
 do_push() {
     v=$(header_version)
     step "both trees must be committed"
@@ -308,12 +322,7 @@ do_push() {
         || fail "uncommitted changes in $EXAMPLES"
     echo ok
 
-    step "push $EXAMPLES first (CI reads its default branch)"
-    if ( cd "$EXAMPLES" && git rev-parse --abbrev-ref @{u} >/dev/null 2>&1 ); then
-        ( cd "$EXAMPLES" && git push origin HEAD )
-    else
-        echo "no upstream configured; skipping"
-    fi
+    push_examples
 
     do_check          # now that the examples repo is pushed, this can pass
 
@@ -369,6 +378,11 @@ do_watch() {
 # tail's. The verbs exit correctly; the chaining was the hazard, so make the
 # chaining a verb.
 do_release() {
+    # `check` gates on the examples repo being pushed, so the push that
+    # satisfies it has to come first -- otherwise `release` is unusable from the
+    # very state it exists for (both repos committed, neither pushed).
+    step "release: examples repo"
+    push_examples || fail "stopped at \`push_examples\` -- fix, then re-run \`release\`"
     for v in check tag push watch deploy status; do
         step "release: $v"
         "do_$v" || fail "stopped at \`$v\` -- fix, then re-run from that verb"
