@@ -24,7 +24,7 @@ static double text_w(cairo_t *cr, double size, const char *s) {
 /* colourbar breaks: the extended breaks that fall within [lo, hi]. The
  * fence is a hair wider than the range, because 3 * 0.1 is 0.30000000000000004
  * and a bar for [0, 0.3] lost its top label to that ulp. */
-int cp_legend_breaks(double lo, double hi, double *br) {
+static int cp_legend_breaks(double lo, double hi, double *br) {
     int nb = extended_breaks(lo, hi, 5, br, CP_LEG_MAXBR), nf = 0;
     double eps = 1e-9 * (hi - lo);
     for (int k = 0; k < nb; k++)

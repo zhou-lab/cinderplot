@@ -1416,7 +1416,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
      * title above a row label the way a grammar figure ranks axis title above
      * axis text; the browser's labels are all peers, so they share the single
      * axis-text size and scale together with --font-size / theme_*(base_size=).
-     * (The other three modes keep their hierarchy; only track mode flattens.) */
+     * (The other four modes keep their hierarchy; only track mode flattens.) */
     /* One flat size for every track label -- SZ_TRACK, 9pt at the default base
      * -- so a panel title does not outrank a row label. */
     double sz_title = SZ_TRACK, sz_samp = SZ_TRACK;

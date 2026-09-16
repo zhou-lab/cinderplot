@@ -130,6 +130,11 @@ and ignored (the output path is a command-line argument here).
   `geom_point(raster=TRUE)` — see trap 9 — and
   `geom_boxplot(outlier.shape=NA)` to hide the outlier marks when a jitter
   layer already draws those points.
+- **reference lines**: `geom_hline(yintercept=N)`, `geom_vline(xintercept=N)`
+  and `geom_abline(slope=M, intercept=B)`. Each takes ONE value per layer, so
+  `yintercept=c(10, 20)` is refused — repeat the layer instead
+  (`+ geom_hline(yintercept=10) + geom_hline(yintercept=20)`), which is what
+  the error tells you to do.
 - `geom_tile(colour="white"[, linewidth=])` strokes each cell's border over
   the mapped fill, as in ggplot2 — the thin white separators of a manuscript
   heatmap; linewidth defaults to 0.1. Pair with
@@ -479,7 +484,20 @@ lists the ones it does): `coverage()` adds `color= max=`, `interval()`
 `cytoband()` nothing further, `matrix()` `cluster= rownames= colnames= x= bar=
 background= rowgroup= rowmeta= rowcolour= rowbar= discrete=`, and `signal()`
 `rowgroup= rowmeta= rowcolour= rowbar= smooth= points= colour=c(...)
-ylim=c(lo, hi) linewidth= gap=`. Inputs are BED/bedGraph/BEDPE/BED12/matrix TSV, tabix
+ylim=c(lo, hi) linewidth= gap=`. Inputs are BED/bedGraph/BEDPE/BED12/matrix TSV, plain or gzipped, and
+tabix-indexed when a `.tbi` sits beside the file.
+
+`coverage()` fills a bedGraph (`chrom start end value`) as a depth profile.
+`max=N` fixes the top of the lane; left out, the top is the largest value in
+the window. Negative values are kept, and the lane then spans the data's own
+minimum to maximum with the bars hanging off a zero line — so a log-ratio file
+reads as a log-ratio instead of an empty lane. `color=` sets the fill.
+
+`arcs()` curves a link between the two ends of each BEDPE row, which needs at
+least six columns (`chrom1 start1 end1 chrom2 start2 end2`); `color=` sets the
+stroke. Neither verb clusters or labels rows, so none of `matrix()`/`signal()`'s
+row options apply to either.
+
 **`matrix(x=genomic)` puts each cell at its own coordinate** instead of in
 probe-index space. The default (`x=index`) gives every probe an equal-width
 column and draws a leader fan to its true position — right when the columns

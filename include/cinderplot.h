@@ -74,7 +74,7 @@ extern double cp_base_size;
 #define STRIP_PAD    (0.8 * HALF_LINE)
 /* The figure font. A variable, not a constant: --font FAMILY overrides it
  * (main.c), and every cairo_select_font_face() site reads it, so one flag
- * reaches all four modes. Cairo substitutes silently when the family is
+ * reaches all five modes. Cairo substitutes silently when the family is
  * missing; main.c warns for that at startup (cp_font_resolves). */
 #define FONT_FAMILY_DEFAULT "Arial"
 extern const char *cp_font_family;
@@ -296,8 +296,6 @@ void cp_set_dpi(double dpi);                        /* PNG raster resolution (de
 /* Emit the finished surface: write_to_png for image surfaces, surface_finish
  * for vector ones. Returns the resulting cairo status. */
 cairo_status_t cp_surface_emit(cairo_surface_t *surf, const char *out);
-/* one point glyph, path only -- caller fills. shape 0..5, see cp_point_path. */
-void cp_point_path(cairo_t *cr, int shape, double cx, double cy, double r);
 
 /* ---------- dsl.c: verbatim ggplot subset ---------- */
 /* col NULL = unset; levels (from factor(col, levels=c(...))) imposes the
@@ -708,7 +706,6 @@ int render_tracks(const PlotSpec *spec, const char *out,
 #define LEG_GAP  (2.0 * MM)         /* gap between keys    */
 #define CP_LEG_MAXBR 16             /* colourbar break slots */
 /* the extended breaks that fall within [lo, hi]; br holds CP_LEG_MAXBR */
-int cp_legend_breaks(double lo, double hi, double *br);
 /* extent across the reading direction (pt) of a vertical key / colourbar */
 double cp_key_across_pt(cairo_t *cr, char *const *labels, int nlev);
 double cp_colourbar_across_pt(cairo_t *cr, double lo, double hi);

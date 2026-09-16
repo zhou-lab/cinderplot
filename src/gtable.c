@@ -306,7 +306,9 @@ static void ideo_path(cairo_t *cr, double xl, double xr, double top, double bot,
 /* The discrete shape palette. Six, like ggplot2's -- past that the glyphs stop
  * being tellable apart, and ggplot2 refuses rather than inventing more. Drawn
  * to roughly equal visual area so no level looks heavier than another. */
-void cp_point_path(cairo_t *cr, int shape, double cx, double cy, double r) {
+/* one point glyph, path only -- caller fills. shape 0..5. File-local: the
+ * only caller is the gtable renderer below. */
+static void cp_point_path(cairo_t *cr, int shape, double cx, double cy, double r) {
     switch (shape % 6) {
     case 1: {                                   /* triangle up */
         double a = r * 1.30;

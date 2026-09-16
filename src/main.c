@@ -25,10 +25,10 @@
 #include <strings.h>   /* strcasecmp */
 
 /* The figure font, read by every cairo_select_font_face() site across the
- * four modes; --font FAMILY overrides it below. */
+ * five modes; --font FAMILY overrides it below. */
 const char *cp_font_family = FONT_FAMILY_DEFAULT;
 double cp_line_scale = 1.0;
-/* base font size in pt for every label, all four modes; --font-size PT sets it
+/* base font size in pt for every label, all five modes; --font-size PT sets it
  * and theme_*(base_size=) overrides that per figure. 11.0 is the ggplot2
  * theme_gray default and reproduces the former compile-time SZ_BASE exactly. */
 double cp_base_size = 11.0;
@@ -65,7 +65,7 @@ static void print_help(void) {
     printf("  %sGRAMMAR%s   %s(compose layers with %s+%s%s)%s\n", H, R, D, K, R, D, R);
     printf("    %sdata.csv%s        a CSV/TSV path — or %s-%s / %sstdin%s / omitted = pipe, %s.gz%s = gzip/bgzip\n", K, R, K, R, K, R, K, R);
     printf("    %saes%s(x, y, …)    map columns to aesthetics\n", G, R);
-    printf("    %sgeom_*%s()        point · jitter · line · smooth · col · bar · histogram · density · boxplot · tile\n", G, R);
+    printf("    %sgeom_*%s()        point · jitter · line · smooth · col · bar · histogram · density · boxplot · tile · raster\n", G, R);
     printf("                    segment · rect · errorbar · linerange · text · label · *_repel · h/v/abline\n");
     printf("    %sfacet_wrap%s(~g)  small multiples — %sfacet_grid%s(r ~ c) for a two-way grid\n", G, R, G, R);
     printf("    %sscale_*%s · %stheme_*%s · %slabs%s(title=…) · %sguides%s() · %scoord_*%s()\n", G, R, G, R, G, R, G, R, G, R);
@@ -461,7 +461,7 @@ int main(int argc, char **argv) {
         spec.no_legend = spec.no_legend_size = spec.no_legend_shape = 1;
     /* base font size: a spec-level theme_*(base_size=) beats the --font-size flag
      * (which has already set cp_base_size), exactly as base_line_size beats the
-     * env var. Set here, before any mode dispatch, so all four modes see it. */
+     * env var. Set here, before any mode dispatch, so all five modes see it. */
     if (spec.base_size > 0) cp_base_size = spec.base_size;
 
     /* 0 = auto-fit: track & heatmap modes size themselves from content;

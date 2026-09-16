@@ -1,6 +1,6 @@
 /* tree.c — Newick trees, drawn ggtree-style.
  *
- * The other three modes all build their structure from a table. A tree arrives
+ * The other four modes all build their structure from a table. A tree arrives
  * already built, in a format that carries the topology itself, so this mode
  * reads Newick rather than CSV and lays it out directly. That is the point of
  * having it: a curated ontology -- a cell-type taxonomy, a term hierarchy -- is
