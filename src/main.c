@@ -28,6 +28,10 @@
  * four modes; --font FAMILY overrides it below. */
 const char *cp_font_family = FONT_FAMILY_DEFAULT;
 double cp_line_scale = 1.0;
+/* base font size in pt for every label, all four modes; --font-size PT sets it
+ * and theme_*(base_size=) overrides that per figure. 11.0 is the ggplot2
+ * theme_gray default and reproduces the former compile-time SZ_BASE exactly. */
+double cp_base_size = 11.0;
 
 static const char *USAGE =
     "usage: cinderplot [DSL-expr | flags] [data] out.{pdf,svg,png}\n"
@@ -36,7 +40,7 @@ static const char *USAGE =
     "  DSL:   'data.csv + aes(x, y, colour=factor(g)) + geom_point() + facet_wrap(~g)'\n"
     "  flags: -x COL -y COL [-c COL] [-f COL] [-t TITLE] [-m point|line|col|histogram|boxplot|bar] [--log x|y|xy]\n"
     "         -r/--region chr:start-end (track mode) · -H/--no-header · --no-legend\n"
-    "         --size WxH (partial Wx / xH auto-fits) · --dpi N · --font FAMILY · --dump-spec · -V/--version · --help\n";
+    "         --size WxH (partial Wx / xH auto-fits) · --dpi N · --font FAMILY · --font-size PT · --dump-spec · -V/--version · --help\n";
 
 /* A modern, sectioned --help. Colour is enabled for a TTY (or CLICOLOR_FORCE)
  * and suppressed by NO_COLOR, so piped/redirected output stays plain text. */
@@ -85,6 +89,7 @@ static void print_help(void) {
     printf("    %s--size%s WxH     inches; a partial %sWx%s or %sxH%s auto-fits the other axis %s(omit = auto)%s\n", G, R, K, R, K, R, D, R);
     printf("    %s--dpi%s N        raster density for %s.png%s %s(default 96)%s\n", G, R, K, R, D, R);
     printf("    %s--font%s FAMILY  figure font, all modes %s(default Arial; warns if not found)%s\n", G, R, D, R);
+    printf("    %s--font-size%s PT  base label size in pt %s(1..100, default 11; theme_*(base_size=) overrides)%s\n", G, R, D, R);
     printf("    %s--editable-svg%s labels as %s<text>%s elements (svglite-style, retypable in Inkscape;\n", G, R, K, R);
     printf("                   %sCINDERPLOT_EDITABLE_SVG=1 makes it your default; --outline-svg overrides)%s\n", D, R);
     printf("    %s-H, --no-header%s headerless input — columns become %sV1, V2, …%s %s(R style)%s\n", G, R, K, R, D, R);
@@ -210,6 +215,7 @@ int main(int argc, char **argv) {
             if (fl < sizeof eqflag) {
                 memcpy(eqflag, a, fl); eqflag[fl] = 0;
                 if (!strcmp(eqflag, "--size") || !strcmp(eqflag, "--dpi") || !strcmp(eqflag, "--font")
+                    || !strcmp(eqflag, "--font-size")
                     || !strcmp(eqflag, "--log") || !strcmp(eqflag, "--region")) {
                     argv[i] = (char *)eq + 1; i--;      /* ++i below re-reads it as the value */
                     a = eqflag;
@@ -251,6 +257,15 @@ int main(int argc, char **argv) {
             }
         }
         else if (!strcmp(a, "--font") && i + 1 < argc) cp_font_family = argv[++i];
+        else if (!strcmp(a, "--font-size") && i + 1 < argc) {
+            const char *s = argv[++i]; char *end;
+            double v = strtod(s, &end);
+            if (*end || !isfinite(v) || v < 1 || v > 100) {
+                fprintf(stderr, "cinderplot: bad --font-size, expected a number 1..100 (pt)\n%s", USAGE);
+                return 1;
+            }
+            cp_base_size = v;
+        }
         else if (!strcmp(a, "--editable-svg")) editable_svg = 1;
         else if (!strcmp(a, "--outline-svg")) outline_svg = 1;
         else if (!strcmp(a, "--dump-spec")) dump = 1;
@@ -265,7 +280,8 @@ int main(int argc, char **argv) {
                  !strcmp(a, "-c") || !strcmp(a, "-f") || !strcmp(a, "-t") ||
                  !strcmp(a, "-m") || !strcmp(a, "--log") || !strcmp(a, "-r") ||
                  !strcmp(a, "--region") || !strcmp(a, "--size") ||
-                 !strcmp(a, "--dpi") || !strcmp(a, "--font")) {
+                 !strcmp(a, "--dpi") || !strcmp(a, "--font") ||
+                 !strcmp(a, "--font-size")) {
             fprintf(stderr, "cinderplot: missing argument for %s\n%s", a, USAGE);
             return 1;
         }
@@ -443,6 +459,10 @@ int main(int argc, char **argv) {
     }
     if (no_legend)                          /* --no-legend: every guide */
         spec.no_legend = spec.no_legend_size = spec.no_legend_shape = 1;
+    /* base font size: a spec-level theme_*(base_size=) beats the --font-size flag
+     * (which has already set cp_base_size), exactly as base_line_size beats the
+     * env var. Set here, before any mode dispatch, so all four modes see it. */
+    if (spec.base_size > 0) cp_base_size = spec.base_size;
 
     /* 0 = auto-fit: track & heatmap modes size themselves from content;
      * grammar mode keeps the classic 6x4in default. */

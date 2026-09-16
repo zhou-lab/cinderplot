@@ -55,9 +55,14 @@ static inline double lw_pt(double u) { return u * 2.845276 * 72.0 / 96.0; }
 
 #define MARGIN       5.5
 #define HALF_LINE    5.5
-#define SZ_BASE      11.0
-#define SZ_AXIS_TEXT (0.8 * SZ_BASE)
-#define SZ_TITLE     (1.2 * SZ_BASE)
+/* Base font size (PDF pt), a RUNTIME variable so --font-size / theme_*(base_size=)
+ * can scale every label together (defined in main.c, default 11.0). The three
+ * size macros derive from it, so all ~80 text sites pick up the runtime value
+ * with no edit. cp_base_size = 11 reproduces the compile-time default exactly. */
+extern double cp_base_size;
+#define SZ_BASE      cp_base_size
+#define SZ_AXIS_TEXT (0.8 * cp_base_size)
+#define SZ_TITLE     (1.2 * cp_base_size)
 #define TICK_LEN     (HALF_LINE / 2)
 #define TXT_GAP      (0.8 * HALF_LINE / 2)
 #define KEY_SIZE     17.3
@@ -476,6 +481,25 @@ typedef struct {
      * the gutter is written in its colour with a filled swatch beside it, so a
      * lineage reads at a glance; a group absent from the file stays black. */
     char *rowcolour;
+    /* matrix/signal(rowbar=on): instead of the small swatch beside each group
+     * name, draw a filled rectangle spanning that group's whole run of rows, in
+     * the group's colour, in a thin column against the left edge of the panel --
+     * the band's extent, the way heatmap mode's annotation(left_of()) reads.
+     * Needs rowcolour= (nothing to colour the band otherwise). Default off.
+     * This is the single-band back-compat form (the band follows rowgroup=). */
+    int rowbar;
+    /* matrix/signal(rowmeta="samples.tsv"): a sample metadata sheet. The first
+     * column is the sample key (matching the `sample` column of the long input);
+     * every other column is an annotation (cell_type, source, ...) that
+     * rowbar="col,col2" can draw as its own band. Mutually exclusive with
+     * rowgroup= (one describes the annotation, the other splits a name). */
+    char *rowmeta;
+    /* matrix/signal(rowbar="col,col2"): the ORDERED list of rowmeta= columns to
+     * draw as adjacent bands against the panel's left edge (leftmost = first).
+     * Each band spans the consecutive run of rows sharing that column's value;
+     * the FIRST column also drives the group label text and the run rules.
+     * Requires rowmeta=. Empty when rowbar= is the on/off back-compat form. */
+    char **rowbar_cols; int n_rowbar_cols;
     /* interval(labels=): 0 = auto -- a feature's name is drawn only where it
      * fits before the next feature in its lane, so 380 CpG ticks do not print
      * 380 names over one another; 1 = on draws every name regardless;
@@ -607,6 +631,9 @@ typedef struct {
                                      * values ARE the colours; no legend */
     double base_line_size;          /* theme_*(base_line_size=): chrome line
                                      * width, 0 = unset (env var or 0.5) */
+    double base_size;               /* theme_*(base_size=): base font size in pt,
+                                     * 0 = unset (--font-size or the 11.0 default);
+                                     * a spec value overrides the CLI flag */
     int legend_inside;              /* theme(legend.position="inside"): draw the
                                      * legend block(s) INSIDE the panel(s) at
                                      * (leg_ix, leg_iy) npc instead of reserving
