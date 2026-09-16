@@ -3839,8 +3839,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     gt_resolve(T, 0, 0, w_pt, h_pt);
     gt_render(T, cr);
 
+    cairo_status_t st = cairo_status(cr);   /* a label cairo rejected (not UTF-8) poisons cr;
+                                             * every later call was a no-op and the figure blank */
     cairo_destroy(cr);
-    cairo_status_t st = cp_surface_emit(surf, out);
+    if (st == CAIRO_STATUS_SUCCESS) st = cp_surface_emit(surf, out);
     cairo_surface_destroy(surf);
     if (st != CAIRO_STATUS_SUCCESS) {
         snprintf(err, CP_ERRLEN, "cairo: %s", cairo_status_to_string(st));

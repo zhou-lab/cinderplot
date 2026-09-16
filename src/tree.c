@@ -173,12 +173,23 @@ static TNode *nw_node(const char **s, int depth, char *err) {
     return t;
 }
 
+static int named_tips(const TNode *t) {
+    if (t->nkid == 0) return t->name && *t->name;
+    int n = 0;
+    for (int k = 0; k < t->nkid; k++) n += named_tips(t->kid[k]);
+    return n;
+}
+
 static TNode *newick_parse(const char *text, char *err) {
     const char *s = text;
     nw_skip(&s);
     if (!*s) { snprintf(err, CP_ERRLEN, "Newick input is empty"); return NULL; }
     TNode *root = nw_node(&s, 0, err);
     if (!root) return NULL;
+    if (!named_tips(root)) {                 /* `;` and `()` parse, but draw nothing */
+        snprintf(err, CP_ERRLEN, "Newick input has no named tips");
+        return NULL;
+    }
     nw_skip(&s);
     if (*s == ';') s++;
     nw_skip(&s);

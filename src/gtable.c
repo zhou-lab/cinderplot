@@ -73,6 +73,8 @@ static void svg_xml_escape(FILE *f, const char *s) {
         if (*s == '&') fputs("&amp;", f);
         else if (*s == '<') fputs("&lt;", f);
         else if (*s == '>') fputs("&gt;", f);
+        else if ((unsigned char)*s < 0x20 && *s != '\t' && *s != '\n' && *s != '\r')
+            fputs("\xEF\xBF\xBD", f);     /* a control byte is not XML; U+FFFD marks it */
         else fputc(*s, f);
 }
 
@@ -144,10 +146,31 @@ static int svg_inject_text(const char *out) {
     return 0;
 }
 
+/* SVG and PDF are rendered into memory and written by cp_surface_emit only
+ * once the whole render succeeded. Cairo's file surfaces open the target at
+ * creation, so a failure part-way (a track whose data file is missing, read
+ * after the surface was opened; a label cairo rejects) used to leave the
+ * previous output truncated to 0 bytes with the error printed beside it. */
+typedef struct { unsigned char *p; size_t n, cap; } OutBuf;
+static OutBuf g_out;
+static cairo_status_t outbuf_write(void *closure, const unsigned char *data, unsigned int len) {
+    OutBuf *b = closure;
+    if (b->n + len > b->cap) {
+        size_t nc = b->cap ? b->cap : (size_t)1 << 16;
+        while (nc < b->n + len) nc *= 2;
+        unsigned char *np = realloc(b->p, nc);
+        if (!np) return CAIRO_STATUS_NO_MEMORY;
+        b->p = np; b->cap = nc;
+    }
+    memcpy(b->p + b->n, data, len); b->n += len;
+    return CAIRO_STATUS_SUCCESS;
+}
+
 cairo_surface_t *cp_surface_create(const char *out, double w_pt, double h_pt) {
+    g_out.n = 0;                                /* one live file surface per run */
     const char *dot = strrchr(out, '.');
     if (dot && strcasecmp(dot, ".svg") == 0)
-        return cairo_svg_surface_create(out, w_pt, h_pt);
+        return cairo_svg_surface_create_for_stream(outbuf_write, &g_out, w_pt, h_pt);
     if (dot && strcasecmp(dot, ".png") == 0) {
         double sc = g_dpi / 72.0;               /* points -> pixels */
         int w = (int)(w_pt * sc + 0.5), h = (int)(h_pt * sc + 0.5);   /* round */
@@ -157,7 +180,7 @@ cairo_surface_t *cp_surface_create(const char *out, double w_pt, double h_pt) {
         cairo_set_source_rgb(bg, 1, 1, 1); cairo_paint(bg); cairo_destroy(bg);
         return s;
     }
-    return cairo_pdf_surface_create(out, w_pt, h_pt);
+    return cairo_pdf_surface_create_for_stream(outbuf_write, &g_out, w_pt, h_pt);
 }
 
 cairo_status_t cp_surface_emit(cairo_surface_t *surf, const char *out) {
@@ -167,6 +190,11 @@ cairo_status_t cp_surface_emit(cairo_surface_t *surf, const char *out) {
     }
     cairo_surface_finish(surf);
     cairo_status_t st = cairo_surface_status(surf);
+    if (st == CAIRO_STATUS_SUCCESS) {              /* the render is good: now touch the file */
+        FILE *f = fopen(out, "wb");
+        if (!f || (g_out.n && fwrite(g_out.p, 1, g_out.n, f) != g_out.n) || fclose(f) != 0)
+            return CAIRO_STATUS_WRITE_ERROR;
+    }
     if (st == CAIRO_STATUS_SUCCESS && nsvg_imgs
         && cairo_surface_get_type(surf) == CAIRO_SURFACE_TYPE_SVG
         && svg_stamp_images(out))
@@ -638,7 +666,10 @@ void gt_render(GTable *t, cairo_t *cr) {
              * reusable both for the bottom axis row and for staircase
              * axes drawn into an absent panel's cell */
             cairo_font_extents_t fe;
-            cairo_set_font_size(cr, SZ_AXIS_TEXT);
+            /* an axis carries its own size when the mode wants one (track
+             * mode's flat SZ_TRACK); otherwise the grammar's axis text size */
+            double asz = g->size > 0 ? g->size : SZ_AXIS_TEXT;
+            cairo_set_font_size(cr, asz);
             cairo_font_extents(cr, &fe);
             if (!g->hide_ticks) {
                 set_col(cr, g->axis_styled ? g->tick_col : C_TICK);
@@ -656,7 +687,7 @@ void gt_render(GTable *t, cairo_t *cr) {
             if (!g->hide_text) {
                 set_col(cr, g->axis_styled ? g->text_col : C_AXTXT);
                 for (int i = 0; i < g->n; i++) {
-                    double w = cp_label_w(cr, SZ_AXIS_TEXT, g->labels[i]);
+                    double w = cp_label_w(cr, asz, g->labels[i]);
                     double pos = g->label_pos ? g->label_pos[i] : g->px[i];
                     if (g->label_angle != 0) {
                         /* Rotated labels end AT their tick and run up to the
@@ -666,11 +697,11 @@ void gt_render(GTable *t, cairo_t *cr) {
                         cairo_save(cr);
                         cairo_translate(cr, DX(pos), ry + TICK_LEN + TXT_GAP);
                         cairo_rotate(cr, -g->label_angle * M_PI / 180.0);
-                        draw_label(cr, -w, fe.ascent * 0.36, SZ_AXIS_TEXT, g->labels[i]);
+                        draw_label(cr, -w, fe.ascent * 0.36, asz, g->labels[i]);
                         cairo_restore(cr);
                     } else {
                         draw_label(cr, DX(pos) - w / 2,
-                                   ry + TICK_LEN + TXT_GAP + fe.ascent, SZ_AXIS_TEXT, g->labels[i]);
+                                   ry + TICK_LEN + TXT_GAP + fe.ascent, asz, g->labels[i]);
                     }
                 }
             }

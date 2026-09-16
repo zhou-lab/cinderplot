@@ -388,13 +388,17 @@ def render(only=None, force=False):
         png = FIGS / f"{slug}-cp.png"
         probe = tmp / f"{slug}-cp.svg"
         _emit(probe)
-        if probe.stat().st_size > SVG_MAX_BYTES:
+        heavy = probe.stat().st_size > SVG_MAX_BYTES
+        # clear BOTH targets before writing the winner, so an interrupt between
+        # the two steps can never leave a fresh svg beside a stale png (cp_ext
+        # would then report the png and _up_to_date would never retry)
+        svg.unlink(missing_ok=True)
+        png.unlink(missing_ok=True)
+        if heavy:
             _emit(png, dpi=200)
-            svg.unlink(missing_ok=True)
             probe.unlink(missing_ok=True)
         else:
             probe.replace(svg)
-            png.unlink(missing_ok=True)
 
 def esc(s):
     return html.escape(s)
@@ -413,12 +417,16 @@ def card_html(i, slug, title, cp, rc, src):
     shown = cp.replace(GENOMES, "hg38")
     cp_cmd = "cinderplot '" + shown.replace(" + ", "\n  + ") + "' \\\n" + out_line
     cls = "cell wide" if slug in WIDE else "cell"
+    # cards with no R equivalent (chord, radar, the track/theme/palette
+    # showcases) get no empty R box
+    r_snip = (f'            <div class="snip"><span class="k">R</span><pre>{esc(rc)}</pre></div>'
+              if rc.strip() else "")
     return f'''        <figure class="{cls}" tabindex="0" role="button" aria-label="Figure {i}: {esc(title)} — show code" data-title="{i} · {esc(title)}">
           <div class="thumb"><button class="zoom" data-i="{i-1}" aria-label="Maximize figure {i}">{ZOOM_SVG}</button><img src="{src(slug, 'cp.' + cp_ext(slug))}" alt="{esc(title)} — cinderplot"></div>
           <figcaption><span class="num">{i}</span>{esc(title)}</figcaption>
           <template class="code">
             <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>{esc(cp_cmd)}</pre></div>
-            <div class="snip"><span class="k">R</span><pre>{esc(rc)}</pre></div>
+{r_snip}
           </template>
         </figure>'''
 
@@ -1113,7 +1121,24 @@ def build_llms_txt():
         "# Human docs: https://zhou-lab.github.io/cinderplot/\n\n" + body)
 
 
+def check_figs():
+    """Refuse to write HTML against a figure set that would publish broken
+    cards: a slug with no figure, or with both an svg and a png (cp_ext would
+    pick one blindly). Runs before anything is written."""
+    if not FIGS.is_dir():
+        raise SystemExit(f"figure directory not found: {FIGS} (set CINDERPLOT_FIGS, or render first)")
+    missing, both = [], []
+    for slug, *_ in VARIANTS:
+        has = [e for e in ("svg", "png") if (FIGS / f"{slug}-cp.{e}").exists()]
+        if not has: missing.append(slug)
+        if len(has) == 2: both.append(slug)
+    if missing or both:
+        raise SystemExit("figure set is inconsistent -- nothing written:"
+                         + (f"\n  no figure for: {', '.join(missing)}" if missing else "")
+                         + (f"\n  both svg and png for: {', '.join(both)} (re-render them)" if both else ""))
+
 def build_html():
+    check_figs()
     build_llms_txt()
     gbody = GALLERY_BODY.replace("__ZOOMICON__", ZOOM_SVG)
     # landing page (its own lab-style layout); gallery uses STYLE/header()

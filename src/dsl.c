@@ -357,7 +357,11 @@ static int parse_place(P *p, const char *kind, HPlace *pl) {
         if (key && *p->s == '=') {
             p->s++;
             skip_ws(p);
+            const char *nsave = p->s;
             double v = strtod(p->s, (char **)&p->s);
+            if (p->s == nsave || !isfinite(v) || v < 0 || (strcmp(key, "pad") && v <= 0))
+                return fail(p, strcmp(key, "pad") ? "placement option `%s` must be a positive number"
+                                                  : "placement option `%s` must be a non-negative number", key);
             if (!strcmp(key, "pad")) pl->pad = v;
             else if (!strcmp(key, "width")) pl->width = v;
             else if (!strcmp(key, "height")) pl->height = v;
@@ -459,9 +463,13 @@ static int parse_trk_args(P *p, TrackObj *o) {
                 o->name = string_lit(p);
                 if (!o->name) return fail(p, "name= expects a quoted string", "");
             } else if (!strcmp(key, "height")) {
-                skip_ws(p); o->height = strtod(p->s, (char **)&p->s);
+                skip_ws(p); { const char *sv = p->s; o->height = strtod(p->s, (char **)&p->s);
+                if (p->s == sv || !isfinite(o->height) || o->height <= 0)
+                    return fail(p, "height= must be a positive number (inches)", ""); }
             } else if (!strcmp(key, "max")) {
-                skip_ws(p); o->max_value = strtod(p->s, (char **)&p->s);
+                skip_ws(p); { const char *sv = p->s; o->max_value = strtod(p->s, (char **)&p->s);
+                if (p->s == sv || !isfinite(o->max_value) || o->max_value <= 0)
+                    return fail(p, "max= must be a positive number", ""); }
             } else if (!strcmp(key, "color") || !strcmp(key, "colour")) {
                 skip_ws(p);
                 if (o->type == TRK_SIGNAL && p->s[0] == 'c' && p->s[1] == '(') {
@@ -490,7 +498,7 @@ static int parse_trk_args(P *p, TrackObj *o) {
                 skip_ws(p);
                 const char *save = p->s;
                 double gp = strtod(p->s, (char **)&p->s);
-                if (p->s == save || gp < 0)
+                if (p->s == save || !(gp >= 0) || !isfinite(gp))
                     return fail(p, "gap= expects the blank space between strips in "
                                 "points, >= 0 (default 2)", "");
                 o->gap_pt = gp;
@@ -500,7 +508,7 @@ static int parse_trk_args(P *p, TrackObj *o) {
                 skip_ws(p);
                 const char *save = p->s;
                 double v = strtod(p->s, (char **)&p->s);
-                if (p->s == save || v < 0 || v > 1)
+                if (p->s == save || !(v >= 0 && v <= 1))
                     return fail(p, "smooth= expects a loess span in (0, 1], or 0 for the "
                                 "raw line through the points", "");
                 o->smooth = v;
@@ -521,7 +529,7 @@ static int parse_trk_args(P *p, TrackObj *o) {
                 skip_ws(p);
                 const char *save = p->s;
                 double v = strtod(p->s, (char **)&p->s);
-                if (p->s == save || !(v > 0))
+                if (p->s == save || !(v > 0) || !isfinite(v))
                     return fail(p, "%s= expects a number > 0, in ggplot linewidth units "
                                 "(0.5 = geom_line's default)", key);
                 o->line_lw = v;
@@ -573,7 +581,7 @@ static int parse_trk_args(P *p, TrackObj *o) {
                 skip_ws(p);
                 const char *save = p->s;
                 double w = strtod(p->s, (char **)&p->s);
-                if (p->s == save || !(w > 0))
+                if (p->s == save || !(w > 0) || !isfinite(w))
                     return fail(p, "bar= expects a width in bp > 0", "");
                 o->bar_bp = w;
             } else if (!strcmp(key, "rowgroup")) {
@@ -627,7 +635,7 @@ static int parse_trk_args(P *p, TrackObj *o) {
                         memcpy(col, start, (size_t)(endp - start));
                         col[endp - start] = 0;
                         o->rowbar_cols[o->n_rowbar_cols++] = col;
-                        if (*s == ',') s++;
+                        if (*s == ',') { s++; if (!*s) return fail(p, "rowbar=\"...\" ends with a comma", ""); }
                     }
                     if (o->n_rowbar_cols == 0)
                         return fail(p, "rowbar=\"...\" listed no columns", "");
@@ -1012,6 +1020,7 @@ static int parse_grad_scale(P *p, FillScale *fs, const char *k, const char *fn) 
             char *end;
             fs->midpoint = strtod(p->s, &end);
             if (end == p->s) return fail(p, "midpoint= expects a number", "");
+            if (!isfinite(fs->midpoint)) return fail(p, "midpoint= must be finite", "");
             p->s = end;
         } else if (!strcmp(key, "limits")) {         /* c(lo, hi) — domain + squish */
             if (parse_lim_pair(p, "limits=", &fs->lim_lo, &fs->lim_hi)) return -1;
@@ -1068,6 +1077,7 @@ static int parse_distiller(P *p, FillScale *fs) {
             fs->lim_lo = strtod(p->s, (char **)&p->s);
             skip_ws(p); if (*p->s == ',') p->s++;
             fs->lim_hi = strtod(p->s, (char **)&p->s);
+            if (!isfinite(fs->lim_lo) || !isfinite(fs->lim_hi)) return fail(p, "limits= must be finite numbers", "");
             skip_ws(p); if (*p->s == ')') p->s++;
             if (!(fs->lim_lo < fs->lim_hi))
                 return fail(p, "limits= expects lo < hi", "");
@@ -1441,10 +1451,10 @@ static int parse_term(P *p, PlotSpec *spec) {
                     l->se_given = 1;
                 } else if (gt == GEOM_DENSITY && !strcmp(key, "bw")) {
                     l->bw = strtod(p->s, (char **)&p->s);
-                    if (l->bw <= 0) return fail(p, "geom_density(bw=...) must be > 0", "");
+                    if (!(l->bw > 0) || !isfinite(l->bw)) return fail(p, "geom_density(bw=...) must be > 0", "");
                 } else if (gt == GEOM_DENSITY && !strcmp(key, "adjust")) {
                     l->adjust = strtod(p->s, (char **)&p->s);
-                    if (l->adjust <= 0) return fail(p, "geom_density(adjust=...) must be > 0", "");
+                    if (!(l->adjust > 0) || !isfinite(l->adjust)) return fail(p, "geom_density(adjust=...) must be > 0", "");
                 } else if ((gt == GEOM_HLINE && !strcmp(key, "yintercept"))
                            || (gt == GEOM_VLINE && !strcmp(key, "xintercept"))) {
                     /* an empty value read as 0 and a c(...) as its first
@@ -1459,11 +1469,13 @@ static int parse_term(P *p, PlotSpec *spec) {
                     l->intercept = v; l->has_intercept = 1;
                 } else if (gt == GEOM_ABLINE && !strcmp(key, "slope")) {
                     l->slope = strtod(p->s, (char **)&p->s); l->has_slope = 1;
+                    if (!isfinite(l->slope)) return fail(p, "slope= must be finite", "");
                 } else if (gt == GEOM_ABLINE && !strcmp(key, "intercept")) {
                     l->intercept = strtod(p->s, (char **)&p->s); l->has_intercept = 1;
+                    if (!isfinite(l->intercept)) return fail(p, "intercept= must be finite", "");
                 } else if ((gt == GEOM_TEXT || gt == GEOM_LABEL) && !strcmp(key, "size")) {
                     l->txt_size = strtod(p->s, (char **)&p->s);
-                    if (l->txt_size <= 0) return fail(p, "geom_text(size=...) must be > 0", "");
+                    if (!(l->txt_size > 0) || !isfinite(l->txt_size)) return fail(p, "geom_text(size=...) must be > 0", "");
                 } else if (gt == GEOM_BOXPLOT
                            && (!strcmp(key, "outlier.shape")
                                || !strcmp(key, "outliers"))) {
@@ -1501,7 +1513,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                 } else if ((gt == GEOM_POINT || gt == GEOM_JITTER)
                            && !strcmp(key, "size")) {
                     l->point_size = strtod(p->s, (char **)&p->s);
-                    if (l->point_size <= 0) return fail(p, "geom_point(size=...) must be > 0", "");
+                    if (!(l->point_size > 0) || !isfinite(l->point_size)) return fail(p, "geom_point(size=...) must be > 0", "");
                 } else if ((gt == GEOM_POINT || gt == GEOM_JITTER)
                            && (!strcmp(key, "raster")
                                              || !strcmp(key, "rasterise")
@@ -1546,8 +1558,10 @@ static int parse_term(P *p, PlotSpec *spec) {
                     l->txt_hjust = v; l->has_txt_hjust = 1;
                 } else if ((gt == GEOM_TEXT || gt == GEOM_LABEL) && !strcmp(key, "nudge_x")) {
                     l->nudge_x = strtod(p->s, (char **)&p->s);
+                    if (!isfinite(l->nudge_x)) return fail(p, "nudge_x= must be finite", "");
                 } else if ((gt == GEOM_TEXT || gt == GEOM_LABEL) && !strcmp(key, "nudge_y")) {
                     l->nudge_y = strtod(p->s, (char **)&p->s);
+                    if (!isfinite(l->nudge_y)) return fail(p, "nudge_y= must be finite", "");
                 } else if (!strcmp(key, "alpha")) {
                     /* ggplot2's alpha: the first thing anyone reaches for on a
                      * large scatter, where an opaque overplot hides where the
@@ -1680,6 +1694,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                 double m2 = strtod(p->s, (char **)&p->s);
                 skip_ws(p); if (*p->s == ',') p->s++;
                 double a2 = strtod(p->s, (char **)&p->s);
+                if (!isfinite(m2) || !isfinite(a2)) return fail(p, "expand= must be finite numbers", "");
                 skip_ws(p); if (*p->s == ')') p->s++;
                 if (m2 < 0 || a2 < 0)
                     return fail(p, "expand= values must be >= 0", "");
@@ -2144,6 +2159,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                 double m2 = strtod(p->s, (char **)&p->s);
                 skip_ws(p); if (*p->s == ',') p->s++;
                 double a2 = strtod(p->s, (char **)&p->s);
+                if (!isfinite(m2) || !isfinite(a2)) return fail(p, "expand= must be finite numbers", "");
                 skip_ws(p); if (*p->s == ')') p->s++;
                 if (m2 < 0 || a2 < 0)
                     return fail(p, "expand= values must be >= 0", "");
@@ -2153,7 +2169,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                 free(key);
                 skip_ws(p);
                 double v = strtod(p->s, (char **)&p->s);
-                if (v < 0 || v > 90)
+                if (!(v >= 0 && v <= 90))
                     return fail(p, "angle= must be between 0 and 90", "");
                 if (isx) spec->x_angle = v; else spec->y_angle = v;
             } else
@@ -2351,6 +2367,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                 double x2 = strtod(p->s, (char **)&p->s);
                 skip_ws(p); if (*p->s == ',') p->s++;
                 double y2 = strtod(p->s, (char **)&p->s);
+                if (!isfinite(x2) || !isfinite(y2)) return fail(p, "legend.position.inside= must be finite", "");
                 skip_ws(p); if (*p->s == ')') p->s++;
                 if (x2 < 0 || x2 > 1 || y2 < 0 || y2 > 1)
                     return fail(p, "legend.position.inside= wants npc "
@@ -2396,7 +2413,7 @@ static int parse_term(P *p, PlotSpec *spec) {
             skip_ws(p);
             char *end;
             double v = strtod(p->s, &end);
-            if (end == p->s || !(v > 0))
+            if (end == p->s || !(v > 0) || !isfinite(v))
                 return fail(p, is_bs
                             ? "base_size= expects a number > 0 (font size in pt; 11 = the ggplot2 default)"
                             : "base_line_size= expects a number > 0 (0.5 = the ggplot2 default)", "");
@@ -2580,6 +2597,8 @@ static int parse_term(P *p, PlotSpec *spec) {
 }
 
 int dsl_parse(const char *src, PlotSpec *spec, char *err) {
+    { int bad = cp_utf8_bad_byte(src);
+      if (bad >= 0) { snprintf(err, CP_ERRLEN, "the spec is not valid UTF-8 (byte 0x%02X)", bad); return -1; } }
     P p = {src, err};
     memset(spec, 0, sizeof *spec);
     /* <0 means "decide from the measured labels"; 0 is a caller asking for

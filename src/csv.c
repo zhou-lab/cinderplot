@@ -117,6 +117,22 @@ void cp_set_needed_cols(char *const *names, int n) {
     g_nneeded = n;
 }
 
+/* -1 when s is UTF-8 cairo will draw, else the first offending byte. Cairo
+ * silently stops drawing after one invalid string, so a Latin-1 file has to be
+ * refused up front with the cell named, not rendered blank. */
+int cp_utf8_bad_byte(const char *s) {
+    const unsigned char *p = (const unsigned char *)s;
+    if (!p) return -1;
+    while (*p) {
+        int n = *p < 0x80 ? 1 : (*p & 0xE0) == 0xC0 ? 2 : (*p & 0xF0) == 0xE0 ? 3
+              : (*p & 0xF8) == 0xF0 ? 4 : 0;
+        if (!n) return *p;
+        for (int i = 1; i < n; i++) if ((p[i] & 0xC0) != 0x80) return p[i] ? p[i] : *p;
+        p += n;
+    }
+    return -1;
+}
+
 DataFrame *df_read_csv(const char *path, char *err) {
     if (!strcmp(path, "stdin")) path = "-";          /* alias for stdin */
     if (!strcmp(path, "-") && isatty(fileno(stdin))) {
@@ -269,11 +285,28 @@ DataFrame *df_read_csv(const char *path, char *err) {
                 fprintf(stderr, "cinderplot: warning: column `%s` is treated as text "
                         "because row %d is \"%s\"\n", col->name, bad_r + rowbase,
                         cells[c].v[bad_r]);
+            for (int q = 0; q < nrow; q++) {
+                int bad = cp_utf8_bad_byte(cells[c].v[q]);
+                if (bad >= 0) {
+                    snprintf(err, CP_ERRLEN, "%s: row %d column `%s` is not valid UTF-8 "
+                             "(byte 0x%02X) -- re-encode the file, e.g. iconv -f latin1 -t utf-8",
+                             path, q + rowbase, col->name, bad);
+                    return NULL;
+                }
+            }
             free(col->num);
             col->num = NULL;
             col->type = COL_STR;
             col->str = cells[c].v;      /* slices into the image; see backing */
             any_str = 1;
+        }
+    }
+    for (int j = 0; j < df->ncol; j++) {           /* column names are drawn too */
+        int bad = cp_utf8_bad_byte(df->cols[j].name);
+        if (bad >= 0) {
+            snprintf(err, CP_ERRLEN, "%s: column name `%s` is not valid UTF-8 (byte 0x%02X)",
+                     path, df->cols[j].name, bad);
+            return NULL;
         }
     }
     free(cells);        /* per-column .v arrays are transferred to df or freed above */

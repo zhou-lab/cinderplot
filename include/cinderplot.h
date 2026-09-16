@@ -200,7 +200,8 @@ typedef struct {
  * String cells are borrowed slices of it, never individually allocated. */
 typedef struct { int nrow, ncol; Column *cols; char *backing; } DataFrame;
 
-DataFrame *df_read_csv(const char *path, char *err);   /* "-" = stdin */
+DataFrame *df_read_csv(const char *path, char *err);
+int cp_utf8_bad_byte(const char *s);   /* -1 = valid UTF-8, else the bad byte */   /* "-" = stdin */
 void cp_set_no_header(int on);   /* headerless input: name columns V1, V2, ... (R style) */
 /* One-shot: restrict the *next* df_read_csv() to these column names. Cleared
  * by that call, so whole-matrix readers are unaffected. NULL/0 = keep all. */

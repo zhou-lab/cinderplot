@@ -573,8 +573,10 @@ static int trk_boxes_load(const PlotSpec *spec, TBox **out, int *n_out, char *er
  *     the gutter is drawn in it with a swatch beside it. `column` stays NULL.
  *   - `column value colour` (with rowmeta=): a colour per (annotation column,
  *     value), so a cell_type band and a source band draw from one table.
- * A (column,value) or group the file does not name gets the hue palette; a
- * colour that does not parse is an error, naming the row. ---- */
+ * A (column,value) the sheet form does not name gets the hue palette. A group
+ * the 2-column form does not name is left black -- and with rowbar=on gets no
+ * band, so the strip shows a gap there. A colour that does not parse is an
+ * error, naming the row. ---- */
 typedef struct { const char *column; const char *value; Col col; } RowCol;
 
 /* swatch beside a coloured group name: a square about the x-height of the
@@ -685,13 +687,18 @@ static double fit_width(cairo_t *cr, double size, const char *s, double avail_pt
     return text_w(cr, LABEL_MIN_PT, s) <= avail_pt ? LABEL_MIN_PT : 0;
 }
 
-/* leaf/row labels shrink to their row's height but are never dropped */
+/* leaf/row labels shrink to their row's height but are never dropped. The
+ * floor never exceeds the requested size: at --font-size 5 the track size is
+ * 4.1pt, and "shrinking" a cramped label up to the 5.5pt floor would make it
+ * larger than asked and overlap its neighbours -- the one thing this exists
+ * to prevent. */
 static double fit_height(cairo_t *cr, double size, double avail_pt) {
     if (avail_pt <= 0) return size;
     double h = font_h(cr, size);
     if (h <= avail_pt) return size;
     double shrunk = size * avail_pt / h;
-    return shrunk < LABEL_MIN_PT ? LABEL_MIN_PT : shrunk;
+    double floor_pt = size < LABEL_MIN_PT ? size : LABEL_MIN_PT;
+    return shrunk < floor_pt ? floor_pt : shrunk;
 }
 
 static RowAnno *trk_rowmeta_load(const TrackObj *t, char **names, const int *ord,
@@ -843,7 +850,7 @@ static void draw_row_gutter(GTable *T, cairo_t *cr, int R, int CC, const TrackOb
                             const RowCol *rc, int nrc, const RowAnno *ann,
                             char **names, const int *ord,
                             int n, double top, double hh, double labw, double cell_pt,
-                            double sz, int write_labels) {
+                            double sz, int write_labels, int first_win) {
     Grob *g;
     if (n < 1) return;
     double strip = rowbar_strip_pt(t, ann);          /* band column(s) against the panel */
@@ -873,7 +880,11 @@ static void draw_row_gutter(GTable *T, cairo_t *cr, int R, int CC, const TrackOb
 
     /* ---- metadata bands (rowmeta=, rowbar="col,col2") ---- */
     if (ann && ann->nband > 0) {
-        if (labw > 0)
+        /* the bands live in the shared gutter column, so one window stamps
+         * them (regions() would otherwise draw N identical copies); they are
+         * drawn whether or not row names are, since measure_gutter reserves
+         * the strip either way */
+        if (labw > 0 && first_win)
             for (int b = 0; b < ann->nband; b++) {
                 /* band 0 (leftmost of the strip) furthest from the panel; the
                  * last band butts the panel edge */
@@ -926,31 +937,33 @@ static void draw_row_gutter(GTable *T, cairo_t *cr, int R, int CC, const TrackOb
             if (gl2 != gl || (gl && strncmp(nm, nm2, gl))) break;
             re++;
         }
+        const Col *gc = gl ? rowcolour_of(rc, nrc, nm, gl) : NULL;
+        /* the band is gutter, not label: measure_gutter reserves its strip
+         * whether or not row names are shown, so it is drawn on rownames=off
+         * too, once, from the left-most window. The name and swatch are labels. */
+        if (gl && bar && gc && labw > 0 && cell_pt > 0 && first_win) {
+            g = gt_add(T, G_RECT, R, 1, R, 1);
+            g->col = *gc; g->sub = 1;
+            g->x1 = 1; g->x0 = 1 - ROWBAR_PT / labw;
+            g->y0 = top - (double)(re + 1) / n * hh;
+            g->y1 = top - (double)rs / n * hh;
+        }
         if (gl && write_labels) {
             char *gname = cp_xmalloc(gl + 1);
             memcpy(gname, nm, gl); gname[gl] = 0;
-            const Col *gc = rowcolour_of(rc, nrc, nm, gl);
             double gy = top - (rs + re + 1) / 2.0 / n * hh;
             g = gt_add(T, G_TEXT, R, 1, R, 1);
             g->str = gname; g->size = sz; g->col = gc ? *gc : C_BLACK;
             g->tx = gx; g->ty = gy;
             g->hj = 1; g->va = V_INKCENTER;
-            if (gc && labw > 0 && cell_pt > 0) {
-                if (bar) {                         /* band spanning the run, at the panel edge */
-                    g = gt_add(T, G_RECT, R, 1, R, 1);
-                    g->col = *gc; g->sub = 1;
-                    g->x1 = 1; g->x0 = 1 - ROWBAR_PT / labw;
-                    g->y0 = top - (double)(re + 1) / n * hh;
-                    g->y1 = top - (double)rs / n * hh;
-                } else {                           /* swatch beside the group name */
-                    double gw = text_w(cr, sz, gname);
-                    g = gt_add(T, G_RECT, R, 1, R, 1);
-                    g->col = *gc; g->sub = 1;
-                    g->x1 = gx - (gw + TXT_GAP) / labw;
-                    g->x0 = g->x1 - SWATCH_PT / labw;
-                    g->y0 = gy - SWATCH_PT / 2 / cell_pt;
-                    g->y1 = gy + SWATCH_PT / 2 / cell_pt;
-                }
+            if (!bar && gc && labw > 0 && cell_pt > 0) { /* swatch beside the group name */
+                double gw = text_w(cr, sz, gname);
+                g = gt_add(T, G_RECT, R, 1, R, 1);
+                g->col = *gc; g->sub = 1;
+                g->x1 = gx - (gw + TXT_GAP) / labw;
+                g->x0 = g->x1 - SWATCH_PT / labw;
+                g->y0 = gy - SWATCH_PT / 2 / cell_pt;
+                g->y1 = gy + SWATCH_PT / 2 / cell_pt;
             }
         }
         if (re + 1 < n) {            /* rule below this run */
@@ -2159,7 +2172,7 @@ gx_no_fan:
              * gutter shared with signal(); the left-most window writes it */
             draw_row_gutter(T, cr, R, CC, t, rcs[i], nrcs[i], ann[i], m->rowname, m->roword, nr,
                             hmtop, hmtop - lblband, labw, cell_pt, sz_samp,
-                            !t->hide_rownames && wi == 0);
+                            !t->hide_rownames && wi == 0, wi == 0);
         } else if (t->type == TRK_SIGNAL) {
             /* Strips stacked like matrix() rows, one per sample, top to
              * bottom in file order; inside a strip one line per series at
@@ -2272,7 +2285,7 @@ gx_no_fan:
               g->col = bbh; g->sub = 1; g->stroke = 1; g->lw = lw_pt(0.5) * cp_line_scale; g->clip = 1;
               g->x0 = 0; g->x1 = 1; g->y0 = 0; g->y1 = 1; }
             draw_row_gutter(T, cr, R, CC, t, rcs[i], nrcs[i], ann[i], d->stripname, ident, ns,
-                            1.0, 1.0, labw, cell_pt, sz_samp, wi == 0);
+                            1.0, 1.0, labw, cell_pt, sz_samp, wi == 0, wi == 0);
         }
     }
       if (!has_matrix) {
@@ -2286,6 +2299,7 @@ gx_no_fan:
           memcpy(axis_txt, xtxt, nx * sizeof(double));
           memcpy(axis_lab, xlab, nx * sizeof(char *));
           g = gt_add(T, G_AXIS_X, axisrow, CC, axisrow, CC);
+          g->size = SZ_TRACK;            /* one flat size, the axis numbers included */
           g->n = nx; g->px = axis_pos; g->label_pos = axis_txt;
           g->labels = axis_lab;
       }

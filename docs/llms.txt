@@ -573,7 +573,9 @@ without either there is nothing to colour.
 (`matrix()` and `signal()`). Its first column is the sample key (matching the
 `sample` column of the long input); every other column is an annotation
 (`cell_type`, `source`, …). Every sample the track draws must be in the sheet,
-or it errors naming the first missing one. `rowmeta=` and `rowgroup=` are
+or it errors naming the first missing one. The sheet is drawn only through
+`rowbar="col,…"` — `rowmeta=` on its own, or with the bare `rowbar=on`, is
+refused and says so. `rowmeta=` and `rowgroup=` are
 mutually exclusive — one splits an annotation out of the name, the other reads a
 sheet.
 
@@ -610,16 +612,18 @@ cinderplot 'region("chr1:202004435-202019137")
 
 **Track mode renders every label at one size** — row/strip labels, the track
 `name=`, the `regions()` panel titles, the kb-axis numbers and the legend title
-all share the axis-text size (0.8 × the base), and `--font-size` /
-`theme_*(base_size=)` scale that one size. A locus figure does not rank a panel
+all share one size, 9/11 of the base (9 pt at the default 11), and
+`--font-size` / `theme_*(base_size=)` scale that one size. A locus figure does not rank a panel
 title above a row label the way a grammar figure ranks its axis title above axis
 text; the browser's labels are peers. (Grammar, heatmap and tree modes keep
 their hierarchy.) The one exception is **shrink-to-fit**: a feature label that
 would not fit at the flat size — a `genes()` or `interval()` name that would run
 past its lane or the panel edge, a `matrix()`/`signal()` row label taller than
-its row — is shrunk toward a ~5.5pt floor until it fits, and only dropped if it
-will not fit even at the floor. Lane packing reserves the full-size width, so a
-shrunk name leaves a gap rather than overlapping its neighbour.
+its row — is shrunk toward a ~5.5pt floor until it fits. A feature name is
+dropped if it will not fit even at the floor; a row label is never dropped, it
+stops at the floor (never above the size asked for). Lane packing reserves the
+full-size width, so a shrunk name leaves a gap rather than overlapping its
+neighbour. A `signal()` panel is framed like a `matrix()` one.
 
 **`interval()` names each feature from its 4th BED column**, to the right of
 the box — but only where the name fits before the next feature in its lane.
