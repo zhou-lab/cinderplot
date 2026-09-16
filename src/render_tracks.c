@@ -1417,11 +1417,9 @@ int render_tracks(const PlotSpec *spec, const char *out,
      * axis text; the browser's labels are all peers, so they share the single
      * axis-text size and scale together with --font-size / theme_*(base_size=).
      * (The other three modes keep their hierarchy; only track mode flattens.) */
-    /* One flat size for every track label (the user's house style: a panel
-     * title does not outrank a row label by default). 9pt at the default base
-     * of 11, and --font-size / base_size scale it. */
-    double sz_flat = SZ_BASE * (9.0 / 11.0);
-    double sz_title = sz_flat, sz_samp = sz_flat;
+    /* One flat size for every track label -- SZ_TRACK, 9pt at the default base
+     * -- so a panel title does not outrank a row label. */
+    double sz_title = SZ_TRACK, sz_samp = SZ_TRACK;
 
     /* widest gene label -> reserved right margin, so transcript names always fit
      * to the right of their model (no left-flip collisions at narrow widths) */
@@ -1432,7 +1430,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
                                                spec->tobjs[i].all_transcripts, &ng, err);
             if (gm) for (int k = 0; k < ng; k++)
                 if (gm[k].name) {
-                    double w = text_w(cr, SZ_AXIS_TEXT, gm[k].name);
+                    double w = text_w(cr, SZ_TRACK, gm[k].name);
                     if (w > gene_labw) gene_labw = w;
                 }
         }
@@ -1445,7 +1443,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
      * tracks, centred on the matrix band, below. ---- */
     /* the legend title shares the single track label size, not the grammar
      * SZ_BASE — track mode renders every label at one size (see sz_samp above) */
-    double leg_across = 0, leg_h = 0, baseH = font_h(cr, SZ_AXIS_TEXT);
+    double leg_across = 0, leg_h = 0, baseH = font_h(cr, SZ_TRACK);
     const char *leg_title = NULL;
     char **klab = NULL; Col *kpal = NULL; int nk = 0, leg_disc = 0;
     if (lg) {
@@ -1474,7 +1472,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
             leg_h = LEG_LEN;
         }
         if (leg_title) {
-            leg_across = fmax(leg_across, text_w(cr, SZ_AXIS_TEXT, leg_title));
+            leg_across = fmax(leg_across, text_w(cr, SZ_TRACK, leg_title));
             leg_h += baseH + TXT_GAP;
         }
         rmargin = fmax(rmargin, HALF_LINE + leg_across + MARGIN);
@@ -1485,7 +1483,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
     for (int i = 0; i < ntr; i++) {
         const TrackObj *t = &spec->tobjs[i];
         if (t->name && t->type != TRK_MATRIX && t->type != TRK_SIGNAL) {
-            double w = text_w(cr, SZ_AXIS_TEXT, t->name);
+            double w = text_w(cr, SZ_TRACK, t->name);
             if (w > labw) labw = w;
         }
         if (md[i]) {
@@ -1498,13 +1496,13 @@ int render_tracks(const PlotSpec *spec, const char *out,
              * gutter's left edge, since the strips own the horizontal space */
             double w = measure_gutter(cr, sz_samp, t, ann[i], sd[i]->stripname,
                                       sd[i]->nstrip, 1);
-            if (t->name) w += font_h(cr, SZ_AXIS_TEXT) + TXT_GAP;
+            if (t->name) w += font_h(cr, SZ_TRACK) + TXT_GAP;
             if (w > labw) labw = w;
         }
     }
     const char *title = spec->lab_title ? spec->lab_title : (spec->region ? spec->region : rgn_disp);
     double titleh = title ? font_h(cr, sz_title) : 0;
-    double axh = font_h(cr, SZ_AXIS_TEXT);
+    double axh = font_h(cr, SZ_TRACK);
     double lab_pad = HALF_LINE * 0.5;      /* row & column label -> heatmap gap (fixed pt) */
 
     /* ---- auto-fit: fill any auto (0) size axis from the measured content.
@@ -1521,7 +1519,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
                 double wgt = spec->tobjs[i].height > 0 ? spec->tobjs[i].height : 1, lbl_pt = 0;
                 for (int c = 0; c < md[i]->nc; c++)
                     if (md[i]->colid[c]) { double w = text_w(cr, sz_samp, md[i]->colid[c]); if (w > lbl_pt) lbl_pt = w; }
-                double bands = font_h(cr, SZ_AXIS_TEXT) + TICK_LEN + TXT_GAP + 42 + lbl_pt + lab_pad;
+                double bands = font_h(cr, SZ_TRACK) + TICK_LEN + TXT_GAP + 42 + lbl_pt + lab_pad;
                 double row_h = spec->tobjs[i].hide_rownames ? AUTO_MIN_CELL : samp_line * AUTO_ROW_PAD;
                 double rows_pt = md[i]->nr * row_h;
                 if (lg && i == li && rows_pt < leg_h) rows_pt = leg_h;   /* the key beside it fits */
@@ -1699,7 +1697,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
               if (bp < x0 || bp > x1) continue;
               char num[32]; fmt_break(wbr[k], wdec, num, sizeof num);
               char *lab = cp_xmalloc(64); commafy(lab, 64, num);
-              double npc = NPCX(bp), half = text_w(cr, SZ_AXIS_TEXT, lab) / 2;
+              double npc = NPCX(bp), half = text_w(cr, SZ_TRACK, lab) / 2;
               double centre = npc * win_pt;
               /* A tick near the edge would centre its label half outside the
                * panel -- in the gap or the next window, or with one window
@@ -1733,7 +1731,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
             }
         if (spec->tobjs[i].name && tt != TRK_MATRIX && tt != TRK_SIGNAL) {   /* left label */
             g = gt_add(T, G_TEXT, R, 1, R, 1);
-            g->str = spec->tobjs[i].name; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
+            g->str = spec->tobjs[i].name; g->size = SZ_TRACK; g->col = C_BLACK;
             g->tx = 1; g->ty = 0.5; g->hj = 1; g->va = V_INKCENTER;
         }
 
@@ -1763,7 +1761,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
             if (ymin < 0) snprintf(rd, 32, "[%g - %g]", ymin, ymax);
             else          snprintf(rd, 32, "[0 - %g]", ymax);
             g = gt_add(T, G_TEXT, R, CC, R, CC);
-            g->str = rd; g->size = SZ_AXIS_TEXT; g->col = C_AXTXT;
+            g->str = rd; g->size = SZ_TRACK; g->col = C_AXTXT;
             g->tx = 0.004; g->ty = 0.98; g->hj = 0; g->va = V_TOP;
         } else if (t->type == TRK_GENES) {
             /* gene models (BED12): exon boxes (thin UTR / thick CDS), intron
@@ -1779,7 +1777,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
             long laneend[64]; int nlanes = 0, *lane = cp_xmalloc(ng * sizeof(int));
             for (int k = 0; k < ng; k++) {
                 long lw_bp = gm[k].name
-                    ? (long)((text_w(cr, SZ_AXIS_TEXT, gm[k].name) + HALF_LINE) * bp_per_pt) : 0;
+                    ? (long)((text_w(cr, SZ_TRACK, gm[k].name) + HALF_LINE) * bp_per_pt) : 0;
                 int L = -1;
                 for (int j = 0; j < nlanes; j++) if (laneend[j] <= gm[k].tx_start) { L = j; break; }
                 if (L < 0 && nlanes < 64) L = nlanes++;
@@ -1843,7 +1841,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
                     double tx = xb + HALF_LINE / win_pt;
                     double edge = wins ? 1.0 : 1.0 + rmargin / win_pt;
                     double limit = g_nextx[k] < edge ? g_nextx[k] : edge;
-                    double fs = fit_width(cr, SZ_AXIS_TEXT, gm[k].name, (limit - tx) * win_pt);
+                    double fs = fit_width(cr, SZ_TRACK, gm[k].name, (limit - tx) * win_pt);
                     if (fs > 0) {
                         g = gt_add(T, G_TEXT, R, CC, R, CC);
                         g->str = gm[k].name; g->size = fs; g->col = C_BLACK;
@@ -1896,7 +1894,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
                      * labels=on ignores the neighbour and only respects the edge. */
                     double limit = wins ? 1.0 : 2.0;
                     if (t->labels == 0 && nextx[k] < limit) limit = nextx[k];
-                    double fs = fit_width(cr, SZ_AXIS_TEXT, iv[k].name, (limit - tx) * win_pt);
+                    double fs = fit_width(cr, SZ_TRACK, iv[k].name, (limit - tx) * win_pt);
                     if (fs > 0) {
                         g = gt_add(T, G_TEXT, R, CC, R, CC);
                         g->str = iv[k].name; g->size = fs; g->col = C_BLACK;
@@ -1994,7 +1992,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
 #define CELL_COL(v) (dpal ? dpal[(int)(v)] : fill_map_value(&fs, (v), 0, 1))
             /* bands sized in FIXED points (constant gaps at any figure size). */
             double cell_pt = (spec->tobjs[i].height > 0 ? spec->tobjs[i].height : 1) * per_h;
-            double axtop_pt = font_h(cr, SZ_AXIS_TEXT) + TICK_LEN + TXT_GAP;   /* kb axis */
+            double axtop_pt = font_h(cr, SZ_TRACK) + TICK_LEN + TXT_GAP;   /* kb axis */
             double mapband_pt = 42;                                            /* bezier band */
             double lbl_pt = 0;                                                 /* rotated probe IDs */
             if (!spec->tobjs[i].hide_colnames)
@@ -2127,7 +2125,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
                 g->col = C_TICK; g->lw = lw_pt(0.5) * cp_line_scale; g->clip = 1;
                 g->x0 = g->x1 = xpos[b]; g->y0 = axline; g->y1 = axline - tick_npc;
                 g = gt_add(T, G_TEXT, R, CC, R, CC);
-                g->str = xlab[b]; g->size = SZ_AXIS_TEXT; g->col = C_AXTXT;
+                g->str = xlab[b]; g->size = SZ_TRACK; g->col = C_AXTXT;
                 g->tx = xtxt[b]; g->ty = axline + txtoff; g->hj = 0.5; g->va = V_BOTTOM;
             }
             Col mapc = {0.45, 0.45, 0.45};
@@ -2182,9 +2180,9 @@ gx_no_fan:
             double pad = 0.12 * sh + gap_npc / 2;
             double lw = lw_pt(t->line_lw > 0 ? t->line_lw : 0.5);
             if (t->name) {                                    /* rotated, gutter's left edge */
-                double fh = font_h(cr, SZ_AXIS_TEXT);
+                double fh = font_h(cr, SZ_TRACK);
                 g = gt_add(T, G_TEXT, R, 1, R, 1);
-                g->str = t->name; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
+                g->str = t->name; g->size = SZ_TRACK; g->col = C_BLACK;
                 g->tx = labw > 0 ? fh / 2 / labw : 0; g->ty = 0.5; g->rot90 = 1;
             }
             int *ident = cp_xmalloc((size_t)ns * sizeof(int));
@@ -2313,7 +2311,7 @@ gx_no_fan:
         }
         if (leg_title) {
             g = gt_add(T, G_TEXT, R, C, R, C);
-            g->str = leg_title; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
+            g->str = leg_title; g->size = SZ_TRACK; g->col = C_BLACK;
             g->tx = sx; g->ty = top; g->hj = 0; g->va = V_TOP;
         }
     }

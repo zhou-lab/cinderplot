@@ -63,6 +63,9 @@ extern double cp_base_size;
 #define SZ_BASE      cp_base_size
 #define SZ_AXIS_TEXT (0.8 * cp_base_size)
 #define SZ_TITLE     (1.2 * cp_base_size)
+/* track mode uses ONE flat label size (no title/axis/row hierarchy): 9pt at
+ * the default base, scaling with --font-size / base_size like the rest. */
+#define SZ_TRACK     (cp_base_size * 9.0 / 11.0)
 #define TICK_LEN     (HALF_LINE / 2)
 #define TXT_GAP      (0.8 * HALF_LINE / 2)
 #define KEY_SIZE     17.3
