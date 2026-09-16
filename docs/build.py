@@ -188,6 +188,47 @@ SECTIONS = [
     ]),
 ]
 
+# --- cards added 2026-09-16: recent features that had no gallery presence ---
+# smooth/boxplot slot into existing sections; radar+chord get their own section;
+# the metadata-band track joins Genomics. boxplot/smooth carry a ggplot2
+# reference (base-R iris/faithful); the rest are no_gg (no ggplot2 equivalent).
+_NEWCARDS = {
+    "Scatterplots": [
+        ("smooth", "LOESS trend (geom_smooth)",
+         "data/faithful.csv + aes(waiting, eruptions) + geom_point() + geom_smooth(se=FALSE)",
+         "ggplot(faithful, aes(waiting, eruptions)) + geom_point() +\n  geom_smooth(se = FALSE)"),
+    ],
+    "Distributions": [
+        ("boxplot", "Boxplot by category",
+         "data/iris.csv + aes(x=Species, y=Petal.Length, fill=Species) + geom_boxplot()",
+         "ggplot(iris, aes(Species, Petal.Length, fill = Species)) + geom_boxplot()"),
+    ],
+    "Genomics": [
+        ("metabands", "Sample metadata annotation band",
+         'region()'
+         f' + cytoband("{GENOMES}/cytoband.tsv.gz", height=0.5)'
+         f' + genes("{GENOMES}/genes.bed.gz", height=1.5)'
+         ' + matrix("data/region_betas_grouped.tsv", name="betas", cluster=none,'
+         ' rownames=off, rowmeta="data/region_betas_samples.tsv",'
+         ' rowbar="condition", rowcolour="data/region_betas_rowcol.tsv", height=10)',
+         "# Rows grouped by a sample-metadata column and labelled with a coloured\n"
+         "# band -- Gviz/ComplexHeatmap need separate annotation objects wired by\n"
+         "# hand; here it is one matrix() with rowmeta=/rowbar=."),
+    ],
+}
+for _t, _items in SECTIONS:
+    if _t in _NEWCARDS:
+        _items.extend(_NEWCARDS[_t])
+SECTIONS.append(("Polar & chord", [
+    ("radar", "Radar chart (coord_polar)",
+     "data/radar_metrics.csv + aes(x=factor(metric), y=score, colour=model)"
+     " + geom_line() + geom_point() + coord_polar() + ylim(0,1)",
+     ""),
+    ("chord", "Chord diagram",
+     "data/chord_flows.csv + chord()",
+     ""),
+]))
+
 # Themes showcase: the same scatter under each theme. cinderplot renders these
 # (theme-*-cp.svg); no ggplot2 reference PNG is generated for them (render()
 # skips gg for "theme-*" slugs, so the build needs no ggpubr/ggthemes).
@@ -241,12 +282,19 @@ DATASETS = [
 SIZES = {"k562cnv": "12x3.6"}
 # figures whose gallery card spans the full row (wide banners).
 WIDE = set()   # no full-width cards — every figure sits in a normal grid cell
-# figures rendered as PNG instead of SVG — dense scatters / heatmaps (thousands
-# of cells) are far lighter as a raster than as per-element vector shapes.
-RASTER = {"k562cnv", "region", "regions"}
+# Hybrid vector/raster: every card ships as SVG unless its rendered SVG is
+# heavier than this, when render() re-renders it as a PNG instead. A large byte
+# count is what "too many objects" produces (a dense scatter emits one path per
+# point; a heavy embedded raster inflates the file too), so one size test covers
+# both. Measured across the gallery, only the whole-genome CNV scatter (5.8 MB)
+# and the 2k-point diamonds scatter (515 KB) cross 400 KB; every other card,
+# genome tracks included, stays crisp vector (their heatmap is an embedded
+# raster, so the surrounding SVG is only tens of KB). render() writes exactly
+# one of <slug>-cp.svg / <slug>-cp.png; cp_ext() reports whichever is present.
+SVG_MAX_BYTES = 400 * 1024
 
 def cp_ext(slug):
-    return "png" if slug in RASTER else "svg"
+    return "png" if (FIGS / f"{slug}-cp.png").exists() else "svg"
 
 def no_gg(slug):
     """Slugs whose R reference needs a non-base package, so render() skips the
@@ -254,7 +302,8 @@ def no_gg(slug):
     repelled labels (ggrepel), and the CNV plot (sesame)."""
     return (slug.startswith("theme-") or slug.startswith("pal-")
             or slug in ("heatmap", "textlabels", "k562cnv",
-                        "region", "regions", "tree"))
+                        "region", "regions", "tree",
+                        "metabands", "radar", "chord"))
 
 def _up_to_date(slug):
     """A figure is up to date when its cinderplot output exists (and, for
@@ -317,20 +366,35 @@ def render(only=None, force=False):
                             str(FIGS / f"{slug}-gg.pdf"), str(FIGS / f"{slug}-gg")],
                            check=True)
             (FIGS / f"{slug}-gg.pdf").unlink(missing_ok=True)   # keep only PNG
-        ext = cp_ext(slug)
-        cmd = [BIN, cp, "-o", str(FIGS / f"{slug}-cp.{ext}")]
-        if slug in SIZES:
-            cmd += ["--size", SIZES[slug]]
-        if ext == "png":
-            cmd += ["--dpi", "200"]
         # The published gallery must not depend on who renders it: strip the
         # personal-default env vars (CINDERPLOT_EDITABLE_SVG would swap the
-        # 32 svg figures' baked letterforms for <text>; CINDERPLOT_BASE_LINE_SIZE
+        # svg figures' baked letterforms for <text>; CINDERPLOT_BASE_LINE_SIZE
         # would thin every axis). Explicit spec arguments still apply.
         clean = {k: v for k, v in os.environ.items()
                  if k not in ("CINDERPLOT_EDITABLE_SVG", "CINDERPLOT_BASE_LINE_SIZE")}
-        subprocess.run(cmd, cwd=EXAMPLES, check=True, stdout=subprocess.DEVNULL,
-                       env=clean)
+
+        def _emit(outfile, dpi=None):
+            c = [BIN, cp, "-o", str(outfile)]
+            if slug in SIZES:
+                c += ["--size", SIZES[slug]]
+            if dpi:
+                c += ["--dpi", str(dpi)]
+            subprocess.run(c, cwd=EXAMPLES, check=True, stdout=subprocess.DEVNULL,
+                           env=clean)
+
+        # Hybrid: render SVG first; if it is heavier than SVG_MAX_BYTES, drop it
+        # and ship a PNG instead. Exactly one of the two files is left on disk.
+        svg = FIGS / f"{slug}-cp.svg"
+        png = FIGS / f"{slug}-cp.png"
+        probe = tmp / f"{slug}-cp.svg"
+        _emit(probe)
+        if probe.stat().st_size > SVG_MAX_BYTES:
+            _emit(png, dpi=200)
+            svg.unlink(missing_ok=True)
+            probe.unlink(missing_ok=True)
+        else:
+            probe.replace(svg)
+            png.unlink(missing_ok=True)
 
 def esc(s):
     return html.escape(s)
@@ -343,7 +407,7 @@ ZOOM_SVG = ('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-w
 def card_html(i, slug, title, cp, rc, src):
     """One figure card. i is the global 1-based index (also shown in the caption
     and used as the zoom button's 0-based data-i)."""
-    out_line = "  -o out.svg" + (f" --size {SIZES[slug]}" if slug in SIZES else "")
+    out_line = f"  -o out.{cp_ext(slug)}" + (f" --size {SIZES[slug]}" if slug in SIZES else "")
     # Render uses the absolute genomes-repo path; the shown command abbreviates
     # it to hg38/… so the published HTML carries no local home directory.
     shown = cp.replace(GENOMES, "hg38")

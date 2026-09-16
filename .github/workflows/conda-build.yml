@@ -33,10 +33,10 @@ jobs:
         run: cd cinderplot-examples && CINDERPLOT="$GITHUB_WORKSPACE/cinderplot" sh tests/test.sh
 
       # The gallery specs live in docs/build.py and their figures are what the
-      # documentation shows, so a broken one is a broken doc. They are nearly
-      # disjoint from test.sh -- one of 35 overlaps -- and reach 213 lines the
-      # suite never does. The two genome-backed cases skip here (no reference
-      # genome on a runner) and say so.
+      # documentation shows, so a broken one is a broken doc. They are enumerated
+      # from SECTIONS, so every new gallery card is tested here automatically, and
+      # they reach code paths test.sh never does. The four genome-backed cases
+      # skip here (no reference genome on a runner) and say so.
       - name: Gallery
         run: |
           cd cinderplot-examples
