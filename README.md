@@ -1,10 +1,12 @@
-# Cinderplot
+<h1 align="center">Cinderplot</h1>
 
-[![build](https://github.com/zhou-lab/cinderplot/actions/workflows/conda-build.yml/badge.svg)](https://github.com/zhou-lab/cinderplot/actions/workflows/conda-build.yml)
-[![conda](https://img.shields.io/conda/vn/zhou-lab/cinderplot?label=conda)](https://anaconda.org/zhou-lab/cinderplot)
-[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fzhou-lab.github.io%2Fcinderplot%2Fcoverage.json)](https://github.com/zhou-lab/cinderplot-examples/blob/main/tests/test.sh)
-[![docs](https://img.shields.io/badge/docs-gallery-blueviolet)](https://zhou-lab.github.io/cinderplot/)
+<p align="center">
+<a href="https://github.com/zhou-lab/cinderplot/actions/workflows/conda-build.yml"><img alt="build" src="https://github.com/zhou-lab/cinderplot/actions/workflows/conda-build.yml/badge.svg"></a>
+<a href="https://anaconda.org/zhou-lab/cinderplot"><img alt="conda" src="https://img.shields.io/conda/vn/zhou-lab/cinderplot?label=conda"></a>
+<a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+<a href="https://github.com/zhou-lab/cinderplot-examples/blob/main/tests/test.sh"><img alt="coverage" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fzhou-lab.github.io%2Fcinderplot%2Fcoverage.json"></a>
+<a href="https://zhou-lab.github.io/cinderplot/"><img alt="docs" src="https://img.shields.io/badge/docs-gallery-blueviolet"></a>
+</p>
 
 Cinderplot is a small, fast, grammar-inspired plotting tool written in C. It
 turns a CSV/TSV into publication-ready PDF, SVG or PNG graphics with Cairo and
