@@ -63,13 +63,27 @@ cinderplot data.csv -x hp -y mpg -c cyl -f gear out.pdf      # shortcut flags
 - **`data="path"` overrides the leading data source for one object**, so a
   figure can combine several files. It is a keyword, never positional
   (`heatmap("f.tsv", ...)` is an error). Accepted on `heatmap()`, on every track
-  verb, and on `geom_segment()`/`geom_rect()`; other geoms share the leading
-  source. So a grid of panels is `f1.tsv + heatmap(name="a") +
+  verb, and on `geom_point()`/`geom_jitter()`/`geom_line()`/`geom_segment()`/
+  `geom_rect()`; other geoms share the leading source. A layer file is read
+  through the top-level `aes()` column names, so
+  `aes(x, beta, colour=g) + geom_point() + geom_line(data="smooth.tsv")` wants
+  `x`, `beta` and `g` in both files. So a grid of panels is `f1.tsv + heatmap(name="a") +
   heatmap(data="f2.tsv", right_of("a"), name="b")`. A `geom_rect(data=)` file
   holding all four corner columns (x/xend + y/yend) draws one rect per row,
   with a mapped colour/fill read from that file through the same scale as the
   main data; without y/yend it is a region-highlight band spanning the panel
-  height.
+  height. Every other layer file reads a mapped colour the same way, and takes
+  part in training the axes. Under facets, a layer file carrying the faceting
+  column is split by it, one panel's rows per panel; a file without that
+  column is drawn in every panel, as in ggplot2. With
+  `facet_wrap(scales="free_*")` each panel is trained by the layer rows it
+  actually draws, so one panel's outsized rows do not stretch the others.
+- **`y=col` (or `aes(y=col)`) on `geom_point()`/`geom_jitter()`/`geom_line()`/
+  `geom_segment()`** draws that layer against a different y column of the same
+  file — a fitted or smoothed value beside the raw one:
+  `aes(x, y, colour=g) + geom_point() + geom_line(aes(y=fitted))`. It is the
+  one layer-level mapping there is; every other aesthetic goes in the single
+  top-level `aes()`.
 
 ## Five modes, chosen by which verbs appear
 

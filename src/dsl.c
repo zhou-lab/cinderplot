@@ -1366,7 +1366,14 @@ static int parse_term(P *p, PlotSpec *spec) {
              * for any geom (overriding the colour aesthetic, as ggplot does when
              * the aesthetic is set outside aes()); data=/y= give a second data
              * source and are only meaningful for segment/rect. */
-            int se = (gt == GEOM_SEGMENT || gt == GEOM_RECT);
+            /* data= gives the layer its own file; y= names a different y
+             * column. Both were segment/rect only -- the geoms built for a
+             * second file -- but "raw points + a fitted line from another
+             * table" is the ordinary ggplot figure, so point/jitter/line
+             * take them too. */
+            int se = (gt == GEOM_SEGMENT || gt == GEOM_RECT
+                      || gt == GEOM_POINT || gt == GEOM_JITTER
+                      || gt == GEOM_LINE);
             while (*p->s != ')') {
                 char *key = ident(p);
                 skip_ws(p);
@@ -1379,9 +1386,40 @@ static int parse_term(P *p, PlotSpec *spec) {
                                     "not implemented; give a literal intercept "
                                     "(yintercept=20 / xintercept=20) and repeat the "
                                     "layer for several", name);
-                    return fail(p, "%s(aes(...)) is not implemented: layer-level "
-                                "mappings go in the one top-level aes(), e.g. "
-                                "`aes(x, y, colour=g) + geom_point()`", name);
+                    /* one layer-level mapping IS supported, because it
+                     * names a column rather than a scale: aes(y=other), the
+                     * long spelling of the y= option. Anything else still
+                     * goes in the one top-level aes(). */
+                    if (se) {
+                        const char *save = p->s;
+                        p->s++; skip_ws(p);               /* past '(' */
+                        char *k2 = ident(p);
+                        skip_ws(p);
+                        if (k2 && !strcmp(k2, "y") && *p->s == '=') {
+                            p->s++; skip_ws(p);
+                            char *v2 = ident(p);
+                            skip_ws(p);
+                            if (v2 && *p->s == ')') {
+                                p->s++;
+                                free(k2); free(l->ycol); l->ycol = v2;
+                                skip_ws(p);
+                                if (*p->s == ',') { p->s++; skip_ws(p); }
+                                continue;
+                            }
+                            free(v2);
+                        }
+                        free(k2);
+                        p->s = save;
+                    }
+                    {
+                        char msg[CP_ERRLEN];
+                        snprintf(msg, sizeof msg, "%s(aes(...)) is not implemented: "
+                                 "layer-level mappings go in the one top-level "
+                                 "aes(), e.g. `aes(x, y, colour=g) + geom_point()`%s",
+                                 name, se ? "; aes(y=col) alone is accepted, and "
+                                            "names a different y column" : "");
+                        return fail(p, "%s", msg);
+                    }
                 }
                 if (!key || expect(p, '='))
                     return fail(p, "%s() takes key=value arguments: colour=/fill=, alpha=, "

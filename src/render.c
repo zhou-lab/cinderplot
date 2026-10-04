@@ -624,6 +624,154 @@ static void train_rows_y(const PlotSpec *spec, const DataFrame *df, const int *u
         }
     }
 }
+/* One cell as the text a factor level carries: strings verbatim, numbers
+ * through fmt_num, which is how factor_make() labels a numeric factor. */
+static void cell_label(const Column *c, int r, char *buf, size_t cap) {
+    if (c->type == COL_STR) snprintf(buf, cap, "%s", c->str[r] ? c->str[r] : "");
+    else if (isnan(c->num[r])) snprintf(buf, cap, "%s", "");
+    else fmt_num(c->num[r], buf, cap);
+}
+/* A per-layer data= file is faceted like the main data: this returns the
+ * panel index of each of its rows, matched on the same label the panel
+ * factor was built from, so facet_wrap and facet_grid need no separate case.
+ * NULL means the file carries no facet column, and the layer is then drawn
+ * in every panel -- ggplot2's rule for layer data that lacks the faceting
+ * variable, and what every layer file used to get. */
+static int *layer_panel_idx(const DataFrame *d2, const PlotSpec *spec,
+                            const Factor *ff) {
+    if (!ff) return NULL;
+    const Column *wc = NULL, *rc = NULL, *cc = NULL;
+    if (spec->facet_grid) {
+        if (spec->facet_rowvar && !(rc = df_col(d2, spec->facet_rowvar))) return NULL;
+        if (spec->facet_colvar && !(cc = df_col(d2, spec->facet_colvar))) return NULL;
+        if (!rc && !cc) return NULL;
+    } else if (!spec->facet_var || !(wc = df_col(d2, spec->facet_var))) {
+        return NULL;
+    }
+    int *pi = cp_xmalloc((size_t)(d2->nrow ? d2->nrow : 1) * sizeof(int));
+    for (int r = 0; r < d2->nrow; r++) {
+        char lb[256];
+        cell_label(wc ? wc : rc ? rc : cc, r, lb, sizeof lb);
+        if (!wc && rc && cc) {
+            /* the grid label, byte for byte as the panel factor built it:
+             * "<row>, <col>", truncated at the same 256 */
+            size_t n = strlen(lb);
+            if (n + 2 < sizeof lb) {
+                lb[n] = ','; lb[n + 1] = ' ';
+                cell_label(cc, r, lb + n + 2, sizeof lb - n - 2);
+            }
+        }
+        pi[r] = -1;
+        for (int k = 0; k < ff->nlev; k++)
+            if (!strcmp(lb, ff->levels[k])) { pi[r] = k; break; }
+    }
+    return pi;
+}
+/* ---- a point/line layer that brought its own data= file ----------------
+ * Everything the grammar branches read off the main frame -- the x and y
+ * columns, the discrete x slot, the colour level, the panel -- resolved once
+ * for a second file, against the SAME factors and the same scales, so the
+ * one legend and the one axis describe both layers. Only the rows differ.
+ * Columns are found by the top-level aes() names, as geom_rect(data=) finds
+ * them; a layer y= (or aes(y=col)) names a different y column. */
+typedef struct {
+    int n;
+    const Column *xc, *yc;   /* x and y in the layer's file */
+    const Column *cc;        /* continuous colour column there, or NULL */
+    int *xlev;               /* discrete x: the slot in xf, else NULL */
+    int *lev;                /* discrete colour: the level in cf, else NULL */
+    int *pan;                /* facet panel, or NULL = drawn in every panel */
+} LayerFrame;
+
+static int layer_frame_build(LayerFrame *lf, DataFrame *d2, const Layer *L,
+                             const char *gname, const PlotSpec *spec,
+                             const Factor *ff, const Factor *xf, int disc_x,
+                             int disc_y, const Factor *cf, int cont_col,
+                             char *err) {
+    memset(lf, 0, sizeof *lf);
+    lf->n = d2->nrow;
+    const char *ycol = L->ycol ? L->ycol : spec->y.col;
+    lf->xc = spec->x.col ? df_col(d2, spec->x.col) : NULL;
+    lf->yc = ycol ? df_col(d2, ycol) : NULL;
+    if (!lf->xc || !lf->yc) {
+        snprintf(err, CP_ERRLEN, "%s(data=%s): the file needs the aes columns "
+                 "`%s` and `%s`", gname, L->data, spec->x.col ? spec->x.col : "x",
+                 ycol ? ycol : "y");
+        return -1;
+    }
+    if (disc_y) {
+        snprintf(err, CP_ERRLEN, "%s(data=) on a discrete y axis is not "
+                 "implemented; the layer file's rows have no slot to sit in", gname);
+        return -1;
+    }
+    if (lf->yc->type != COL_NUM) {
+        snprintf(err, CP_ERRLEN, "%s(data=%s): y column `%s` must be numeric",
+                 gname, L->data, ycol);
+        return -1;
+    }
+    if (disc_x) {
+        /* the layer's x names a category of the main data's x, matched the
+         * way the axis factor labels its levels */
+        lf->xlev = cp_xmalloc((size_t)(lf->n ? lf->n : 1) * sizeof(int));
+        for (int r = 0; r < lf->n; r++) {
+            char lb[256];
+            cell_label(lf->xc, r, lb, sizeof lb);
+            lf->xlev[r] = -1;
+            for (int k = 0; k < xf->nlev; k++)
+                if (!strcmp(lb, xf->levels[k])) { lf->xlev[r] = k; break; }
+            if (lf->xlev[r] < 0) {
+                snprintf(err, CP_ERRLEN, "%s(data=%s): x value \"%s\" is not a "
+                         "category of the main data's `%s`", gname, L->data, lb,
+                         spec->x.col);
+                return -1;
+            }
+        }
+    } else if (lf->xc->type != COL_NUM) {
+        snprintf(err, CP_ERRLEN, "%s(data=%s): x column `%s` must be numeric on a "
+                 "continuous axis", gname, L->data, spec->x.col);
+        return -1;
+    }
+    lf->pan = layer_panel_idx(d2, spec, ff);
+    /* colour, as on geom_rect(data=): a layer colour= wins; else the mapped
+     * aes reads this file's column through the main data's scale */
+    if (!L->has_color && spec->colour.col && (cf || cont_col)) {
+        const Column *c = df_col(d2, spec->colour.col);
+        if (!c) {
+            snprintf(err, CP_ERRLEN, "%s(data=%s): colour/fill column `%s` not in "
+                     "this file", gname, L->data, spec->colour.col);
+            return -1;
+        }
+        if (cont_col) {
+            if (c->type != COL_NUM) {
+                snprintf(err, CP_ERRLEN, "%s(data=%s): colour/fill column `%s` must "
+                         "be numeric to share the continuous scale", gname,
+                         L->data, spec->colour.col);
+                return -1;
+            }
+            lf->cc = c;
+        } else {
+            if (c->type != COL_STR) {
+                snprintf(err, CP_ERRLEN, "%s(data=%s): colour/fill column `%s` must "
+                         "be text to match the discrete levels of the main data",
+                         gname, L->data, spec->colour.col);
+                return -1;
+            }
+            lf->lev = cp_xmalloc((size_t)(lf->n ? lf->n : 1) * sizeof(int));
+            for (int r = 0; r < lf->n; r++) {
+                lf->lev[r] = -1;
+                for (int k = 0; k < cf->nlev; k++)
+                    if (!strcmp(c->str[r], cf->levels[k])) { lf->lev[r] = k; break; }
+                if (lf->lev[r] < 0) {
+                    snprintf(err, CP_ERRLEN, "%s(data=%s): value \"%s\" in `%s` is "
+                             "not a level of the main data's `%s`", gname, L->data,
+                             c->str[r], spec->colour.col, spec->colour.col);
+                    return -1;
+                }
+            }
+        }
+    }
+    return 0;
+}
 /* Reference lines expand the panel to include their intercept (ggplot).
  * train_x / train_y say which axis this call trains; txmin/txmax are NULL
  * when x is discrete or genomic, which is what switches abline off (it reads
@@ -1263,6 +1411,60 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     /* A per-layer data= file is the same file in every panel, so read it once
      * and keep it. It used to be opened, parsed and typed once per panel. */
     DataFrame *layer_df[MAX_LAYERS] = {0};
+    /* ... and, once it is read, which panel each of its rows belongs to.
+     * NULL after the read = no facet column in that file, so every panel
+     * draws every row. */
+    int *layer_pan[MAX_LAYERS] = {0};
+    int layer_pan_done[MAX_LAYERS] = {0};
+
+    /* point/jitter/line layers with their own file, resolved up front: the
+     * panel loop then draws from the frame instead of the main DataFrame. */
+    LayerFrame layer_fr[MAX_LAYERS];
+    int has_fr[MAX_LAYERS] = {0};
+    for (int li = 0; li < spec->nlayers; li++) {
+        const Layer *L = &spec->layers[li];
+        if (!L->data) continue;
+        if (L->type != GEOM_POINT && L->type != GEOM_JITTER && L->type != GEOM_LINE)
+            continue;
+        if (genome_x) {
+            snprintf(err, CP_ERRLEN, "geom_%s(data=) is not implemented on a "
+                     "genomic x axis", L->type == GEOM_LINE ? "line" : "point");
+            return -1;
+        }
+        if (szc || shf) {
+            snprintf(err, CP_ERRLEN, "a mapped size=/shape= and a layer data= "
+                     "cannot be combined; the second file has no place on "
+                     "those scales");
+            return -1;
+        }
+        if (!layer_df[li] && !(layer_df[li] = df_read_csv(L->data, err)))
+            return -1;
+        if (layer_frame_build(&layer_fr[li], layer_df[li], L,
+                              L->type == GEOM_LINE ? "geom_line" : "geom_point",
+                              spec, ff, xf, disc_x, disc_y, cf, cont_col, err))
+            return -1;
+        has_fr[li] = 1;
+        layer_pan[li] = layer_fr[li].pan;     /* share the one panel index */
+        layer_pan_done[li] = 1;
+    }
+
+    /* A layer y= (aes(y=col)) names a different y column of the MAIN frame.
+     * It has to train the y scale like any other y, or the line it draws
+     * leaves the panel. Validated here so the message names the layer. */
+    const Column *layer_yc[MAX_LAYERS] = {0};
+    for (int li = 0; li < spec->nlayers; li++) {
+        const Layer *L = &spec->layers[li];
+        if (!L->ycol || L->data) continue;
+        if (L->type != GEOM_POINT && L->type != GEOM_JITTER
+            && L->type != GEOM_LINE && L->type != GEOM_SEGMENT) continue;
+        const Column *c = df_col(df, L->ycol);
+        if (!c || c->type != COL_NUM) {
+            snprintf(err, CP_ERRLEN, "y=%s: %s", L->ycol,
+                     c ? "must be numeric" : "column not found");
+            return -1;
+        }
+        layer_yc[li] = c;
+    }
 
     /* A 4-corner rect layer from its own file (x/xend + y/yend all present
      * there) takes part in scale training, as main-data rects do — otherwise
@@ -1270,10 +1472,70 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
      * edge. Region-highlight bands (no y extent in the file) never trained
      * the scales and still do not. */
     double lxmin = 1e300, lxmax = -1e300, lymin = 1e300, lymax = -1e300;
+    /* The same extents, kept per facet group, because under
+     * facet_wrap(scales="free_*") a panel's range must come from the rows
+     * that panel actually draws -- the global figures above would give every
+     * panel the widest layer file's reach. Indexed by XG(p)/YG(p), the
+     * grouping train_rows_x/_y use, so a facet_grid column shares an x range
+     * and a row shares a y range exactly as the main data does. A layer file
+     * with no facet column is drawn in every panel and folds into all of
+     * them; annotate() marks are literal coordinates and stay global. */
+    double *lxg_lo = cp_xmalloc(npan * sizeof(double));
+    double *lxg_hi = cp_xmalloc(npan * sizeof(double));
+    double *lyg_lo = cp_xmalloc(npan * sizeof(double));
+    double *lyg_hi = cp_xmalloc(npan * sizeof(double));
+    for (int q = 0; q < npan; q++) {
+        lxg_lo[q] = lyg_lo[q] = 1e300; lxg_hi[q] = lyg_hi[q] = -1e300;
+    }
+    /* fold one value into the group of panel `q`, or into every group when
+     * q < 0 (a row with no panel of its own) */
+#define FOLD_X(q, v) do { double v_ = (v); \
+        for (int q_ = 0; q_ < npan; q_++) \
+            if ((q) < 0 || XG(q_) == XG(q)) { \
+                if (v_ < lxg_lo[q_]) lxg_lo[q_] = v_; \
+                if (v_ > lxg_hi[q_]) lxg_hi[q_] = v_; } \
+    } while (0)
+#define FOLD_Y(q, v) do { double v_ = (v); \
+        for (int q_ = 0; q_ < npan; q_++) \
+            if ((q) < 0 || YG(q_) == YG(q)) { \
+                if (v_ < lyg_lo[q_]) lyg_lo[q_] = v_; \
+                if (v_ > lyg_hi[q_]) lyg_hi[q_] = v_; } \
+    } while (0)
     /* reference values (rect layer rows, annotate() marks, hline intercepts)
      * that cannot sit on a log axis are dropped and reported once, as ggplot
      * does; one of them used to poison the whole scale to -inf */
     int d_ref = 0;
+    for (int li = 0; li < spec->nlayers; li++) {
+        if (!layer_yc[li]) continue;
+        for (int r = 0; r < df->nrow; r++) {
+            if (!use[r] || isnan(layer_yc[li]->num[r])) continue;
+            double u = TY(layer_yc[li]->num[r]);
+            if (!isfinite(u)) { d_ref++; continue; }
+            if (u < lymin) lymin = u;
+            if (u > lymax) lymax = u;
+            FOLD_Y(ff ? ff->idx[r] : 0, u);
+        }
+    }
+    for (int li = 0; li < spec->nlayers; li++) {
+        if (!has_fr[li]) continue;
+        const LayerFrame *F = &layer_fr[li];
+        for (int r2 = 0; r2 < F->n; r2++) {
+            if (isnan(F->yc->num[r2])) continue;
+            int q = F->pan ? F->pan[r2] : -1;   /* -1 = every panel draws it */
+            double u = TY(F->yc->num[r2]);
+            if (!isfinite(u)) { d_ref++; continue; }
+            if (u < lymin) lymin = u;
+            if (u > lymax) lymax = u;
+            FOLD_Y(q, u);
+            if (F->xlev) continue;              /* a slot, not a range */
+            if (isnan(F->xc->num[r2])) continue;
+            double t = cp_logt(spec->log_x, F->xc->num[r2]);
+            if (!isfinite(t)) { d_ref++; continue; }
+            if (t < lxmin) lxmin = t;
+            if (t > lxmax) lxmax = t;
+            FOLD_X(q, t);
+        }
+    }
     for (int li = 0; li < spec->nlayers; li++) {
         const Layer *L = &spec->layers[li];
         if (L->type != GEOM_RECT || !L->data || genome_x) continue;
@@ -1287,6 +1549,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         if (!c_x || !c_xe || !c_y || !c_ye
             || c_x->type != COL_NUM || c_xe->type != COL_NUM
             || c_y->type != COL_NUM || c_ye->type != COL_NUM) continue;
+        if (!layer_pan_done[li]) {
+            layer_pan[li] = layer_panel_idx(d2, spec, ff);
+            layer_pan_done[li] = 1;
+        }
         for (int r2 = 0; r2 < d2->nrow; r2++) {
             if (isnan(c_x->num[r2]) || isnan(c_xe->num[r2])
                 || isnan(c_y->num[r2]) || isnan(c_ye->num[r2])) continue;
@@ -1300,6 +1566,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             if (fmax(ta, tb) > lxmax) lxmax = fmax(ta, tb);
             if (fmin(ua, ub) < lymin) lymin = fmin(ua, ub);
             if (fmax(ua, ub) > lymax) lymax = fmax(ua, ub);
+            int q = layer_pan[li] ? layer_pan[li][r2] : -1;
+            FOLD_X(q, ta); FOLD_X(q, tb);
+            FOLD_Y(q, ua); FOLD_Y(q, ub);
         }
     }
 
@@ -1317,9 +1586,11 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             if (!genome_x) {
                 if (t < lxmin) lxmin = t;
                 if (t > lxmax) lxmax = t;
+                FOLD_X(-1, t);
             }
             if (u < lymin) lymin = u;
             if (u > lymax) lymax = u;
+            FOLD_Y(-1, u);
         }
     }
 
@@ -1840,8 +2111,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                      * shared pass trains on, restricted to this panel */
                     double lo = 1e300, hi = -1e300;
                     train_rows_x(spec, df, use, xgf, XG(p), xc, xec, &lo, &hi);
-                    if (lxmin < lo) lo = lxmin;      /* rect layer files, annotate() */
-                    if (lxmax > hi) hi = lxmax;
+                    if (lxg_lo[p] < lo) lo = lxg_lo[p];   /* layer files, annotate() */
+                    if (lxg_hi[p] > hi) hi = lxg_hi[p];
                     for (int li = 0; li < spec->nlayers; li++)   /* histogram bin edges */
                         if (spec->layers[li].type == GEOM_HISTOGRAM) {
                             const Hist *hs = &hist[li];
@@ -1930,8 +2201,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     }
                     if (!nhist && !hasbar && !hasdens) {
                         train_rows_y(spec, df, use, ygf, YG(p), yc, yec, yminc, &lo, &hi);
-                        if (lymin < lo) lo = lymin;  /* rect layer files, annotate() */
-                        if (lymax > hi) hi = lymax;
+                        if (lyg_lo[p] < lo) lo = lyg_lo[p];  /* layer files, annotate() */
+                        if (lyg_hi[p] > hi) hi = lyg_hi[p];
                         for (int q = 0; q < npan; q++) {
                             if (YG(q) != YG(p)) continue;
                             if (colstack_max && TY(colstack_max[q]) > hi)
@@ -3097,6 +3368,51 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     jh = JL->jitter_h;
                     if (disc_x && jw > 0.5) jw = 0.5;   /* never cross into the next slot */
                 }
+                if (has_fr[li]) {
+                    /* the layer brought its own rows: same scales, same
+                     * colour levels, its own file */
+                    const LayerFrame *F = &layer_fr[li];
+                    int m = 0;
+                    for (int r = 0; r < F->n; r++)
+                        if ((!F->pan || F->pan[r] == p)
+                            && !isnan(F->yc->num[r])
+                            && (F->xlev || !isnan(F->xc->num[r]))) m++;
+                    double *lpx = cp_xmalloc((m ? m : 1) * sizeof(double));
+                    double *lpy = cp_xmalloc((m ? m : 1) * sizeof(double));
+                    Col *lpc = cp_xmalloc((m ? m : 1) * sizeof(Col));
+                    m = 0;
+                    for (int r = 0; r < F->n; r++) {
+                        if (F->pan && F->pan[r] != p) continue;
+                        if (isnan(F->yc->num[r])) continue;
+                        if (!F->xlev && isnan(F->xc->num[r])) continue;
+                        double lx = F->xlev
+                                  ? (double)((xmap ? xmap[F->xlev[r]] : F->xlev[r]) + 1)
+                                  : cp_logt(spec->log_x, F->xc->num[r]);
+                        double ly = TY(F->yc->num[r]);
+                        if (gt == GEOM_JITTER) {
+                            unsigned h = jseed ^ (unsigned)(r * 2654435761u);
+                            h ^= h >> 15; h *= 2246822519u; h ^= h >> 13;
+                            h *= 3266489917u; h ^= h >> 16;
+                            lx += ((double)(h & 0xFFFF) / 65535.0 * 2 - 1) * jw;
+                            ly += ((double)((h >> 16) & 0xFFFF) / 65535.0 * 2 - 1) * jh;
+                        }
+                        lpx[m] = NPCX(lx); lpy[m] = NPCY(ly);
+                        lpc[m] = JL->has_color ? JL->color
+                               : F->lev ? pal[F->lev[r]]
+                               : F->cc ? (isnan(F->cc->num[r]) ? C_NA
+                                          : fill_map_value(&cscale, F->cc->num[r],
+                                                           cdmin, cdmax))
+                               : C_BLACK;
+                        m++;
+                    }
+                    g = gt_add(T, G_POINTS, R, C, R, C);
+                    g->n = m; g->px = lpx; g->py = lpy; g->pcol = lpc;
+                    g->raster = JL->raster;
+                    g->radius = JL->point_size > 0
+                              ? PT_RADIUS * JL->point_size / 1.5 : PT_RADIUS;
+                    g->clip = 1;
+                    goto layer_done;
+                }
                 int np = 0;
                 for (int r = 0; r < df->nrow; r++)
                     if (use[r] && (!ff || ff->idx[r] == p)) np++;
@@ -3107,7 +3423,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 np = 0;
                 for (int r = 0; r < df->nrow; r++) {
                     if (!use[r] || (ff && ff->idx[r] != p)) continue;
-                    double jx = TXR(r), jy = TY(yc->num[r]);
+                    if (layer_yc[li] && isnan(layer_yc[li]->num[r])) continue;
+                    double jx = TXR(r);
+                    double jy = TY((layer_yc[li] ? layer_yc[li] : yc)->num[r]);
                     if (gt == GEOM_JITTER) {
                         /* one small deterministic PRNG, seeded per point so the
                          * offset follows the ROW rather than the draw order --
@@ -3184,19 +3502,62 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                              "is not implemented; use factor()");
                     return -1;
                 }
+                if (has_fr[li]) {
+                    /* one polyline per colour level of the layer's own file
+                     * (one for the whole file when nothing is mapped), each
+                     * sorted by x, as the main-data branch draws them */
+                    const LayerFrame *F = &layer_fr[li];
+                    int ngrp = F->lev ? cf->nlev : 1;
+                    for (int grp = 0; grp < ngrp; grp++) {
+                        int m = 0;
+                        for (int r = 0; r < F->n; r++)
+                            if ((!F->pan || F->pan[r] == p)
+                                && (!F->lev || F->lev[r] == grp)
+                                && !isnan(F->yc->num[r])
+                                && (F->xlev || !isnan(F->xc->num[r]))) m++;
+                        if (m < 2) continue;
+                        Pt *lpt = cp_xmalloc(m * sizeof(Pt));
+                        m = 0;
+                        for (int r = 0; r < F->n; r++) {
+                            if (F->pan && F->pan[r] != p) continue;
+                            if (F->lev && F->lev[r] != grp) continue;
+                            if (isnan(F->yc->num[r])) continue;
+                            if (!F->xlev && isnan(F->xc->num[r])) continue;
+                            double lx = F->xlev
+                                      ? (double)((xmap ? xmap[F->xlev[r]] : F->xlev[r]) + 1)
+                                      : cp_logt(spec->log_x, F->xc->num[r]);
+                            lpt[m].x = NPCX(lx);
+                            lpt[m].y = NPCY(TY(F->yc->num[r]));
+                            m++;
+                        }
+                        qsort(lpt, m, sizeof(Pt), cmp_pt_x);
+                        double *lpx = cp_xmalloc(m * sizeof(double));
+                        double *lpy = cp_xmalloc(m * sizeof(double));
+                        for (int i = 0; i < m; i++) { lpx[i] = lpt[i].x; lpy[i] = lpt[i].y; }
+                        free(lpt);
+                        g = gt_add(T, G_POLYLINE, R, C, R, C);
+                        g->n = m; g->px = lpx; g->py = lpy;
+                        g->col = spec->layers[li].has_color ? spec->layers[li].color
+                               : F->lev ? pal[grp] : C_BLACK;
+                        g->lw = LAYER_LW(&spec->layers[li], 0.5); g->clip = 1;
+                    }
+                    goto layer_done;
+                }
                 for (int grp = 0; grp < nseries; grp++) {
                     int np = 0;
                     for (int r = 0; r < df->nrow; r++)
                         if (use[r] && (!ff || ff->idx[r] == p)
-                                   && series[r] == grp) np++;
+                                   && series[r] == grp
+                                   && !(layer_yc[li] && isnan(layer_yc[li]->num[r]))) np++;
                     if (np < 2) continue;
                     Pt *pts = cp_xmalloc(np * sizeof(Pt));
                     np = 0;
                     for (int r = 0; r < df->nrow; r++) {
                         if (!use[r] || (ff && ff->idx[r] != p)
                                     || series[r] != grp) continue;
+                        if (layer_yc[li] && isnan(layer_yc[li]->num[r])) continue;
                         pts[np].x = NPCX(TXR(r));
-                        pts[np].y = NPCY(TY(yc->num[r]));
+                        pts[np].y = NPCY(TY((layer_yc[li] ? layer_yc[li] : yc)->num[r]));
                         np++;
                     }
                     qsort(pts, np, sizeof(Pt), cmp_pt_x);
@@ -3250,6 +3611,11 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 if (!layer_df[li] && !(layer_df[li] = df_read_csv(L->data, err)))
                     return -1;
                 DataFrame *d2 = layer_df[li];
+                if (!layer_pan_done[li]) {
+                    layer_pan[li] = layer_panel_idx(d2, spec, ff);
+                    layer_pan_done[li] = 1;
+                }
+                const int *lpan = layer_pan[li];
                 const Column *c_chr = genome_x ? df_col(d2, spec->chrom.col) : NULL;
                 const Column *c_x = df_col(d2, spec->x.col);
                 const Column *c_xe = spec->xend.col ? df_col(d2, spec->xend.col) : NULL;
@@ -3260,13 +3626,59 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     snprintf(err, CP_ERRLEN, "geom_segment(data=%s): missing chrom/x/y column", L->data);
                     return -1;
                 }
+                /* colour, as for geom_rect(data=): the layer's own colour=
+                 * wins, else a mapped colour/fill aes reads THIS file's
+                 * column through the main data's scale, so one legend
+                 * describes both layers. The segments used to be black
+                 * whatever the aes said. */
+                const Column *c_scol = NULL;
+                if (!L->has_color && spec->colour.col && (cf || cont_col)) {
+                    c_scol = df_col(d2, spec->colour.col);
+                    if (!c_scol) {
+                        snprintf(err, CP_ERRLEN, "geom_segment(data=%s): colour/fill "
+                                 "column `%s` not in this file", L->data, spec->colour.col);
+                        return -1;
+                    }
+                    if (cont_col && c_scol->type != COL_NUM) {
+                        snprintf(err, CP_ERRLEN, "geom_segment(data=%s): colour/fill "
+                                 "column `%s` must be numeric to share the "
+                                 "continuous scale", L->data, spec->colour.col);
+                        return -1;
+                    }
+                    if (cf && c_scol->type != COL_STR) {
+                        snprintf(err, CP_ERRLEN, "geom_segment(data=%s): colour/fill "
+                                 "column `%s` must be text to match the discrete "
+                                 "levels of the main data", L->data, spec->colour.col);
+                        return -1;
+                    }
+                }
                 Col lcol = L->has_color ? L->color : C_BLACK;
                 for (int r2 = 0; r2 < d2->nrow; r2++) {
+                    if (lpan && lpan[r2] != p) continue;
                     double off = genome_x ? genome_off(gs, c_chr->str[r2]) : 0;
                     if (genome_x && off < 0) continue;
                     if (isnan(c_x->num[r2]) || isnan(c_y->num[r2])) continue;
+                    Col scol = lcol;
+                    if (c_scol) {
+                        if (cont_col) {
+                            scol = isnan(c_scol->num[r2]) ? C_NA
+                                 : fill_map_value(&cscale, c_scol->num[r2], cdmin, cdmax);
+                        } else {
+                            int lev = -1;
+                            for (int k = 0; k < cf->nlev; k++)
+                                if (!strcmp(c_scol->str[r2], cf->levels[k])) { lev = k; break; }
+                            if (lev < 0) {
+                                snprintf(err, CP_ERRLEN, "geom_segment(data=%s): value "
+                                         "\"%s\" in `%s` is not a level of the main "
+                                         "data's `%s`", L->data, c_scol->str[r2],
+                                         spec->colour.col, spec->colour.col);
+                                return -1;
+                            }
+                            scol = pal[lev];
+                        }
+                    }
                     g = gt_add(T, G_LINE, R, C, R, C);
-                    g->col = lcol; g->lw = LAYER_LW(L, 0.6); g->clip = 1;
+                    g->col = scol; g->lw = LAYER_LW(L, 0.6); g->clip = 1;
                     /* through the log transform like geom_rect(data=); a
                      * 10..100 segment used to land off a log10 panel */
                     g->x0 = NPCX(genome_x ? off + c_x->num[r2]
@@ -3283,16 +3695,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 /* one line per row: (x,y) -> (xend, yend); yend defaults to
                  * y. A layer y= names a different START column — it used to
                  * parse and silently do nothing without data= */
-                const Column *syc = yc;
-                if (spec->layers[li].ycol) {
-                    syc = df_col(df, spec->layers[li].ycol);
-                    if (!syc || syc->type != COL_NUM) {
-                        snprintf(err, CP_ERRLEN, "geom_segment(y=%s): %s",
-                                 spec->layers[li].ycol,
-                                 syc ? "must be numeric" : "column not found");
-                        return -1;
-                    }
-                }
+                const Column *syc = layer_yc[li] ? layer_yc[li] : yc;
                 for (int r = 0; r < df->nrow; r++) {
                     if (!use[r] || (ff && ff->idx[r] != p)) continue;
                     if (xec && isnan(xec->num[r])) continue;
@@ -3350,6 +3753,11 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 if (!layer_df[li] && !(layer_df[li] = df_read_csv(L->data, err)))
                     return -1;
                 DataFrame *d2 = layer_df[li];
+                if (!layer_pan_done[li]) {
+                    layer_pan[li] = layer_panel_idx(d2, spec, ff);
+                    layer_pan_done[li] = 1;
+                }
+                const int *lpan = layer_pan[li];
                 const Column *c_chr = genome_x ? df_col(d2, spec->chrom.col) : NULL;
                 const Column *c_x = df_col(d2, spec->x.col);
                 const Column *c_xe = spec->xend.col ? df_col(d2, spec->xend.col) : NULL;
@@ -3391,6 +3799,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 Col fixed = L->has_color ? L->color
                           : corner4 ? C_BAR : (Col){0.85, 0.85, 0.85};
                 for (int r2 = 0; r2 < d2->nrow; r2++) {
+                    if (lpan && lpan[r2] != p) continue;
                     double off = genome_x ? genome_off(gs, c_chr->str[r2]) : 0;
                     if ((genome_x && off < 0) || isnan(c_x->num[r2]) || isnan(c_xe->num[r2])) continue;
                     Col col = fixed;
@@ -3667,6 +4076,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
 #undef TYR
             }
 
+        layer_done:
             /* Stamp this layer's alpha= / linetype= onto every grob it just
              * produced. Done once here rather than in each geom branch, so a
              * new geom picks both up for free. Theme and axis grobs are built
