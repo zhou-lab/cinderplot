@@ -47,7 +47,8 @@ static double leg_est_w(cairo_t *cr, char **lv, int k, int nc) {
 
 static GTable *build_legend(cairo_t *cr, const Theme *th, const char *title, const Factor *f,
                             const Col *pal, int haspoint, int hasline, int hasbox, int hastext,
-                            const int *shapes, int ncol, int reverse, char *err) {
+                            const int *shapes, int ncol, int reverse, const int *dashes,
+                            char *err) {
     if (ncol < 1) ncol = 1;
     if (ncol > f->nlev) ncol = f->nlev;
     int rows = (f->nlev + ncol - 1) / ncol;
@@ -118,6 +119,7 @@ static GTable *build_legend(cairo_t *cr, const Theme *th, const char *title, con
             g = gt_add(t, G_LINE, r, kc, r, kc);
             g->col = pal[i]; g->lw = lw_pt(0.5);
             g->x0 = 0.1; g->x1 = 0.9; g->y0 = g->y1 = 0.5;
+            if (dashes) g->dash = dashes[i];     /* a linetype key */
         }
         if (haspoint) {
             g = gt_add(t, G_POINTS, r, kc, r, kc);
@@ -667,6 +669,54 @@ static int *layer_panel_idx(const DataFrame *d2, const PlotSpec *spec,
     }
     return pi;
 }
+/* ggplot2 trains a discrete scale over EVERY layer, so a colour level that
+ * occurs only in a layer's own data= file (the "mean"/"median" rows of a
+ * summary table) is a level like any other. Folds those values into the
+ * main data's colour factor -- sorted as factor_make sorts, unless levels=
+ * then orders them -- and remaps idx[]. Only a text colour column unions;
+ * the layer readers still refuse a numeric one by name. */
+static int strcmp_p(const void *a, const void *b) {
+    return strcmp(*(char *const *)a, *(char *const *)b);
+}
+static int factor_union_layers(Factor *f, int nrow, const PlotSpec *spec,
+                               const char *col, int lt, char *err) {
+    int cap = f->nlev + 16, n = f->nlev;
+    char **lv = cp_xmalloc(cap * sizeof(char *));
+    for (int i = 0; i < n; i++) lv[i] = f->levels[i];
+    for (int li = 0; li < spec->nlayers; li++) {
+        const Layer *L = &spec->layers[li];
+        if (!L->data) continue;
+        if (lt ? (L->type != GEOM_SEGMENT || L->dash)
+               : (L->has_color
+                  || (L->type != GEOM_POINT && L->type != GEOM_JITTER
+                      && L->type != GEOM_LINE && L->type != GEOM_SEGMENT
+                      && L->type != GEOM_RECT && L->type != GEOM_TEXT
+                      && L->type != GEOM_LABEL))) continue;
+        DataFrame *d2 = df_read_csv(L->data, err);
+        if (!d2) { free(lv); return -1; }
+        const Column *c = df_col(d2, col);
+        if (!c || c->type != COL_STR) continue;   /* the readers say why */
+        for (int r = 0; r < d2->nrow; r++) {
+            if (!c->str[r] || !*c->str[r] || !strcmp(c->str[r], "NA")) continue;
+            int seen = 0;
+            for (int i = 0; i < n && !seen; i++) seen = !strcmp(lv[i], c->str[r]);
+            if (seen) continue;
+            if (n == cap) lv = cp_xrealloc(lv, (cap *= 2) * sizeof(char *));
+            lv[n++] = cp_xstrdup(c->str[r]);
+        }
+    }
+    if (n == f->nlev) { free(lv); return 0; }
+    qsort(lv, n, sizeof(char *), strcmp_p);
+    int *pos = cp_xmalloc((f->nlev ? f->nlev : 1) * sizeof(int));
+    for (int i = 0; i < f->nlev; i++)
+        for (int j = 0; j < n; j++)
+            if (!strcmp(f->levels[i], lv[j])) { pos[i] = j; break; }
+    for (int r = 0; r < nrow; r++)
+        if (f->idx[r] >= 0) f->idx[r] = pos[f->idx[r]];
+    free(pos); free(f->levels);
+    f->levels = lv; f->nlev = n;
+    return 0;
+}
 /* ---- a point/line layer that brought its own data= file ----------------
  * Everything the grammar branches read off the main frame -- the x and y
  * columns, the discrete x slot, the colour level, the panel -- resolved once
@@ -681,6 +731,7 @@ typedef struct {
     int *xlev;               /* discrete x: the slot in xf, else NULL */
     int *lev;                /* discrete colour: the level in cf, else NULL */
     int *pan;                /* facet panel, or NULL = drawn in every panel */
+    const Column *lab;       /* geom_text/geom_label: the label column there */
 } LayerFrame;
 
 static int layer_frame_build(LayerFrame *lf, DataFrame *d2, const Layer *L,
@@ -732,6 +783,15 @@ static int layer_frame_build(LayerFrame *lf, DataFrame *d2, const Layer *L,
         return -1;
     }
     lf->pan = layer_panel_idx(d2, spec, ff);
+    if (L->type == GEOM_TEXT || L->type == GEOM_LABEL) {
+        lf->lab = spec->label.col ? df_col(d2, spec->label.col) : NULL;
+        if (!lf->lab) {
+            snprintf(err, CP_ERRLEN, "%s(data=%s): the file needs the label "
+                     "column `%s`", gname, L->data,
+                     spec->label.col ? spec->label.col : "label");
+            return -1;
+        }
+    }
     /* colour, as on geom_rect(data=): a layer colour= wins; else the mapped
      * aes reads this file's column through the main data's scale */
     if (!L->has_color && spec->colour.col && (cf || cont_col)) {
@@ -904,6 +964,14 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             snprintf(err, CP_ERRLEN, "geom_text()/geom_label() needs aes(label=...)");
             return -1;
         }
+    }
+    /* the main data needs the label column only for a text layer drawn
+     * from it; a geom_text(data=) layer finds the column in its own file */
+    int text_main = 0;
+    for (int i = 0; i < spec->nlayers; i++)
+        if ((spec->layers[i].type == GEOM_TEXT || spec->layers[i].type == GEOM_LABEL)
+            && !spec->layers[i].data) text_main = 1;
+    if (text_main) {
         labc = df_col(df, spec->label.col);
         if (!labc) {
             snprintf(err, CP_ERRLEN, "column `%s` not found", spec->label.col);
@@ -919,14 +987,24 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             if (!spec->layers[i].data) rect_top = 1;   /* full 4-corner rect */
         }
     }
+    /* xend/yend may live only in a segment/rect layer's own data= file
+     * (a summary table of mean lines beside the raw points); the main data
+     * needs them only when a layer drawn from it reads them */
+    int main_ends = 0;
+    for (int i = 0; i < spec->nlayers; i++) {
+        GeomType t = spec->layers[i].type;
+        if (!spec->layers[i].data
+            && (t == GEOM_SEGMENT || t == GEOM_RECT || t == GEOM_ERRORBAR
+                || t == GEOM_LINERANGE)) main_ends = 1;
+    }
     const Column *xec = NULL, *yec = NULL;
     if (spec->xend.col) {
         xec = df_col(df, spec->xend.col);
-        if (!xec) { snprintf(err, CP_ERRLEN, "column `%s` not found", spec->xend.col); return -1; }
+        if (!xec && main_ends) { snprintf(err, CP_ERRLEN, "column `%s` not found", spec->xend.col); return -1; }
     }
     if (spec->yend.col) {
         yec = df_col(df, spec->yend.col);
-        if (!yec) { snprintf(err, CP_ERRLEN, "column `%s` not found", spec->yend.col); return -1; }
+        if (!yec && main_ends) { snprintf(err, CP_ERRLEN, "column `%s` not found", spec->yend.col); return -1; }
     }
     const Column *yminc = NULL;
     if (spec->ymin.col) {
@@ -954,10 +1032,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         snprintf(err, CP_ERRLEN, "yend column `%s` must be numeric", spec->yend.col);
         return -1;
     }
-    if (hasseg && !xec && !disc_x) {
+    if (hasseg && (main_ends ? !xec : !spec->xend.col) && !disc_x) {
         snprintf(err, CP_ERRLEN, "geom_segment() needs aes(xend=...)"); return -1;
     }
-    if (hasrect && !xec) {
+    if (hasrect && (main_ends ? !xec : !spec->xend.col)) {
         snprintf(err, CP_ERRLEN, "geom_rect() needs aes(xmin, xmax)"); return -1;
     }
     if (rect_top && !yec) {
@@ -1008,6 +1086,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             }
         } else {
             cf = factor_make(df, cc);
+            if (cc->type == COL_STR
+                && factor_union_layers(cf, df->nrow, spec, spec->colour.col, 0, err))
+                return -1;
             if (spec->colour.nlevels
                 && factor_relevel(cf, df->nrow, spec->colour.levels,
                                   spec->colour.nlevels, "colour/fill", err)) return -1;
@@ -1113,12 +1194,89 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             && factor_relevel(gf, df->nrow, spec->group.levels,
                               spec->group.nlevels, "group", err)) return -1;
     }
+    /* aes(linetype=): a discrete column mapped to dash patterns, ggplot2's
+     * linetype_pal() order, on the line geoms (line, smooth, segment). It
+     * partitions the series like colour= does. A level found only in a
+     * geom_segment(data=) file joins the scale, as colour levels do. */
+    Factor *ltf = NULL;
+    int lt_main = 0;              /* the main data carries the column */
+    static const int LT_DASH[] = { 0, 3, 4, 1, 2, 5, 6, 7 };   /* solid, 22, 42, 44, 13, 1343, 73, 2262 */
+    if (spec->linetype.col) {
+        int main_lines = 0, any_lines = 0;
+        for (int i = 0; i < spec->nlayers; i++) {
+            GeomType t = spec->layers[i].type;
+            if (t != GEOM_LINE && t != GEOM_SMOOTH && t != GEOM_SEGMENT) continue;
+            any_lines = 1;
+            if (!spec->layers[i].data) main_lines = 1;
+            else if (t == GEOM_LINE && !spec->layers[i].dash) {
+                snprintf(err, CP_ERRLEN, "aes(linetype=) on a geom_line(data=) layer "
+                         "is not implemented; give that layer a constant "
+                         "linetype=\"dashed\"");
+                return -1;
+            }
+        }
+        if (!any_lines) {
+            snprintf(err, CP_ERRLEN, "aes(linetype=) needs a geom_line(), "
+                     "geom_smooth() or geom_segment() layer");
+            return -1;
+        }
+        const Column *lc = df_col(df, spec->linetype.col);
+        if (!lc && main_lines) {
+            snprintf(err, CP_ERRLEN, "column `%s` not found", spec->linetype.col);
+            return -1;
+        }
+        if (lc && !spec->linetype.is_factor && lc->type == COL_NUM) {
+            snprintf(err, CP_ERRLEN, "aes(linetype=%s) is a numeric column; a "
+                     "linetype is discrete -- write factor(%s)",
+                     spec->linetype.col, spec->linetype.col);
+            return -1;
+        }
+        if (lc) { ltf = factor_make(df, lc); lt_main = 1; }
+        else {                    /* only layer files carry it: start empty */
+            ltf = cp_xcalloc(1, sizeof(Factor));
+            ltf->idx = cp_xmalloc((size_t)(df->nrow ? df->nrow : 1) * sizeof(int));
+            for (int r = 0; r < df->nrow; r++) ltf->idx[r] = -1;
+            ltf->levels = cp_xmalloc(sizeof(char *));
+        }
+        if ((!lc || lc->type == COL_STR)
+            && factor_union_layers(ltf, df->nrow, spec, spec->linetype.col, 1, err))
+            return -1;
+        if (spec->linetype.nlevels
+            && factor_relevel(ltf, df->nrow, spec->linetype.levels,
+                              spec->linetype.nlevels, "linetype", err)) return -1;
+        if (ltf->nlev > (int)(sizeof LT_DASH / sizeof *LT_DASH)) {
+            snprintf(err, CP_ERRLEN, "aes(linetype=%s) has %d levels; the linetype "
+                     "palette holds %d, as ggplot2's does before it repeats",
+                     spec->linetype.col, ltf->nlev,
+                     (int)(sizeof LT_DASH / sizeof *LT_DASH));
+            return -1;
+        }
+    }
     int ngf = gf ? gf->nlev : 1;
-    int nseries = (cf ? cf->nlev : 1) * ngf;
+    int nlt = ltf ? ltf->nlev : 1;
+    if (nlt < 1) nlt = 1;
+    int nseries = (cf ? cf->nlev : 1) * nlt * ngf;
     int *series = cp_xmalloc(df->nrow * sizeof(int));
     for (int r = 0; r < df->nrow; r++) {
         int ci = cf ? cf->idx[r] : 0, gi = gf ? gf->idx[r] : 0;
-        series[r] = (ci < 0 || gi < 0) ? -1 : ci * ngf + gi;
+        int ti = lt_main ? ltf->idx[r] : 0;
+        series[r] = (ci < 0 || gi < 0 || ti < 0) ? -1 : (ci * nlt + ti) * ngf + gi;
+    }
+    /* series s: colour pal[SER_COL(s)], dash LT_DASH[SER_LT(s)] */
+#define SER_COL(s) ((s) / (ngf * nlt))
+#define SER_LT(s) (((s) / ngf) % nlt)
+    /* ggplot2 merges two legends that map one variable with one title: a
+     * colour and linetype both on `stat` give ONE key of coloured dashes */
+    int lt_merge = 0, lt_keys[8] = {0};
+    if (ltf && cf && spec->colour.col && !strcmp(spec->colour.col, spec->linetype.col)
+        && cf->nlev == ltf->nlev
+        && !(spec->lab_linetype && (!spec->lab_colour
+                                    || strcmp(spec->lab_linetype, spec->lab_colour)))) {
+        lt_merge = 1;
+        for (int i = 0; i < cf->nlev; i++) {
+            if (strcmp(cf->levels[i], ltf->levels[i])) { lt_merge = 0; break; }
+            lt_keys[i] = LT_DASH[i];
+        }
     }
 
     /* aes(size=): numeric column mapped to point area (geom_point) */
@@ -1424,14 +1582,19 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     for (int li = 0; li < spec->nlayers; li++) {
         const Layer *L = &spec->layers[li];
         if (!L->data) continue;
-        if (L->type != GEOM_POINT && L->type != GEOM_JITTER && L->type != GEOM_LINE)
+        int is_txt = L->type == GEOM_TEXT || L->type == GEOM_LABEL;
+        if (L->type != GEOM_POINT && L->type != GEOM_JITTER && L->type != GEOM_LINE
+            && !is_txt)
             continue;
+        const char *gname = L->type == GEOM_LINE ? "geom_line"
+                          : L->type == GEOM_TEXT ? "geom_text"
+                          : L->type == GEOM_LABEL ? "geom_label" : "geom_point";
         if (genome_x) {
-            snprintf(err, CP_ERRLEN, "geom_%s(data=) is not implemented on a "
-                     "genomic x axis", L->type == GEOM_LINE ? "line" : "point");
+            snprintf(err, CP_ERRLEN, "%s(data=) is not implemented on a "
+                     "genomic x axis", gname);
             return -1;
         }
-        if (szc || shf) {
+        if (!is_txt && (szc || shf)) {
             snprintf(err, CP_ERRLEN, "a mapped size=/shape= and a layer data= "
                      "cannot be combined; the second file has no place on "
                      "those scales");
@@ -1439,8 +1602,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         }
         if (!layer_df[li] && !(layer_df[li] = df_read_csv(L->data, err)))
             return -1;
-        if (layer_frame_build(&layer_fr[li], layer_df[li], L,
-                              L->type == GEOM_LINE ? "geom_line" : "geom_point",
+        if (layer_frame_build(&layer_fr[li], layer_df[li], L, gname,
                               spec, ff, xf, disc_x, disc_y, cf, cont_col, err))
             return -1;
         has_fr[li] = 1;
@@ -1569,6 +1731,48 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             int q = layer_pan[li] ? layer_pan[li][r2] : -1;
             FOLD_X(q, ta); FOLD_X(q, tb);
             FOLD_Y(q, ua); FOLD_Y(q, ub);
+        }
+    }
+    /* A segment layer file trains the axes too, as ggplot2's does: a mean
+     * line from a summary table sitting past the raw points was clipped at
+     * the panel edge, so it silently vanished. xend/yend default to x/y,
+     * the reading the segment draw uses. */
+    for (int li = 0; li < spec->nlayers; li++) {
+        const Layer *L = &spec->layers[li];
+        if (L->type != GEOM_SEGMENT || !L->data || genome_x) continue;
+        if (!layer_df[li] && !(layer_df[li] = df_read_csv(L->data, err)))
+            return -1;
+        DataFrame *d2 = layer_df[li];
+        const Column *c_x = df_col(d2, spec->x.col);
+        const Column *c_xe = spec->xend.col ? df_col(d2, spec->xend.col) : NULL;
+        const Column *c_y = df_col(d2, L->ycol ? L->ycol : spec->y.col);
+        const Column *c_ye = spec->yend.col ? df_col(d2, spec->yend.col) : NULL;
+        if (!c_x || !c_y || c_x->type != COL_NUM || c_y->type != COL_NUM)
+            continue;                     /* the draw reports what is missing */
+        if (c_xe && c_xe->type != COL_NUM) c_xe = NULL;
+        if (c_ye && c_ye->type != COL_NUM) c_ye = NULL;
+        if (!layer_pan_done[li]) {
+            layer_pan[li] = layer_panel_idx(d2, spec, ff);
+            layer_pan_done[li] = 1;
+        }
+        for (int r2 = 0; r2 < d2->nrow; r2++) {
+            int q = layer_pan[li] ? layer_pan[li][r2] : -1;
+            double ys[2] = { c_y->num[r2], c_ye ? c_ye->num[r2] : c_y->num[r2] };
+            double xs[2] = { c_x->num[r2], c_xe ? c_xe->num[r2] : c_x->num[r2] };
+            for (int k = 0; k < 2; k++) {
+                if (isnan(ys[k])) continue;
+                double u = TY(ys[k]);
+                if (!isfinite(u)) { d_ref++; continue; }
+                if (u < lymin) lymin = u;
+                if (u > lymax) lymax = u;
+                FOLD_Y(q, u);
+                if (disc_x || isnan(xs[k])) continue;
+                double t = cp_logt(spec->log_x, xs[k]);
+                if (!isfinite(t)) { d_ref++; continue; }
+                if (t < lxmin) lxmin = t;
+                if (t > lxmax) lxmax = t;
+                FOLD_X(q, t);
+            }
         }
     }
 
@@ -2496,7 +2700,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         "x categories have no row; drawn in the missing-value "
                         "grey\n", o->data, miss, xf->nlev);
             Col *apal = cp_xmalloc(af->nlev * sizeof(Col));
-            hue_palette(af->nlev, apal);
+            if (annotation_palette(o, af, apal, err)) return -1;
             anns[nann].f = af; anns[nann].apal = apal; anns[nann].catlev = catlev;
             anns[nann].title = o->column ? o->column : val->name;
             nann++;
@@ -2610,7 +2814,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     /* Guides stack top-to-bottom: colour (or fill) first, then size — the
      * order ggplot uses for a point layer mapping both; annotation() bands
      * append one legend block each, titled by their value column. */
-    GTable *guides[3 + MAX_HMOBJS]; int nguide = 0;
+    GTable *guides[4 + MAX_HMOBJS]; int nguide = 0;   /* colour, size, linetype, shape, bands */
     if (cf) {
         pal = cp_xmalloc(cf->nlev * sizeof(Col));
         if (spec->identity_scale) {
@@ -2703,7 +2907,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 GTable *lg = build_legend(cr, th, bt, &pf, pc2,
                                    haspoint, hasline || hasseg || hasdens || hasrange,
                                    hasbox || hasbar || hascol || hasrect || hastile,
-                                   hastext, NULL, nc2, spec->legend_reverse, err);
+                                   hastext, NULL, nc2, spec->legend_reverse, NULL, err);
                 if (!lg) return -1;
                 /* inside the panels every block has its own panel to sit
                  * in whatever the grid shape; only the margin placement
@@ -2734,7 +2938,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             GTable *lg = build_legend(cr, th, col_title, cf, pal, haspoint,
                                hasline || hasseg || hasdens || hasrange,
                                hasbox || hasbar || hascol || hasrect || hastile,
-                               hastext, NULL, nc2, spec->legend_reverse, err);
+                               hastext, NULL, nc2, spec->legend_reverse,
+                               lt_merge ? lt_keys : NULL, err);
             if (!lg) return -1;
             guides[nguide++] = lg;
         }
@@ -2748,8 +2953,19 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         double srad[16];
         for (int i = 0; i < nf; i++) srad[i] = size_to_radius(sbr[i], szmin, szmax);
         int sdec = axis_decimals(sbr, nf);
-        const char *sz_title = spec->size.expr;
+        const char *sz_title = spec->lab_size ? spec->lab_size : spec->size.expr;
         guides[nguide++] = build_size_legend(cr, th, sz_title, sbr, srad, nf, sdec);
+    }
+    if (ltf && !lt_merge && !spec->no_legend_linetype && ltf->nlev > 0) {
+        /* a linetype key: black lines in each level's dash pattern */
+        Col *lpal = cp_xmalloc(ltf->nlev * sizeof(Col));
+        int *ldash = cp_xmalloc(ltf->nlev * sizeof(int));
+        for (int i = 0; i < ltf->nlev; i++) { lpal[i] = C_BLACK; ldash[i] = LT_DASH[i]; }
+        const char *lt_title = spec->lab_linetype ? spec->lab_linetype : spec->linetype.expr;
+        GTable *lg = build_legend(cr, th, lt_title, ltf, lpal, 0, 1, 0, 0, NULL, 1, 0,
+                                  ldash, err);
+        if (!lg) return -1;
+        guides[nguide++] = lg;
     }
     if (shf && !spec->no_legend_shape) {
         /* A shape legend keys the GLYPH, so its swatches are all one colour --
@@ -2757,15 +2973,15 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         Col *spal = cp_xmalloc(shf->nlev * sizeof(Col));
         int *sidx = cp_xmalloc(shf->nlev * sizeof(int));
         for (int i = 0; i < shf->nlev; i++) { spal[i] = C_BLACK; sidx[i] = i; }
-        const char *sh_title = spec->shape.expr;
-        GTable *lg = build_legend(cr, th, sh_title, shf, spal, 1, 0, 0, 0, sidx, 1, 0, err);
+        const char *sh_title = spec->lab_shape ? spec->lab_shape : spec->shape.expr;
+        GTable *lg = build_legend(cr, th, sh_title, shf, spal, 1, 0, 0, 0, sidx, 1, 0, NULL, err);
         if (!lg) return -1;
         guides[nguide++] = lg;
     }
     for (int a = 0; a < nann; a++)               /* annotation band keys */
         if (!spec->no_legend) {
             GTable *lg = build_legend(cr, th, anns[a].title, anns[a].f,
-                                      anns[a].apal, 0, 0, 1, 0, NULL, 1, 0, err);
+                                      anns[a].apal, 0, 0, 1, 0, NULL, 1, 0, NULL, err);
             if (!lg) return -1;
             guides[nguide++] = lg;
         }
@@ -3215,12 +3431,13 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                             m2++;
                         }
                     Col sc2 = L->has_color ? L->color
-                            : cf ? pal[grp / ngf] : C_BLACK;
+                            : cf ? pal[SER_COL(grp)] : C_BLACK;
                     if (L->type == GEOM_LINE && m2 >= 2) {
                         px[m2] = px[0]; py[m2] = py[0];   /* CLOSE the series */
                         g = gt_add(T, G_POLYLINE, R, C, R, C);
                         g->n = m2 + 1; g->px = px; g->py = py;
                         g->col = sc2; g->lw = LAYER_LW(L, 0.5); g->clip = 1;
+                        if (ltf && !L->dash) g->dash = LT_DASH[SER_LT(grp)];
                         g->alpha = L->alpha; g->dash = L->dash;
                     } else if (L->type == GEOM_POINT) {
                         Col *pc2 = cp_xmalloc(m2 * sizeof(Col));
@@ -3487,9 +3704,11 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         double *ly = cp_xmalloc(npt * sizeof(double));
                         for (int k = 0; k < npt; k++) { lx[k] = NPCX(ox[k]); ly[k] = NPCY(oy[k]); }
                         g->n = npt; g->px = lx; g->py = ly;
-                        g->col = SL->has_color ? SL->color : cf ? pal[grp / ngf] : C_BLACK;
+                        g->col = SL->has_color ? SL->color : cf ? pal[SER_COL(grp)] : C_BLACK;
                         g->lw = lw_pt(SL->line_lw > 0 ? SL->line_lw : 1.0);
-                        g->dash = SL->dash; g->alpha = SL->alpha; g->clip = 1;
+                        g->dash = SL->dash ? SL->dash
+                                : ltf ? LT_DASH[SER_LT(grp)] : 0;
+                        g->alpha = SL->alpha; g->clip = 1;
                     }
                     free(sx); free(sy); free(ox); free(oy);
                 }
@@ -3567,8 +3786,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     g = gt_add(T, G_POLYLINE, R, C, R, C);
                     g->n = np; g->px = px; g->py = py;
                     g->col = spec->layers[li].has_color ? spec->layers[li].color
-                           : cf ? pal[grp / ngf] : C_BLACK;
+                           : cf ? pal[SER_COL(grp)] : C_BLACK;
                     g->lw = LAYER_LW(&spec->layers[li], 0.5); g->clip = 1;
+                    if (ltf) g->dash = LT_DASH[SER_LT(grp)];
                 }
             } else if (gt == GEOM_ERRORBAR || gt == GEOM_LINERANGE) {
                 /* a vertical range per row, ymin..ymax at x; errorbar adds
@@ -3653,6 +3873,15 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     }
                 }
                 Col lcol = L->has_color ? L->color : C_BLACK;
+                /* a mapped linetype reads this file's column, matched to the
+                 * levels the scale was trained on (the union above) */
+                const Column *c_lt = ltf && !L->dash ? df_col(d2, spec->linetype.col) : NULL;
+                if (ltf && !L->dash && !c_lt) {
+                    snprintf(err, CP_ERRLEN, "geom_segment(data=%s): linetype column "
+                             "`%s` not in this file (or give the layer a constant "
+                             "linetype=)", L->data, spec->linetype.col);
+                    return -1;
+                }
                 for (int r2 = 0; r2 < d2->nrow; r2++) {
                     if (lpan && lpan[r2] != p) continue;
                     double off = genome_x ? genome_off(gs, c_chr->str[r2]) : 0;
@@ -3690,6 +3919,13 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                      * vertical/diagonal; the horizontal CBS default stays */
                     g->y1 = c_ye2 && !isnan(c_ye2->num[r2])
                           ? NPCY(TY(c_ye2->num[r2])) : g->y0;
+                    if (c_lt) {
+                        char lb[64];
+                        if (c_lt->type == COL_STR) snprintf(lb, sizeof lb, "%s", c_lt->str[r2]);
+                        else fmt_num(c_lt->num[r2], lb, sizeof lb);
+                        for (int k = 0; k < ltf->nlev; k++)
+                            if (!strcmp(lb, ltf->levels[k])) { g->dash = LT_DASH[k]; break; }
+                    }
                 }
             } else if (gt == GEOM_SEGMENT) {
                 /* one line per row: (x,y) -> (xend, yend); yend defaults to
@@ -3710,6 +3946,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                                      : TXR(r));
                     g->y0 = NPCY(TY(syc->num[r]));
                     g->y1 = NPCY(yec ? TY(yec->num[r]) : TY(yc->num[r]));
+                    if (lt_main && ltf->idx[r] >= 0) g->dash = LT_DASH[ltf->idx[r]];
                 }
             } else if (gt == GEOM_TILE) {
                 /* One filled cell per row, centred on (x, y). Cell size is 1 on
@@ -4001,10 +4238,21 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                  * read at all, and with factor(y) the label belongs at the
                  * factor slot, not the raw value. */
 #define TYR(r) (disc_y ? YVAL(r) : TY(yc->num[r]))
+                /* a geom_text(data=) layer draws its own file's rows,
+                 * through the same scales and colour levels */
+                const LayerFrame *F = has_fr[li] ? &layer_fr[li] : NULL;
+                int nsrc = F ? F->n : df->nrow;
+#define TOK(r) (F ? ((!F->pan || F->pan[r] == p) && !isnan(F->yc->num[r]) \
+                     && (F->xlev || !isnan(F->xc->num[r]))) \
+                  : (use[r] && (!ff || ff->idx[r] == p) \
+                     && !isnan(TXR(r)) && !isnan(TYR(r))))
+#define TXF(r) (F ? (F->xlev ? (double)((xmap ? xmap[F->xlev[r]] : F->xlev[r]) + 1) \
+                         : cp_logt(spec->log_x, F->xc->num[r])) : TXR(r))
+#define TYF(r) (F ? TY(F->yc->num[r]) : TYR(r))
+                const Column *tlab = F ? F->lab : labc;
                 int cap = 0;
-                for (int r = 0; r < df->nrow; r++)
-                    if (use[r] && (!ff || ff->idx[r] == p)
-                        && !isnan(TXR(r)) && !isnan(TYR(r))) cap++;
+                for (int r = 0; r < nsrc; r++)
+                    if (TOK(r)) cap++;
                 if (cap > 0) {
                     RLabel *rl = cp_xmalloc(cap * sizeof(RLabel));
                     const char **strs = cp_xmalloc(cap * sizeof(char *));
@@ -4012,20 +4260,19 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     double *px = cp_xmalloc(cap * sizeof(double)), *py = cp_xmalloc(cap * sizeof(double));
                     double bpad = (gt == GEOM_LABEL ? fs * 0.25 : 0) + PT_RADIUS * 0.6;
                     int m = 0;
-                    for (int r = 0; r < df->nrow; r++) {
-                        if (!use[r] || (ff && ff->idx[r] != p)) continue;
-                        if (isnan(TXR(r)) || isnan(TYR(r))) continue;
+                    for (int r = 0; r < nsrc; r++) {
+                        if (!TOK(r)) continue;
                         const char *s;
-                        if (labc->type == COL_STR) s = labc->str[r];
-                        else if (isnan(labc->num[r])) continue;   /* NA: no label */
-                        else { char *tmp = cp_xmalloc(32); fmt_num(labc->num[r], tmp, 32); s = tmp; }
+                        if (tlab->type == COL_STR) s = tlab->str[r];
+                        else if (isnan(tlab->num[r])) continue;   /* NA: no label */
+                        else { char *tmp = cp_xmalloc(32); fmt_num(tlab->num[r], tmp, 32); s = tmp; }
                         /* Blank and NA labels draw nothing at all -- no glyph and,
                          * for the repel geoms, no leader line. ggplot2/ggrepel drop
                          * them, and it is the only way to label a subset of points:
                          * otherwise a volcano labelling its top 8 of 230 hits gets
                          * ~220 leader lines radiating to empty strings. */
                         if (!s || !*s || !strcmp(s, "NA")) continue;
-                        double axp = NPCX(TXR(r)) * panelw_pt, ayp = NPCY(TYR(r)) * panelh_pt;
+                        double axp = NPCX(TXF(r)) * panelw_pt, ayp = NPCY(TYF(r)) * panelh_pt;
                         px[m] = axp; py[m] = ayp;
                         rl[m].hw = text_w(cr, fs, s) / 2 + bpad;
                         rl[m].hh = font_h(cr, fs) / 2 + bpad;
@@ -4041,6 +4288,11 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                          * (same colour as the tile). ggplot2 draws it black. */
                         cols[m] = L->has_color ? L->color
                                 : spec->colour.is_fill ? C_BLACK
+                                : F ? (F->lev ? pal[F->lev[r]]
+                                       : F->cc ? (isnan(F->cc->num[r]) ? C_NA
+                                                  : fill_map_value(&cscale, F->cc->num[r],
+                                                                   cdmin, cdmax))
+                                       : C_BLACK)
                                 : cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BLACK;
                         m++;
                     }
@@ -4073,6 +4325,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     }
                     free(rl); free(strs); free(cols); free(px); free(py);
                 }
+#undef TOK
+#undef TXF
+#undef TYF
 #undef TYR
             }
 
@@ -4081,10 +4336,14 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
              * produced. Done once here rather than in each geom branch, so a
              * new geom picks both up for free. Theme and axis grobs are built
              * outside this loop and are untouched. */
+            /* a constant linetype= beats a mapped one (ggplot2: a set
+             * aesthetic overrides the mapping), so the dash is stamped only
+             * when the layer has one; a mapped dash set above survives */
             if (spec->layers[li].alpha > 0 || spec->layers[li].dash) {
                 for (int gi = grob0; gi < T->ngrobs; gi++) {
                     T->grobs[gi].alpha = spec->layers[li].alpha;
-                    T->grobs[gi].dash = spec->layers[li].dash;
+                    if (spec->layers[li].dash)
+                        T->grobs[gi].dash = spec->layers[li].dash;
                 }
             }
         }
@@ -4130,6 +4389,16 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                       : an->vjust == 0 ? V_BOTTOM     /* text sits above y */
                       : an->vjust == 1 ? V_TOP        /* text hangs below y */
                       : V_INKCENTER;
+            } else if (an->kind == ANNO_POINT) {
+                /* one filled dot, geom_point's look: size= in ggplot's mm
+                 * units (1.5 = the geom_point default), black unless coloured */
+                double *qx = cp_xmalloc(sizeof(double)), *qy = cp_xmalloc(sizeof(double));
+                Col *qc = cp_xmalloc(sizeof(Col));
+                qx[0] = ax; qy[0] = ay;
+                qc[0] = an->has_color ? an->color : C_BLACK;
+                g = gt_add(T, G_POINTS, R, C, R, C);
+                g->n = 1; g->px = qx; g->py = qy; g->pcol = qc; g->clip = 1;
+                g->radius = an->size > 0 ? PT_RADIUS * an->size / 1.5 : PT_RADIUS;
             } else if (an->kind == ANNO_SEGMENT) {
                 g = gt_add(T, G_LINE, R, C, R, C);
                 g->col = an->has_color ? an->color : C_BLACK;

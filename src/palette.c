@@ -204,6 +204,7 @@ Col fill_map(const FillScale *fs, double t) {
 
 Col fill_map_value(const FillScale *fs, double v, double dmin, double dmax) {
     double t;
+    if (isnan(v) && fs->has_na) return fs->na;
     if (fs->kind == FILL_GRADIENT2) {
         /* midpoint maps to t = 0.5 (ggplot scale_fill_gradient2), each half
          * of the range stretched over its half of the ramp. The midpoint
@@ -274,4 +275,142 @@ Col stain_color(const char *s) {
     if (!strcmp(s, "gpos75")) { Col c = {0.376, 0.376, 0.376}; return c; }
     if (!strcmp(s, "gpos100")) { Col c = {0, 0, 0}; return c; }
     Col c = {0.502, 0.502, 0.502}; return c;                          /* gvar/stalk */
+}
+
+/* A categorical annotation band's colours, one per level of f. Each band
+ * owns its palette, as ComplexHeatmap's col=list(...) gives one per
+ * annotation: values=c(...) (keyed by level, or positional in level order),
+ * palette="Set2", or else the default hue ramp. A keyed list missing a level
+ * paints it NA grey with a warning, as scale_*_manual does; a positional
+ * list or a Brewer set running short is an error, never a silent grey tail.
+ * Heatmap-mode and grammar-mode bands both come through here. */
+int annotation_palette(const HMObj *o, const Factor *f, Col *pal, char *err) {
+    if (o->palette) {
+        Col stops[BREWER_MAX_STOPS]; int nst, qual;
+        if (brewer_lookup(o->palette, stops, &nst, &qual) || !qual) {
+            snprintf(err, CP_ERRLEN, "annotation `%s` is categorical: palette=\"%s\" "
+                     "is a continuous ramp; give a qualitative set (Set1, Set2, Set3, "
+                     "Dark2, Paired, Accent, Pastel1, Pastel2)", o->data, o->palette);
+            return -1;
+        }
+        if (f->nlev > nst) {
+            snprintf(err, CP_ERRLEN, "annotation `%s`: palette `%s` has %d colours; "
+                     "the band has %d levels (give values=c(...) instead)",
+                     o->data, o->palette, nst, f->nlev);
+            return -1;
+        }
+        for (int l = 0; l < f->nlev; l++) pal[l] = stops[l];
+        return 0;
+    }
+    Col *vals = o->values; char **names = o->value_names; int nv = o->nvalues;
+    if (o->values_file) {
+        /* first column the level, second the colour; keyed, so no cap */
+        DataFrame *d = df_read_csv(o->values_file, err);
+        if (!d) return -1;
+        if (d->ncol < 2 || d->cols[1].type != COL_STR) {
+            snprintf(err, CP_ERRLEN, "annotation(values=\"%s\"): wants two columns, "
+                     "level then colour (a name or #RRGGBB)", o->values_file);
+            return -1;
+        }
+        nv = d->nrow;
+        vals = cp_xmalloc((nv ? nv : 1) * sizeof(Col));
+        names = cp_xmalloc((nv ? nv : 1) * sizeof(char *));
+        for (int r = 0; r < nv; r++) {
+            char lb[64];
+            const Column *k = &d->cols[0];
+            if (k->type == COL_STR) names[r] = k->str[r];
+            else { fmt_num(k->num[r], lb, sizeof lb); names[r] = cp_xstrdup(lb); }
+            if (parse_color(d->cols[1].str[r], &vals[r])) {
+                snprintf(err, CP_ERRLEN, "annotation(values=\"%s\"): row %d: `%s` "
+                         "is not a colour", o->values_file, r + 2, d->cols[1].str[r]);
+                return -1;
+            }
+        }
+        if (nv == 0) {
+            snprintf(err, CP_ERRLEN, "annotation(values=\"%s\") has no rows",
+                     o->values_file);
+            return -1;
+        }
+    }
+    if (!vals) { hue_palette(f->nlev, pal); return 0; }
+    if (names[0] == NULL) {
+        if (f->nlev > nv) {
+            snprintf(err, CP_ERRLEN, "annotation `%s`: values= gives %d colours; "
+                     "the band has %d levels", o->data, nv, f->nlev);
+            return -1;
+        }
+        for (int l = 0; l < f->nlev; l++) pal[l] = vals[l];
+        return 0;
+    }
+    for (int l = 0; l < f->nlev; l++) {
+        pal[l] = C_NA;
+        int hit = 0;
+        for (int k = 0; k < nv && !hit; k++)
+            if (names[k] && !strcmp(names[k], f->levels[l])) {
+                pal[l] = vals[k]; hit = 1;
+            }
+        if (!hit)
+            fprintf(stderr, "cinderplot: warning: annotation `%s`: level `%s` has no "
+                    "colour in values=; drawn NA grey\n", o->data, f->levels[l]);
+    }
+    return 0;
+}
+
+/* The named continuous ramps a numeric annotation band may take, spelled as
+ * the scale_fill_<name>() verbs spell them. */
+static const struct { const char *name; FillKind kind; } ANN_RAMPS[] = {
+    {"viridis", FILL_VIRIDIS}, {"magma", FILL_MAGMA}, {"inferno", FILL_INFERNO},
+    {"plasma", FILL_PLASMA}, {"cividis", FILL_CIVIDIS}, {"rocket", FILL_ROCKET},
+    {"mako", FILL_MAKO}, {"parula", FILL_PARULA}, {"turbo", FILL_TURBO},
+    {"coolwarm", FILL_COOLWARM}, {"bwr", FILL_BWR}, {"jet", FILL_JET},
+};
+
+int annotation_palette_name_ok(const char *name) {
+    Col stops[BREWER_MAX_STOPS]; int nst, qual;
+    for (size_t i = 0; i < sizeof ANN_RAMPS / sizeof *ANN_RAMPS; i++)
+        if (!strcmp(name, ANN_RAMPS[i].name)) return 1;
+    return !brewer_lookup(name, stops, &nst, &qual);
+}
+
+/* A numeric annotation band's colour ramp. Default viridis, as before.
+ * palette= takes a named ramp (bwr, parula, magma, ...) or a sequential/
+ * diverging ColorBrewer name (stops low to high as RColorBrewer lists
+ * them); values=c("#2166ac", "white", "#b2182b") spreads 2..12 colours
+ * evenly over the band's range, ggplot2's scale_fill_gradientn(colours=). */
+int annotation_ramp(const HMObj *o, FillScale *fs, char *err) {
+    memset(fs, 0, sizeof *fs);
+    fs->kind = FILL_VIRIDIS;
+    if (o->values_file || (o->values && o->value_names[0])) {
+        snprintf(err, CP_ERRLEN, "annotation `%s` is numeric: values= takes "
+                 "unnamed colours spread over its range, "
+                 "values=c(\"#2166ac\", \"white\", \"#b2182b\")", o->data);
+        return -1;
+    }
+    if (o->values) {
+        if (o->nvalues < 2 || o->nvalues > BREWER_MAX_STOPS) {
+            snprintf(err, CP_ERRLEN, "annotation `%s` is numeric: values= takes "
+                     "2 to %d colours for its ramp, not %d", o->data,
+                     BREWER_MAX_STOPS, o->nvalues);
+            return -1;
+        }
+        fs->kind = FILL_BREWER;
+        for (int i = 0; i < o->nvalues; i++) fs->stops[i] = o->values[i];
+        fs->nstops = o->nvalues;
+        return 0;
+    }
+    if (!o->palette) return 0;
+    for (size_t i = 0; i < sizeof ANN_RAMPS / sizeof *ANN_RAMPS; i++)
+        if (!strcmp(o->palette, ANN_RAMPS[i].name)) {
+            fs->kind = ANN_RAMPS[i].kind;
+            return 0;
+        }
+    int qual;
+    if (brewer_lookup(o->palette, fs->stops, &fs->nstops, &qual) == 0 && !qual) {
+        fs->kind = FILL_BREWER;
+        return 0;
+    }
+    snprintf(err, CP_ERRLEN, "annotation `%s` is numeric: palette=\"%s\" is a "
+             "qualitative set; give a ramp (viridis, bwr, parula, magma, ..., "
+             "or a ColorBrewer ramp such as RdBu, Blues)", o->data, o->palette);
+    return -1;
 }

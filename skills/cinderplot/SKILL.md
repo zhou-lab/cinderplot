@@ -64,10 +64,15 @@ cinderplot data.csv -x hp -y mpg -c cyl -f gear out.pdf      # shortcut flags
   figure can combine several files. It is a keyword, never positional
   (`heatmap("f.tsv", ...)` is an error). Accepted on `heatmap()`, on every track
   verb, and on `geom_point()`/`geom_jitter()`/`geom_line()`/`geom_segment()`/
-  `geom_rect()`; other geoms share the leading source. A layer file is read
-  through the top-level `aes()` column names, so
+  `geom_rect()`/`geom_text()`/`geom_label()`; other geoms share the leading
+  source. A layer file is read through the top-level `aes()` column names, so
   `aes(x, beta, colour=g) + geom_point() + geom_line(data="smooth.tsv")` wants
-  `x`, `beta` and `g` in both files. So a grid of panels is `f1.tsv + heatmap(name="a") +
+  `x`, `beta` and `g` in both files; `geom_text(data="n.tsv")` also wants the
+  `label=` column there (the main data then needs it only if another text
+  layer draws from it), and `xend`/`yend` may live in a segment file alone.
+  **A discrete colour scale is trained over every layer**, as in ggplot2: a
+  level found only in a layer file (`mean`, `median`) joins the legend, and
+  `levels=` may name it. So a grid of panels is `f1.tsv + heatmap(name="a") +
   heatmap(data="f2.tsv", right_of("a"), name="b")`. A `geom_rect(data=)` file
   holding all four corner columns (x/xend + y/yend) draws one rect per row,
   with a mapped colour/fill read from that file through the same scale as the
@@ -115,6 +120,16 @@ and ignored (the output path is a command-line argument here).
   ggplot2: past that the glyphs stop being tellable apart, so it errors rather
   than inventing a seventh. Needs a point layer. A value is a bare column name
   or `factor(col[, levels=c(...)])`.
+- **`aes(linetype=col)`** maps a discrete column to dash patterns on
+  `geom_line()`, `geom_smooth()` and `geom_segment()`, in ggplot2's
+  `linetype_pal()` order (solid, "22", "42", "44", "13", "1343", "73",
+  "2262"; eight levels at most), with its own legend titled by
+  `labs(linetype=)` and dropped by `guides(linetype="none")`. Like colour=
+  it splits the series. Mapped to the same column as colour=, the two keys
+  merge into one of coloured dashes, as in ggplot2. A `geom_segment(data=)`
+  file may carry the column alone, and its levels join the scale; a
+  `geom_line(data=)` layer takes a constant `linetype=` instead. A layer's
+  constant `linetype=` overrides the mapping.
 - **`aes(group=col)`** partitions the rows into series for `geom_line()` and
   `geom_smooth()` WITHOUT touching colour or the legend, as in ggplot2 — five
   reconstructions in one colour, each its own line or loess fit, with no
@@ -132,7 +147,9 @@ and ignored (the output path is a command-line argument here).
   x-axis units (default 0.9 of the x resolution, as ggplot2). Both follow
   `coord_flip()`, log axes and facets; a bound that is not positive on a log
   axis drops that row with a stderr note.
-- **layer options**: `size=`, `alpha=`, `linetype="solid"|"dashed"|"dotted"`,
+- **layer options**: `size=`, `alpha=`, `linetype="solid"|"dashed"|"dotted"`
+  (a constant per layer — `geom_segment(data="median.tsv", linetype="dashed")`
+  is the dashed-median idiom),
   `linewidth=` (`size=` is its pre-3.4 alias) on every stroke geom — line,
   smooth, segment, hline/vline/abline, errorbar/linerange — in ggplot
   linewidth units (0.5 is `geom_line()`'s default, 1 is `geom_smooth()`'s;
@@ -170,7 +187,9 @@ and ignored (the output path is a command-line argument here).
   as in ggplot2; `aes(group=)` partitions further without a legend.
 - `annotate("text", x=, y=, label=[, colour=][, size=][, hjust=][, vjust=])`
   places one literal mark, ggplot2's verb — also `"segment"` (x/y/xend/yend)
-  and `"rect"` (xmin/xmax/ymin/ymax; colour= sets the fill, default grey85).
+  and `"rect"` (xmin/xmax/ymin/ymax; colour= sets the fill, default grey85),
+  and `"point"` (x/y only; a filled dot, `size=` in geom_point units, default
+  1.5 — the operating point on a ROC curve).
   `hjust`/`vjust` anchor the text as in ggplot (0.5 default = centred on the
   point; `hjust=0, vjust=0` starts the text at x and rests it above y — the
   reference-line-label placement); vjust takes 0/0.5/1. `angle=` rotates the
@@ -239,7 +258,9 @@ for.
   `facet_grid(row ~ col[, scales=])`, `coord_flip()`, `guides(colour="none")`
   (per aesthetic: `guides(size="none")` keeps the colour key; `--no-legend`
   and `theme(legend.position="none")` drop them all), `labs()`/`xlab()`/`ylab()`/`ggtitle()` — `labs()` also
-  takes `subtitle=` (under the title) and `caption=` (bottom right) — and
+  takes `subtitle=` (under the title), `caption=` (bottom right), and
+  `shape=`/`size=`/`linetype=` (those legends' titles, which otherwise print the `aes()`
+  text, `factor(call)` and all) — and
   `theme_{gray,bw,minimal,classic,void,linedraw,light,dark,few}()`. Every
   theme selector takes `base_line_size=` (ggplot's own argument): the width
   of the chrome lines — border, axis line, grid, ticks, heatmap/track
@@ -259,8 +280,9 @@ for.
   The file's first column names the x categories; `column=` picks the value
   column (default: the last). Needs a discrete x; a category with no row
   warns and draws in the missing-value grey; repeat the verb to stack
-  several bands. Placements (`left_of()` etc.) are heatmap-mode and error
-  here.
+  several bands. Each band takes its own colours with `values=` or
+  `palette=`, exactly as in heatmap mode (below). Placements (`left_of()`
+  etc.) are heatmap-mode and error here.
 
 `ncol=`/`nrow=` fix the grid shape; give both and a grid too small for the
 panels is an error. Worth reaching for whenever the panels cross two factors —
@@ -313,6 +335,10 @@ factor order) and `scales="free_colour"` (a facet_wrap extension).
 Crowded discrete tick labels **rotate automatically** (45°, then 90°) when the
 measured labels do not fit the panel. Override with `scale_x_discrete(angle=N)`
 or `scale_y_discrete(angle=N)`, `0..90`; `angle=0` forces horizontal.
+`scale_x_continuous(angle=N)` leans a numeric axis the same way (never
+automatically) — the case of category names put on a numeric x with
+`breaks=`/`labels=c(...)`. Only the bottom axis leans: `scale_y_*(angle=)`
+is an error unless `coord_flip()` puts y at the bottom.
 
 There is **no category limit** on a discrete axis. Omitting `--size` fits the
 canvas to the figure (panels, categories, label lengths) rather than defaulting
@@ -332,7 +358,12 @@ cinderplot 'm.tsv + heatmap(name="m", cluster=both, rownames=right)
 Input is a **wide matrix** (first column may be row names). Placements are
 `top_of` / `beneath` / `left_of` / `right_of`, each taking an anchor name plus
 `pad=`/`width=`/`height=` (both size keys work on any placement — the one the
-placement would otherwise inherit from its anchor included). The first placed object must be a `heatmap()`.
+placement would otherwise inherit from its anchor included). **Their unit is a
+fraction of the first heatmap**: `height=` of its height, `width=` of its
+width, not inches. So `top_of("m", height=0.03)` is a thin bar, and
+`height=0.15` on a 6-inch-tall heatmap is about an inch. The sizes go inside
+the placement; a bare `annotation(..., height=0.03)` is an error saying so.
+The first placed object must be a `heatmap()`.
 `rownames=` takes `left|right|none` and `colnames=` takes `top|bottom|none`
 (`off`/`hide` also read as `none`); **both default to none**, so a heatmap with
 no `colnames=` renders that axis unlabelled. Clustering is hclust ward.D2,
@@ -340,11 +371,33 @@ matching R. `annotation()` takes `column=` to pick
 which column colours the bar (default: the last). Its rows are matched to the
 matrix by the first (name) column when that column is text and every name is
 found; a file with no name column is taken in matrix order, and a partial match
-is an error naming the first unknown key. An annotation may be anchored
+is an error naming the first unknown key. **Each categorical band owns its
+palette**, as ComplexHeatmap's `col = list(...)` gives one per annotation:
+`values=c(AML="#e41a1c", APL="#ff7f00")` keys colours by level (a level
+left out warns and draws NA grey), `values=c("#e41a1c", "#ff7f00")` assigns
+them in level order (fewer colours than levels is an error), and
+`palette="Set2"` takes a qualitative ColorBrewer set, and
+`values="colours.tsv"` reads (level, colour) rows from a file — no cap, for a
+200-level Cancer Type band. With none of these, a band uses the default hue
+ramp, so several bands repeat the same colours for unrelated levels.
+`scale_fill_manual()` colours the heatmap, not the bands. **A numeric band**
+draws viridis by default; `palette=` takes any ramp (`bwr`, `parula`,
+`magma`, ... or a ColorBrewer ramp such as `RdBu`, listed low to high) and
+`values=c("#2166ac", "white", "#b2182b")` spreads 2–12 colours over its range
+(ggplot2's `gradientn`). A qualitative set on a numeric band, or a ramp on a
+categorical one, is an error naming the mismatch.
+`title.side=left` (or `right`) puts a horizontal band's `title=` beside it at
+the row-name size, wheatmap's `label.side="l"`, so a stack of thin bars stays
+compact; the default sits it above.
+An annotation may be anchored
 by its data column name, e.g. `legend(right_of("diagnosis"))`. **One object per
 slot**: a second `left_of("m")` errors and says which object holds the slot —
 chain the next one off that object (`dendrogram(left_of("dx"))`), as the
-example above does; legends are exempt and stack.
+example above does; legends are exempt and stack. The `right_of`/`left_of`
+legends stack down that side, centred on the canvas, and auto-fit makes the
+canvas tall enough for the stack (a small matrix with three keys grows
+taller rather than cutting the end keys); an explicit `--size` too short for
+it is kept, with a warning naming the side.
 
 `labs(x=)`/`labs(y=)` name the axes; `labs(title=)` titles the figure, and
 `title=` on a placed object names *that panel* — which is how a stack of
@@ -381,6 +434,18 @@ form of the same verb boxes a `matrix()` track row — see mode 3.)
 `scale_fill_*(limits=c(lo,hi))` pins the fill domain, so several figures (a
 multi-page grid, say) share one ramp; out-of-range values squish to the ends
 and the colourbar shows the pinned range.
+`scale_fill_*(na.value="white")` (ggplot2's argument, on the continuous fill
+scales and distiller) paints missing cells that colour instead of grey.
+
+`colsplit="grp"` / `rowsplit="lin"` on `heatmap()` split it into blocks:
+each names a categorical annotation on that heatmap (its `name=` or column;
+`top_of`/`beneath` for columns, `left_of`/`right_of` for rows), and a white
+gap of `gap=` points (default 2) is drawn at every change of its level, across
+the heatmap and every band stacked with it — ComplexHeatmap's
+`column_split` + `column_gap`. The gap covers the edges of the cells beside
+it rather than moving them, so it suits many narrow columns. Order the
+columns by the group first (`cluster=none`); a level that falls in two runs
+gets two blocks and a warning.
 
 `cluster=` takes `rows cols both none diagonal symmetric` (`off` = `none`). The
 last two are for a **confusion matrix**, where the axes share a vocabulary and
@@ -791,7 +856,8 @@ statistical transformations beyond binning, density and loess.
    caps at 64 levels for the same reason. There is no discrete-category or legend-level cap any
    more. Still hard limits: 8 layers, 12 tracks, 16 heatmap objects, 256
    breaks/labels. A legend stack taller than the figure grows the auto-fit
-   canvas; under an explicit `--size` it warns before clipping.
+   canvas, in grammar and heatmap mode alike; under an explicit `--size` it
+   warns before clipping.
 8. **`coord_flip()` is grammar-mode only** — it errors with `scale_x_genome()`
    and `ideogram()`, and is ignored in heatmap and track modes.
 9. **A dense scatter is the one slow case — use `geom_point(raster=TRUE)`.**

@@ -230,7 +230,7 @@ static int parse_aes(P *p, PlotSpec *spec) {
      * fill= is colour). A second mapping onto an occupied slot used to win
      * silently -- aes(x=hp, xmin=wt) plotted wt -- so remember which key
      * claimed each slot and refuse the collision, naming both. */
-    const char *claimed[11] = {0};
+    const char *claimed[12] = {0};
     skip_ws(p);
     if (*p->s == ')') { p->s++; return 0; }
     for (;;) {
@@ -258,13 +258,14 @@ static int parse_aes(P *p, PlotSpec *spec) {
                 spec->colour.is_fill = key[0] == 'f';
             }
             else if (!strcmp(key, "group")) { e = &spec->group; slot = 10; }
-            else if (!strcmp(key, "linetype") || !strcmp(key, "alpha")
+            else if (!strcmp(key, "linetype")) { e = &spec->linetype; slot = 11; }
+            else if (!strcmp(key, "alpha")
                      || !strcmp(key, "weight") || !strcmp(key, "linewidth"))
                 return fail(p, "aes(%s=...) is not implemented as a mapping; a "
                             "discrete colour= groups lines and sets the legend, "
-                            "group= groups without a legend, and linetype=/alpha=/"
+                            "group= groups without a legend, and alpha=/"
                             "linewidth= are per-layer constants (geom_line(linewidth=0.3))", key);
-            else return fail(p, "aes(%s=...) is not implemented; supported: x, y, xend, yend, ymin, ymax, label, size, shape, group, chrom, colour, fill", key);
+            else return fail(p, "aes(%s=...) is not implemented; supported: x, y, xend, yend, ymin, ymax, label, size, shape, linetype, group, chrom, colour, fill", key);
         } else {
             /* positional: the first unclaimed of x, y -- R's matching, so
              * aes(x=factor(g), v) puts v on y */
@@ -322,7 +323,10 @@ static int parse_labs(P *p, PlotSpec *spec) {
         else if (!strcmp(key, "y")) spec->lab_y = val;
         else if (!strcmp(key, "colour") || !strcmp(key, "color")) spec->lab_colour = val;
         else if (!strcmp(key, "fill")) spec->lab_fill = val;
-        else return fail(p, "labs(%s=...) is not implemented; supported: title, subtitle, caption, x, y, colour, fill", key);
+        else if (!strcmp(key, "shape")) spec->lab_shape = val;
+        else if (!strcmp(key, "size")) spec->lab_size = val;
+        else if (!strcmp(key, "linetype")) spec->lab_linetype = val;
+        else return fail(p, "labs(%s=...) is not implemented; supported: title, subtitle, caption, x, y, colour, fill, shape, size, linetype", key);
         free(key);
         skip_ws(p);
         if (*p->s == ',') { p->s++; continue; }
@@ -748,9 +752,13 @@ static int hm_opt_ok(HMType t, const char *key) {
     if (!strcmp(key, "name")) return 1;
     if (!strcmp(key, "title")) return t != HM_DENDROGRAM;
     if (!strcmp(key, "data")) return t == HM_HEATMAP || t == HM_ANNOTATION;
-    if (!strcmp(key, "column")) return t == HM_ANNOTATION;
+    if (!strcmp(key, "column") || !strcmp(key, "values") || !strcmp(key, "palette")
+        || !strcmp(key, "title.side") || !strcmp(key, "title_side"))
+        return t == HM_ANNOTATION;
     if (!strcmp(key, "cluster") || !strcmp(key, "rownames") || !strcmp(key, "colnames")
-        || !strcmp(key, "aspect") || !strcmp(key, "discrete")) return t == HM_HEATMAP;
+        || !strcmp(key, "aspect") || !strcmp(key, "discrete")
+        || !strcmp(key, "colsplit") || !strcmp(key, "rowsplit")
+        || !strcmp(key, "gap")) return t == HM_HEATMAP;
     if (!strcmp(key, "labels") || !strcmp(key, "box") || !strcmp(key, "grid"))
         return t == HM_HEATMAP || t == HM_ANNOTATION;
     if (!strcmp(key, "missing")) return t == HM_LEGEND;
@@ -759,12 +767,17 @@ static int hm_opt_ok(HMType t, const char *key) {
 static const char *hm_opt_menu(HMType t) {
     switch (t) {
     case HM_HEATMAP: return "name=, data=, title=, cluster=, rownames=, colnames=, "
-                            "labels=, discrete=, aspect=, box=, grid=, placements";
-    case HM_ANNOTATION: return "name=, data=, title=, column=, labels=, box=, grid=, placements";
+                            "labels=, discrete=, aspect=, box=, grid=, colsplit=, "
+                            "rowsplit=, gap=, placements";
+    case HM_ANNOTATION: return "name=, data=, title=, title.side=, column=, values=, "
+                               "palette=, labels=, box=, grid=, placements";
     case HM_LEGEND: return "name=, title=, missing=, placements (e.g. right_of(\"m\"))";
     default: return "name=, placements (e.g. left_of(\"m\"))";
     }
 }
+
+static int parse_colour_values(P *p, Col *cols, char **names, int cap, int *n,
+                               const char *what);
 
 /* heatmap(...) / annotation(file, ...) / legend(...) argument list */
 static int parse_hm_args(P *p, HMObj *o, int want_data) {
@@ -779,6 +792,13 @@ static int parse_hm_args(P *p, HMObj *o, int want_data) {
             if (parse_place(p, key, &o->place)) return -1;
         } else if (key && *p->s == '=') {
             p->s++;
+            if (!strcmp(key, "width") || !strcmp(key, "height") || !strcmp(key, "pad"))
+                /* the size belongs to the placement, and its unit is not
+                 * inches -- both were guesses the bare-option error left
+                 * the reader to make */
+                return fail(p, "%s= goes inside the placement, e.g. top_of(\"m\", "
+                            "height=0.03); width=/height=/pad= are fractions of the "
+                            "first heatmap's width/height, not inches", key);
             if (!hm_opt_ok(o->type, key)) {
                 char msg[CP_ERRLEN];
                 const char *where = hm_opt_ok(HM_HEATMAP, key) && hm_opt_ok(HM_ANNOTATION, key)
@@ -824,6 +844,59 @@ static int parse_hm_args(P *p, HMObj *o, int want_data) {
                 char *v = string_lit(p);
                 if (!v) return fail(p, "column= expects a quoted column name", "");
                 o->column = v;
+            } else if (!strcmp(key, "colsplit") || !strcmp(key, "rowsplit")) {
+                char *v = string_lit(p);
+                if (!v || !*v)
+                    return fail(p, "%s= names an annotation on this heatmap, e.g. "
+                                "colsplit=\"group\"", key);
+                if (key[0] == 'c') o->colsplit = v; else o->rowsplit = v;
+            } else if (!strcmp(key, "gap")) {
+                char *end;
+                double v = strtod(p->s, &end);
+                if (end == p->s || !(v > 0) || !isfinite(v))
+                    return fail(p, "gap= expects a positive width in points", "");
+                p->s = end;
+                o->gap = v;
+            } else if (!strcmp(key, "title.side") || !strcmp(key, "title_side")) {
+                char *v = word(p);
+                if (v && !strcmp(v, "left")) o->title_side = SIDE_LEFT;
+                else if (v && !strcmp(v, "right")) o->title_side = SIDE_RIGHT;
+                else if (v && !strcmp(v, "top")) o->title_side = SIDE_NONE;
+                else return fail(p, "title.side= takes left, right or top", "");
+            } else if (!strcmp(key, "values")) {
+                /* this band's own colours, spelled as scale_fill_manual's */
+                skip_ws(p);
+                if (is_quote(p)) {
+                    /* values="colours.tsv": a (level, colour) table, for a
+                     * band with more levels than a c(...) list holds */
+                    o->values_file = string_lit(p);
+                    if (!o->values_file || !*o->values_file)
+                        return fail(p, "values= expects c(...) or a quoted "
+                                    "(level, colour) file path", "");
+                    goto next_opt;
+                }
+                if (p->s[0] == 'c' && p->s[1] == '(') p->s += 2;
+                else return fail(p, "values= expects c(\"level\"=\"#..\", ...), "
+                                 "c(\"#..\", ...) or \"colours.tsv\"", "");
+                o->values = cp_xmalloc(MAX_MANUAL_COLS * sizeof(Col));
+                o->value_names = cp_xmalloc(MAX_MANUAL_COLS * sizeof(char *));
+                if (parse_colour_values(p, o->values, o->value_names, MAX_MANUAL_COLS,
+                                        &o->nvalues, "annotation(values=c(...))"))
+                    return -1;
+                if (o->nvalues == 0)
+                    return fail(p, "annotation(values=c()) is empty", "");
+            } else if (!strcmp(key, "palette")) {
+                char *v = string_lit(p);
+                if (!v) return fail(p, "palette= expects a quoted name, e.g. "
+                                    "palette=\"Set2\" or palette=\"bwr\"", "");
+                /* which kind fits -- a qualitative set for a categorical
+                 * band, a ramp for a numeric one -- is known once the file
+                 * is read; here only the name is checked */
+                if (!annotation_palette_name_ok(v))
+                    return fail(p, "unknown palette `%s`: a ColorBrewer name (Set2, "
+                                "Dark2, RdBu, Blues, ...) or a ramp (viridis, bwr, "
+                                "parula, magma, ...)", v);
+                o->palette = v;
             } else if (!strcmp(key, "title")) {
                 char *v = string_lit(p);
                 if (!v) return fail(p, "title= expects a quoted string", "");
@@ -958,12 +1031,19 @@ static int parse_hm_args(P *p, HMObj *o, int want_data) {
                 return fail(p, "unexpected argument near \"%.20s\"", save);
             o->data = v;
         }
+    next_opt:
         skip_ws(p);
         if (*p->s == ',') { p->s++; continue; }
         if (expect(p, ')')) return -1;
         break;
     }
 done:
+    if (o->gap > 0 && !o->colsplit && !o->rowsplit)
+        return fail(p, "gap= sizes the colsplit=/rowsplit= separators; give one", "");
+    if (o->title_side && !o->title)
+        return fail(p, "title.side= places title=; give the title too", "");
+    if ((o->values || o->values_file) && o->palette)
+        return fail(p, "annotation() takes values= or palette=, not both", "");
     if (want_data && !o->data && o->type == HM_ANNOTATION)
         return fail(p, "annotation() needs a data file: annotation(groups.csv, top_of(\"name\"))", "");
     return 0;
@@ -1025,6 +1105,13 @@ static int parse_grad_scale(P *p, FillScale *fs, const char *k, const char *fn) 
         } else if (!strcmp(key, "limits")) {         /* c(lo, hi) — domain + squish */
             if (parse_lim_pair(p, "limits=", &fs->lim_lo, &fs->lim_hi)) return -1;
             fs->has_limits = 1;
+        } else if (!strcmp(key, "na.value")) {
+            /* ggplot2's na.value: what a missing cell is painted. "white"
+             * turns NA spacer columns into true gaps. */
+            char *v = string_lit(p);
+            if (!v || parse_color(v, &fs->na))
+                return fail(p, "na.value= expects a quoted colour", "");
+            fs->has_na = 1;
         } else {
             char *v = string_lit(p); Col c;
             if (!v || parse_color(v, &c))
@@ -1082,8 +1169,13 @@ static int parse_distiller(P *p, FillScale *fs) {
             if (!(fs->lim_lo < fs->lim_hi))
                 return fail(p, "limits= expects lo < hi", "");
             fs->has_limits = 1;
+        } else if (!strcmp(key, "na.value")) {
+            char *v = string_lit(p);
+            if (!v || parse_color(v, &fs->na))
+                return fail(p, "na.value= expects a quoted colour", "");
+            fs->has_na = 1;
         } else return fail(p, "scale_*_distiller option `%s` not implemented "
-                           "(palette=, direction=, limits=)", key);
+                           "(palette=, direction=, limits=, na.value=)", key);
         skip_ws(p);
         if (*p->s == ',') { p->s++; skip_ws(p); }
     }
@@ -1373,7 +1465,8 @@ static int parse_term(P *p, PlotSpec *spec) {
              * take them too. */
             int se = (gt == GEOM_SEGMENT || gt == GEOM_RECT
                       || gt == GEOM_POINT || gt == GEOM_JITTER
-                      || gt == GEOM_LINE);
+                      || gt == GEOM_LINE || gt == GEOM_TEXT
+                      || gt == GEOM_LABEL);
             while (*p->s != ')') {
                 char *key = ident(p);
                 skip_ws(p);
@@ -1738,8 +1831,17 @@ static int parse_term(P *p, PlotSpec *spec) {
                     return fail(p, "expand= values must be >= 0", "");
                 if (isx) { spec->x_exp_mult = m2; spec->x_exp_add = a2; spec->has_x_expand = 1; }
                 else     { spec->y_exp_mult = m2; spec->y_exp_add = a2; spec->has_y_expand = 1; }
+            } else if (!strcmp(key, "angle")) {
+                /* tilted tick text on a numeric axis: a jittered strip plot
+                 * puts category names on a continuous x through labels=c(),
+                 * and long names need the lean the discrete scale has */
+                double v = strtod(p->s, (char **)&p->s);
+                if (!(v >= 0 && v <= 90))
+                    return fail(p, "angle= must be between 0 and 90", "");
+                if (isx) spec->x_angle = v; else spec->y_angle = v;
             } else return fail(p, "scale_*_continuous option `%s` not implemented "
-                               "(labels=percent, labels=c(...), limits=, breaks=, expand=)", key);
+                               "(labels=percent, labels=c(...), limits=, breaks=, expand=, "
+                               "angle=)", key);
             skip_ws(p);
             if (*p->s == ',') { p->s++; skip_ws(p); }
         }
@@ -1821,9 +1923,12 @@ static int parse_term(P *p, PlotSpec *spec) {
         Annotate *a = &spec->annos[spec->nannos];
         skip_ws(p);
         char *k = string_lit(p);
-        if (!k || (strcmp(k, "text") && strcmp(k, "segment") && strcmp(k, "rect")))
-            return fail(p, "annotate() expects (\"text\"|\"segment\"|\"rect\", ...)", "");
-        a->kind = k[0] == 't' ? ANNO_TEXT : k[0] == 's' ? ANNO_SEGMENT : ANNO_RECT;
+        if (!k || (strcmp(k, "text") && strcmp(k, "segment") && strcmp(k, "rect")
+                   && strcmp(k, "point")))
+            return fail(p, "annotate() expects (\"text\"|\"segment\"|\"rect\"|"
+                        "\"point\", ...)", "");
+        a->kind = k[0] == 't' ? ANNO_TEXT : k[0] == 's' ? ANNO_SEGMENT
+                : k[0] == 'p' ? ANNO_POINT : ANNO_RECT;
         skip_ws(p);
         while (*p->s == ',') {
             p->s++;
@@ -1868,7 +1973,12 @@ static int parse_term(P *p, PlotSpec *spec) {
         if (expect(p, ')')) return -1;
         if (a->kind == ANNO_TEXT && (!a->has_x || !a->has_y || !a->label))
             return fail(p, "annotate(\"text\") needs x=, y= and label=", "");
-        if (a->kind != ANNO_TEXT
+        if (a->kind == ANNO_POINT && (!a->has_x || !a->has_y))
+            return fail(p, "annotate(\"point\") needs x= and y=", "");
+        if (a->kind == ANNO_POINT && (a->has_xend || a->has_yend))
+            return fail(p, "annotate(\"point\") takes x= and y= only; xend=/yend= "
+                        "belong on annotate(\"segment\")", "");
+        if (a->kind != ANNO_TEXT && a->kind != ANNO_POINT
             && (!a->has_x || !a->has_y || !a->has_xend || !a->has_yend))
             return fail(p, a->kind == ANNO_SEGMENT
                         ? "annotate(\"segment\") needs x=, y=, xend= and yend="
@@ -2382,6 +2492,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                 if (!strcmp(v, "none")) {          /* the commonest ggplot2 legend line */
                     free(v);
                     spec->no_legend = spec->no_legend_size = spec->no_legend_shape = 1;
+                    spec->no_legend_linetype = 1;
                     skip_ws(p);
                     if (*p->s == ',') { p->s++; skip_ws(p); }
                     continue;
@@ -2543,8 +2654,9 @@ static int parse_term(P *p, PlotSpec *spec) {
              * them all, and guide_legend() options only reach the colour one */
             int is_col = !strcmp(key, "colour") || !strcmp(key, "color") || !strcmp(key, "fill");
             int is_size = !strcmp(key, "size"), is_shape = !strcmp(key, "shape");
-            if (!is_col && !is_size && !is_shape) {
-                fail(p, "guides() supports colour=, color=, fill=, size=, shape=", "");
+            int is_lt = !strcmp(key, "linetype");
+            if (!is_col && !is_size && !is_shape && !is_lt) {
+                fail(p, "guides() supports colour=, color=, fill=, size=, shape=, linetype=", "");
                 free(key); return -1;
             }
             skip_ws(p);
@@ -2595,6 +2707,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                 free(v);
                 if (is_col) spec->no_legend = 1;
                 else if (is_size) spec->no_legend_size = 1;
+                else if (is_lt) spec->no_legend_linetype = 1;
                 else spec->no_legend_shape = 1;
             } else {
                 free(v); free(key);
@@ -2740,6 +2853,7 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
             return fail(&p, "theme_*() has no effect on a chord diagram (no panel, "
                         "no axes) and is refused rather than ignored", "");
         if (spec->lab_x || spec->lab_y || spec->lab_colour || spec->lab_fill
+            || spec->lab_shape || spec->lab_size || spec->lab_linetype
             || spec->lab_subtitle || spec->lab_caption)
             return fail(&p, "chord() draws no axes or legend; only labs(title=) applies", "");
         if (spec->has_xlim || spec->has_ylim || spec->log_x || spec->log_y
@@ -2781,6 +2895,12 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
     }
     if (spec->polar && spec->coord_flip)
         return fail(&p, "coord_polar() and coord_flip() contradict each other", "");
+    /* angle= leans the BOTTOM axis's labels; on the side axis it was parsed
+     * and dropped. Under coord_flip() the bottom axis is y. */
+    if (spec->coord_flip ? spec->x_angle >= 0 : spec->y_angle >= 0)
+        return fail(&p, "angle= tilts the bottom axis's tick labels; that is %s here",
+                    spec->coord_flip ? "scale_y_*(angle=) under coord_flip()"
+                                     : "scale_x_*(angle=)");
     if (spec->nannos > 0 && !any_grammar)
         return fail(&p, "annotate() places a mark on a grammar panel and needs "
                     "aes()/geom_*", "");

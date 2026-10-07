@@ -223,8 +223,17 @@ static void set_col_a(cairo_t *cr, Col c, double a) {
  * they stay legible at any line width. */
 static void set_dash(cairo_t *cr, int dash, double lw) {
     double d2[2];
+    /* 3.. are the rest of ggplot2's linetype_pal(), as R's hex dash
+     * strings in units of the line width: "22", "42", "1343", "73", "2262" */
+    static const char *const hexd[] = { "22", "42", "1343", "73", "2262" };
     if (dash == 1) { d2[0] = 4 * lw; d2[1] = 4 * lw; cairo_set_dash(cr, d2, 2, 0); }
     else if (dash == 2) { d2[0] = lw; d2[1] = 2 * lw; cairo_set_dash(cr, d2, 2, 0); }
+    else if (dash >= 3 && dash < 3 + (int)(sizeof hexd / sizeof *hexd)) {
+        const char *h = hexd[dash - 3];
+        double d4[4]; int nd = 0;
+        for (; *h && nd < 4; h++) d4[nd++] = (*h - '0') * lw;
+        cairo_set_dash(cr, d4, nd, 0);
+    }
     else cairo_set_dash(cr, NULL, 0, 0);
 }
 

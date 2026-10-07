@@ -447,6 +447,27 @@ static double legend_block_h(const RObj *r, const RObj *tg, const char *title,
     return content + titleSpace;
 }
 
+/* The taller of the two side legend stacks (right_of / left_of), in pt:
+ * block heights plus the gaps the draw loop leaves between them. 0 = none. */
+static double legend_stack_pt(const RObj *ro, int n, const PlotSpec *spec,
+                              double baseH) {
+    double best = 0;
+    for (int pass = 0; pass < 2; pass++) {
+        PlaceKind want = pass == 0 ? PL_RIGHT_OF : PL_LEFT_OF;
+        double total = 0; int ni = 0;
+        for (int i = 0; i < n; i++) {
+            const RObj *r = &ro[i];
+            if (r->o->type != HM_LEGEND || r->o->place.kind != want) continue;
+            const char *title = legend_title(spec, r, &ro[r->target]);
+            total += legend_block_h(r, &ro[r->target], title, baseH, 1.0);
+            ni++;
+        }
+        if (ni) total += (ni - 1) * 2 * HALF_LINE;
+        if (total > best) best = total;
+    }
+    return best;
+}
+
 /* draw one legend. Vertical legends (right/left) are drawn from `blockTop`
  * (npc y of the block's top) downward, so a caller can stack them.
  * Horizontal legends (top/beneath) centre themselves on the target. `shift`
@@ -541,6 +562,11 @@ static void draw_one_legend(GTable *T, const RObj *r, const RObj *tg,
  * Column names are drawn rotated, so their extent along the axis is the text
  * width either way. */
 static double label_band(cairo_t *cr, const RObj *r, Side side) {
+    /* an annotation's side title (title.side=left/right) sits against its
+     * band the way a row name sits against its row */
+    if (r->o->type == HM_ANNOTATION)
+        return r->o->title && r->o->title_side == side
+             ? TXT_GAP + text_w(cr, SZ_AXIS_TEXT, r->o->title) : 0;
     if (r->o->type != HM_HEATMAP || !r->m) return 0;
     const Matrix *m = r->m;
     int row = side == SIDE_LEFT || side == SIDE_RIGHT;
@@ -559,7 +585,7 @@ static double label_band(cairo_t *cr, const RObj *r, Side side) {
 /* A title sits above its object, so it occupies the same gap that top-facing
  * labels do and has to be reserved the same way. */
 static double title_band(cairo_t *cr, const RObj *r) {
-    if (!r->o->title || r->o->type == HM_LEGEND) return 0;
+    if (!r->o->title || r->o->type == HM_LEGEND || r->o->title_side) return 0;
     cairo_font_extents_t fe;
     cairo_set_font_size(cr, SZ_BASE);
     cairo_font_extents(cr, &fe);
@@ -647,7 +673,7 @@ static int unify_levels(RObj *ro, int n, Factor *key, char *err) {
  * continuous ramp. NA is wheatmap's grey either way. */
 static Col hm_cell_col(const Matrix *m, const Col *pal, const FillScale *fs,
                        double v, double dmin, double dmax) {
-    if (isnan(v)) return C_NA;
+    if (isnan(v)) return fs->has_na ? fs->na : C_NA;
     if (m->discrete) {
         int k = (int)v;
         return k >= 0 && k < m->nlev ? pal[k] : C_NA;
@@ -840,6 +866,12 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             }
             ro[i].ann_n = df->nrow;
             ro[i].ann_horiz = pl->kind == PL_TOP_OF || pl->kind == PL_BENEATH;
+            if (o->title_side && !ro[i].ann_horiz) {
+                snprintf(err, CP_ERRLEN, "annotation `%s`: title.side=left/right "
+                         "puts the title beside a horizontal band (top_of/beneath); "
+                         "a vertical band keeps it on top", o->data);
+                return -1;
+            }
             int need = ro[i].ann_horiz ? a->nc : a->nr;
             if (df->nrow != need) {
                 snprintf(err, CP_ERRLEN, "annotation `%s` has %d values; anchor `%s` needs %d",
@@ -899,7 +931,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                     free(f->idx); f->idx = idx;
                 }
                 Col *pal = cp_xmalloc(f->nlev * sizeof(Col));
-                hue_palette(f->nlev, pal);
+                if (annotation_palette(o, f, pal, err)) return -1;
                 for (int r = 0; r < df->nrow; r++)
                     ro[i].ann_col[r] = f->idx[r] >= 0 ? pal[f->idx[r]] : C_NA;
                 ro[i].ann_f = f; ro[i].ann_pal = pal;   /* for a discrete legend */
@@ -915,8 +947,8 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                     snprintf(err, CP_ERRLEN, "annotation `%s` has no finite values", o->data);
                     return -1;
                 }
-                FillScale vir = {0};
-                vir.kind = FILL_VIRIDIS;
+                FillScale vir;                  /* viridis unless palette=/values= */
+                if (annotation_ramp(o, &vir, err)) return -1;
                 for (int r = 0; r < df->nrow; r++) {
                     double v = col->num[perm ? perm[r] : r];
                     ro[i].ann_col[r] = isnan(v) ? C_NA : fill_map_value(&vir, v, lo, hi);
@@ -1342,6 +1374,18 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             if (w_pt > 0) h_pt = chrome_h_keep + (w_pt - chrome_w_keep) / want;
             else          w_pt = chrome_w_keep + (h_pt - chrome_h_keep) * want;
         }
+        /* The side legends stack vertically, centred on the canvas, and
+         * were never counted: a small matrix with three keys got a canvas
+         * shorter than the stack, and the top and bottom keys were cut in
+         * half. Grow the height to hold the taller stack, as grammar mode
+         * grows its auto-fit canvas for a tall legend. Under aspect= the
+         * ratio wins and the stack is only warned about, below. */
+        if (h_pt <= 0 && !aspect_locked) {
+            double need = legend_stack_pt(ro, n, spec, baseH);
+            double xt = spec->lab_x && *spec->lab_x ? baseH + HALF_LINE / 2 : 0;
+            double around = marT + titleh + titlegap + marB + xt;
+            if (need > 0 && need + around > ah) ah = need + around;
+        }
         if (w_pt <= 0) w_pt = aspect_locked ? aw : fmin(HM_MAX_PT, fmax(HM_MIN_PT, aw));
         if (h_pt <= 0) h_pt = aspect_locked ? ah : fmin(HM_MAX_PT, fmax(HM_MIN_PT, ah));
     }
@@ -1584,6 +1628,16 @@ int render_heatmap(const PlotSpec *spec, const char *out,
         if (!r->o->title || r->o->type == HM_LEGEND) continue;
         g = gt_add(T, G_TEXT, CR, CC, CR, CC);
         g->str = r->o->title; g->size = SZ_BASE; g->col = C_BLACK;
+        if (r->o->title_side) {
+            /* beside the band, at the row-name size, so a stack of thin
+             * bars stays as compact as wheatmap's label.side="l" */
+            int left = r->o->title_side == SIDE_LEFT;
+            g->size = SZ_AXIS_TEXT;
+            g->tx = left ? r->l - PTX(TXT_GAP) : r->l + r->w + PTX(TXT_GAP);
+            g->ty = r->b + r->h / 2;
+            g->hj = left ? 1 : 0; g->va = V_INKCENTER;
+            continue;
+        }
         g->tx = r->l; g->ty = r->b + r->h + PTY(HALF_LINE / 2);
         g->hj = 0; g->va = V_BOTTOM;
     }
@@ -1623,6 +1677,76 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             g->col = r->o->grid_col; g->lw = lw_pt(0.2); g->snap = 1;
             g->y0 = g->y1 = r->b + k * (r->h / nrc);
             g->x0 = r->l; g->x1 = r->l + r->w;
+        }
+    }
+
+    /* colsplit=/rowsplit=: a gap at every change of an annotation's level,
+     * painted in the background colour over the heatmap and every band that
+     * shares its columns (or rows). The gap covers the edges of the two
+     * cells beside it rather than moving them -- wheatmap's WRect overlay --
+     * so every other object keeps its alignment for free. */
+    for (int i = 0; i < n; i++) {
+        RObj *r = &ro[i];
+        if (r->o->type != HM_HEATMAP) continue;
+        for (int axis = 0; axis < 2; axis++) {     /* 0 = columns, 1 = rows */
+            const char *ref = axis ? r->o->rowsplit : r->o->colsplit;
+            if (!ref) continue;
+            const char *opt = axis ? "rowsplit" : "colsplit";
+            int k = find_obj(ro, n, ref);
+            RObj *a = k >= 0 ? &ro[k] : NULL;
+            if (!a || a->o->type != HM_ANNOTATION) {
+                snprintf(err, CP_ERRLEN, "%s=\"%s\": no annotation of that name "
+                         "(name= or its column)", opt, ref);
+                return -1;
+            }
+            int ncell = axis ? r->m->nr : r->m->nc;
+            if (!a->ann_f || a->ann_horiz == axis || chain_heatmap(ro, a) != r
+                || a->ann_n != ncell) {
+                snprintf(err, CP_ERRLEN, "%s=\"%s\" needs a categorical annotation "
+                         "placed %s heatmap `%s`, one value per %s", opt, ref,
+                         axis ? "left_of/right_of" : "top_of/beneath",
+                         r->o->name, axis ? "row" : "column");
+                return -1;
+            }
+            double gap = r->o->gap > 0 ? r->o->gap : 2.0;   /* pt */
+            int nruns = 1, *seen = cp_xmalloc(a->ann_f->nlev * sizeof(int));
+            memset(seen, 0, a->ann_f->nlev * sizeof(int));
+            int split_runs = 0;
+            for (int d = 0; d < ncell; d++) {
+                int lev = a->ann_f->idx[a->ann_ord[d]];
+                if (d > 0 && lev != a->ann_f->idx[a->ann_ord[d - 1]]) nruns++;
+                if (lev >= 0 && (d == 0 || lev != a->ann_f->idx[a->ann_ord[d - 1]])) {
+                    if (seen[lev]) split_runs = 1;
+                    seen[lev] = 1;
+                }
+                if (d == 0 || lev == a->ann_f->idx[a->ann_ord[d - 1]]) continue;
+                /* the boundary before display slot d, across the stack */
+                for (int j = 0; j < n; j++) {
+                    RObj *o2 = &ro[j];
+                    if (o2->o->type != HM_HEATMAP && o2->o->type != HM_ANNOTATION)
+                        continue;
+                    if (axis ? (fabs(o2->b - r->b) > 1e-9 || fabs(o2->h - r->h) > 1e-9)
+                             : (fabs(o2->l - r->l) > 1e-9 || fabs(o2->w - r->w) > 1e-9))
+                        continue;
+                    g = gt_add(T, G_RECT, CR, CC, CR, CC);
+                    g->sub = 1; g->col = C_WHITE; g->clip = 1;
+                    if (axis) {
+                        double y = r->b + r->h - d * (r->h / ncell);
+                        g->y0 = y - PTY(gap / 2); g->y1 = y + PTY(gap / 2);
+                        g->x0 = o2->l; g->x1 = o2->l + o2->w;
+                    } else {
+                        double x = r->l + d * (r->w / ncell);
+                        g->x0 = x - PTX(gap / 2); g->x1 = x + PTX(gap / 2);
+                        g->y0 = o2->b; g->y1 = o2->b + o2->h;
+                    }
+                }
+            }
+            if (split_runs)
+                fprintf(stderr, "cinderplot: warning: %s=\"%s\": a level falls in "
+                        "more than one run (%d runs for %d levels); order the %s "
+                        "by it (cluster=none) for one block per level\n", opt, ref,
+                        nruns, a->ann_f->nlev, axis ? "rows" : "columns");
+            free(seen);
         }
     }
 
@@ -1766,6 +1890,14 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             total += heights[j];
         }
         total += (ni - 1) * inter;
+        if (total > 1 + 1e-9)
+            /* auto-fit grows the canvas for the stack; only a fixed --size
+             * (or the auto-fit ceiling, or aspect=) can leave it too short */
+            fprintf(stderr, "cinderplot: warning: the %s legends stack %.0fpt "
+                    "tall on a %.0fpt canvas; the top and bottom keys are "
+                    "clipped -- give a taller --size, or move a legend to "
+                    "the other side\n", pass == 0 ? "right_of" : "left_of",
+                    total * ch_pt, ch_pt);
         double top = 0.5 + total / 2;               /* top of the stack */
         for (int j = 0; j < ni; j++) {
             RObj *r = &ro[idx[j]];

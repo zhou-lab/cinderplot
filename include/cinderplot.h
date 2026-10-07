@@ -176,6 +176,7 @@ typedef struct {
      * memcpy a buffer overflow — the 0.13.0 scale_colour_brewer segfault. */
 #define BREWER_MAX_STOPS 12
     Col stops[BREWER_MAX_STOPS]; int nstops;
+    Col na; int has_na;      /* na.value=: the missing-cell colour (default grey) */
 } FillScale;
 Col fill_map(const FillScale *fs, double t01);   /* t in [0,1] */
 /* named ColorBrewer palette -> its max-class stops (from RColorBrewer).
@@ -383,6 +384,21 @@ typedef struct {
     char *title;                   /* legend title (NULL = default/none) */
     char *column;                  /* annotation: which column to colour by
                                     * (NULL = the last, the historical default) */
+    /* annotation: its OWN discrete palette, ComplexHeatmap's col=list(...)
+     * per band. values=c(...) is keyed by level or positional (names NULL),
+     * palette="Set2" a qualitative ColorBrewer set; neither = the default
+     * hue ramp. scale_fill_manual() stays the heatmap's. */
+    Col *values; char **value_names; int nvalues;
+    char *values_file;             /* values="colours.tsv": (level, colour) rows, no cap */
+    /* heatmap: colsplit=/rowsplit= name an annotation on this heatmap; a
+     * background-colour gap of `gap` pt (default 2) is drawn at each change
+     * of its level, across the heatmap and every band stacked with it --
+     * ComplexHeatmap's column_split + column_gap, wheatmap's WRect overlay */
+    char *colsplit, *rowsplit; double gap;
+    Side title_side;               /* annotation: where title= sits -- SIDE_NONE =
+                                    * above (the default), or SIDE_LEFT/RIGHT of a
+                                    * horizontal band, wheatmap's label.side */
+    char *palette;
     ClusterMode cluster;           /* heatmap only */
     int discrete;                  /* heatmap: fill trigger. 0 = decide from the
                                     * cell types (text => categorical), 1 =
@@ -405,6 +421,12 @@ typedef struct {
     char *missing; int missing_off;
 } HMObj;
 #define MAX_HMOBJS 16
+/* an annotation band's own palette from values=/palette= (palette.c);
+ * 0 = ok, -1 = err filled */
+int annotation_palette(const HMObj *o, const Factor *f, Col *pal, char *err);
+/* a numeric band's ramp from palette=/values= (default viridis) */
+int annotation_ramp(const HMObj *o, FillScale *fs, char *err);
+int annotation_palette_name_ok(const char *name);   /* a ramp or Brewer name */
 
 /* highlight("row","col"): a bounding box on one heatmap cell — the reader-
  * visible "this is the picked cell" for a parameter grid (ggplot2's
@@ -427,9 +449,9 @@ typedef struct {
 } CellHighlight;
 #define MAX_HIGHLIGHTS 64
 
-/* annotate("text"|"segment"|"rect", x=, y=, ...): a one-off mark at literal
+/* annotate("text"|"segment"|"rect"|"point", x=, y=, ...): a one-off mark at literal
  * data coordinates, grammar mode only — ggplot2's annotate(). */
-typedef enum { ANNO_TEXT, ANNO_SEGMENT, ANNO_RECT } AnnoKind;
+typedef enum { ANNO_TEXT, ANNO_SEGMENT, ANNO_RECT, ANNO_POINT } AnnoKind;
 typedef struct {
     AnnoKind kind;
     double x, y, xend, yend;       /* rect also spells these xmin/xmax/ymin/ymax */
@@ -542,6 +564,7 @@ typedef struct {
     AesEntry label;                 /* geom_text/geom_label label column */
     AesEntry size;                  /* geom_point size: numeric -> point area */
     AesEntry shape;                 /* geom_point shape: discrete -> point glyph */
+    AesEntry linetype;              /* line/smooth/segment: discrete -> dash pattern */
     AesEntry group;                 /* geom_line/geom_smooth series key: discrete,
                                      * no legend; crossed with a discrete colour */
     AesEntry chrom;                 /* genome scale: chromosome column */
@@ -588,6 +611,7 @@ typedef struct {
     ThemeType theme;                              /* theme_*(); THEME_GRAY = 0 = default */
     int no_legend;                  /* guides(colour="none"|fill="none") or --no-legend:
                                      * drop the colour/fill guide */
+    int no_legend_linetype;         /* guides(linetype="none") */
     int no_legend_size, no_legend_shape;   /* guides(size="none") / guides(shape="none"):
                                      * the size and shape guides are separate builders
                                      * in render.c and are dropped separately */
@@ -615,6 +639,7 @@ typedef struct {
     char *tree_tp_data, *tree_tp_col;             /* tips */
     char *tree_tl_data, *tree_tl_col;             /* tip LABEL colour */
     char *lab_title, *lab_x, *lab_y, *lab_colour, *lab_fill;
+    char *lab_shape, *lab_size, *lab_linetype;   /* labs(shape=/size=/linetype=): those legend titles */
     char *lab_subtitle, *lab_caption;             /* labs(subtitle=, caption=) */
     /* scale_colour/fill_manual(values=): discrete palette override. 64 slots:
      * 16 silently dropped the rest, and a 20-level figure painted its tail
