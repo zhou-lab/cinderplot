@@ -51,8 +51,38 @@ asked — the drop is the queue, the maintainer promotes.
 
 ## Example
 
+A drop is a figure, a note, and the small input behind it:
+
 ```
 20260724_size_legend.png    # the figure
 20260724_size_legend.md     # showcase; DSL + one-line interpretation
 20260724_size_legend.csv    # the small input behind it
 ```
+
+A real one, `20260915_fig5h_signal_track.md` (showcase, since cleared — its
+seven gaps shipped as 0.25.0 and its two follow-ups as 0.26.0). Inputs are
+referenced by path, not copied in:
+
+````markdown
+# showcase — Fig. 5h locus panel in one cinderplot call
+
+Driver `~/repo/labjournal/zhouw3/2026/20260915_fig5h_tracks.sh`, inputs under
+`~/tmp/methscope/20260915_fig5h/`, figure `~/gallery/20260915_fig5h.svg`.
+Reproduce: `STEP=plot bash .../20260915_fig5h_tracks.sh`.
+
+```sh
+cinderplot 'regions("regions.bed") + genes("genes12.bed", height=0.8)
+  + interval("cpgs.bed", name="CpGs", height=0.25, labels=off)
+  + matrix("calls_long.tsv", x=genomic, discrete=TRUE, rowgroup=" | ",
+           rowcolour="rowcolour.tsv", cluster=none, height=3.2)
+  + scale_fill_manual(values=c("0"="#3b3b9c", "1"="#f5e400"))
+  + legend(missing="Missing input", title="Call")
+  + signal("lines_long.tsv", smooth=0.25, points=on, ylim=c(0, 1),
+           colour=c("Ground Truth"="#000000", ...))' \
+  -o ~/gallery/20260915_fig5h.svg --size 9x7
+```
+
+The manuscript panel was two figures pasted in Inkscape — a track-mode call
+for the calls and a grammar-mode `facet_grid + geom_smooth` for the traces,
+on a different x axis. It is one call on one genomic axis now.
+````
