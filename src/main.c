@@ -93,7 +93,7 @@ static void print_help(void) {
     printf("    %s--editable-svg%s labels as %s<text>%s elements (svglite-style, retypable in Inkscape;\n", G, R, K, R);
     printf("                   %sCINDERPLOT_EDITABLE_SVG=1 makes it your default; --outline-svg overrides)%s\n", D, R);
     printf("    %s-H, --no-header%s headerless input — columns become %sV1, V2, …%s %s(R style)%s\n", G, R, K, R, D, R);
-    printf("    %s--no-legend%s    drop every guide (colour/fill, size, shape) %s(guides(colour=\"none\") drops one)%s\n", G, R, D, R);
+    printf("    %s--no-legend%s    drop every guide (colour/fill, size, shape, linetype) %s(guides(colour=\"none\") drops one)%s\n", G, R, D, R);
     printf("    %s-r, --region%s CHR:START-END   the window for track mode, when region() is left empty\n", G, R);
     printf("    %s-x -y -c -f -t -m --log%s   shortcut flags that desugar to the grammar (not with a DSL expression)\n", G, R);
     printf("    %s--dump-spec%s    print the desugared DSL (and still render if an output is given)\n", G, R);
