@@ -92,6 +92,7 @@ static void print_help(void) {
     printf("    %s--font-size%s PT  base label size in pt %s(1..100, default 11; theme_*(base_size=) overrides)%s\n", G, R, D, R);
     printf("    %s--editable-svg%s labels as %s<text>%s elements (svglite-style, retypable in Inkscape;\n", G, R, K, R);
     printf("                   %sCINDERPLOT_EDITABLE_SVG=1 makes it your default; --outline-svg overrides)%s\n", D, R);
+    printf("    %s--transparent%s  no white ground under an %s.svg%s/%s.png%s %s(default: white, as ggplot2 and R's svg() paint)%s\n", G, R, K, R, K, R, D, R);
     printf("    %s-H, --no-header%s headerless input — columns become %sV1, V2, …%s %s(R style)%s\n", G, R, K, R, D, R);
     printf("    %s--no-legend%s    drop every guide (colour/fill, size, shape, linetype) %s(guides(colour=\"none\") drops one)%s\n", G, R, D, R);
     printf("    %s-r, --region%s CHR:START-END   the window for track mode, when region() is left empty\n", G, R);
@@ -268,6 +269,7 @@ int main(int argc, char **argv) {
         }
         else if (!strcmp(a, "--editable-svg")) editable_svg = 1;
         else if (!strcmp(a, "--outline-svg")) outline_svg = 1;
+        else if (!strcmp(a, "--transparent")) cp_set_transparent(1);
         else if (!strcmp(a, "--dump-spec")) dump = 1;
         else if (!strcmp(a, "--no-header") || !strcmp(a, "-H")) cp_set_no_header(1);
         else if (!strcmp(a, "--no-legend")) no_legend = 1;

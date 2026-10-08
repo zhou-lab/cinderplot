@@ -295,6 +295,7 @@ cairo_surface_t *cp_surface_create(const char *out, double w_pt, double h_pt);
  * outlines, so Inkscape/Illustrator can retype labels. */
 void cp_set_svg_text(int on);
 void cp_set_dpi(double dpi);                        /* PNG raster resolution (default 96) */
+void cp_set_transparent(int on);                   /* --transparent: no white ground */
 /* Emit the finished surface: write_to_png for image surfaces, surface_finish
  * for vector ones. Returns the resulting cairo status. */
 cairo_status_t cp_surface_emit(cairo_surface_t *surf, const char *out);
@@ -352,6 +353,7 @@ typedef struct {
                           * not rotate) or the repel geoms (they measure
                           * unrotated extents). */
     double txt_hjust; int has_txt_hjust;
+    double txt_vjust; int has_txt_vjust;   /* geom_text/label vjust=, ggplot units */
     double jitter_w, jitter_h;
     unsigned jitter_seed; int has_jitter_seed;
     int raster;                 /* geom_point(raster=TRUE): draw the layer into an
@@ -390,6 +392,11 @@ typedef struct {
      * hue ramp. scale_fill_manual() stays the heatmap's. */
     Col *values; char **value_names; int nvalues;
     char *values_file;             /* values="colours.tsv": (level, colour) rows, no cap */
+    double label_angle;            /* labels=data on a horizontal band: 0 or 90 */
+    Col label_col; int has_label_col;  /* labels=data text colour (default: the level's) */
+    double lim_lo, lim_hi; int has_limits;  /* annotation(limits=c(lo,hi)): a numeric
+                                    * band's ramp domain, squished like
+                                    * scale_fill_*(limits=) */
     /* heatmap: colsplit=/rowsplit= name an annotation on this heatmap; a
      * background-colour gap of `gap` pt (default 2) is drawn at each change
      * of its level, across the heatmap and every band stacked with it --
@@ -419,6 +426,9 @@ typedef struct {
      * discrete matrix() key adds for its background/NA colour ("NA" when
      * unset); missing=none drops that swatch. */
     char *missing; int missing_off;
+    /* legend(beneath()/top_of()) of a discrete key: the swatch grid's shape,
+     * row-major; 0 = as many columns as fit the target's width */
+    int leg_ncol, leg_nrow;
 } HMObj;
 #define MAX_HMOBJS 16
 /* an annotation band's own palette from values=/palette= (palette.c);
@@ -741,6 +751,9 @@ double cp_colourbar_across_pt(cairo_t *cr, double lo, double hi);
  * points converts the physical dimensions to that cell's npc. */
 void cp_key_draw(GTable *T, int r, int c, char *const *labels, const Col *pal,
                  int nlev, double sx, double top, double cw_pt, double ch_pt);
+void cp_key_draw_grid(GTable *T, int r, int c, char *const *labels, const Col *pal,
+                      int nlev, int ncol, double cellw_pt, double sx, double top,
+                      double cw_pt, double ch_pt, int byrow);
 void cp_colourbar_draw(GTable *T, int r, int c, const FillScale *fs,
                        double lo, double hi, int vert, int dir,
                        double bx0, double by0, double cw_pt, double ch_pt);

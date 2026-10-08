@@ -68,6 +68,10 @@ typedef struct {
     double ann_dmin, ann_dmax;      /* annotation: continuous scale range */
     FillScale ann_fill;             /* annotation: continuous colormap */
     int target, leg_discrete;       /* legend: source obj index; discrete key? */
+    double leg_across;              /* legend: measured block width, pt (pass B) */
+    int leg_col;                    /* legend: which column of its side's stack */
+    int leg_kcols; double leg_cellw; /* flat discrete key: grid columns, cell width pt */
+    double leg_colshift;            /* legend: pt its column sits outward of the first */
     int anchor;                     /* index of the object placed against (-1 = none) */
     HClust *tree; int dir, nleaf;   /* dendrogram */
     int *slot;                      /* dendrogram: data index -> display slot */
@@ -441,29 +445,29 @@ static void draw_dendro(GTable *T, int CR, int CC, const RObj *r) {
 static double legend_block_h(const RObj *r, const RObj *tg, const char *title,
                              double baseH, double ch_pt) {
     double titleSpace = title ? (baseH + TXT_GAP) / ch_pt : 0;
+    int rows = r->leg_discrete ? tg->key_f->nlev : 0;
+    if (r->leg_discrete && r->leg_kcols > 1)       /* a side key wrapped into columns */
+        rows = (rows + r->leg_kcols - 1) / r->leg_kcols;
     double content = r->leg_discrete
-        ? tg->key_f->nlev * LEG_GRID / ch_pt + (tg->key_f->nlev - 1) * LEG_GAP / ch_pt
+        ? rows * LEG_GRID / ch_pt + (rows - 1) * LEG_GAP / ch_pt
         : LEG_LEN / ch_pt;
     return content + titleSpace;
 }
 
-/* The taller of the two side legend stacks (right_of / left_of), in pt:
- * block heights plus the gaps the draw loop leaves between them. 0 = none. */
-static double legend_stack_pt(const RObj *ro, int n, const PlotSpec *spec,
-                              double baseH) {
+/* The tallest single side legend (right_of / left_of), in pt. A stack too
+ * tall for the canvas wraps into columns (pack below); one legend taller
+ * than the canvas cannot, and grows it instead. 0 = none. */
+static double legend_tallest_pt(const RObj *ro, int n, const PlotSpec *spec,
+                                double baseH) {
     double best = 0;
-    for (int pass = 0; pass < 2; pass++) {
-        PlaceKind want = pass == 0 ? PL_RIGHT_OF : PL_LEFT_OF;
-        double total = 0; int ni = 0;
-        for (int i = 0; i < n; i++) {
-            const RObj *r = &ro[i];
-            if (r->o->type != HM_LEGEND || r->o->place.kind != want) continue;
-            const char *title = legend_title(spec, r, &ro[r->target]);
-            total += legend_block_h(r, &ro[r->target], title, baseH, 1.0);
-            ni++;
-        }
-        if (ni) total += (ni - 1) * 2 * HALF_LINE;
-        if (total > best) best = total;
+    for (int i = 0; i < n; i++) {
+        const RObj *r = &ro[i];
+        if (r->o->type != HM_LEGEND) continue;
+        if (r->o->place.kind != PL_RIGHT_OF && r->o->place.kind != PL_LEFT_OF) continue;
+        if (r->leg_discrete) continue;      /* a key wraps into columns instead */
+        const char *title = legend_title(spec, r, &ro[r->target]);
+        double h = legend_block_h(r, &ro[r->target], title, baseH, 1.0);
+        if (h > best) best = h;
     }
     return best;
 }
@@ -502,6 +506,36 @@ static void spread_labels(const double *y0, int n, double gap,
     free(val); free(len);
 }
 
+/* spread_labels for labels of different widths along x, INCREASING with
+ * index: label i is w[i] wide, and neighbours keep pad between them. Same
+ * L2-optimal pool-adjacent-violators, on r[i] = x[i] - c[i] where c[i] is
+ * the summed half-widths and pads before i; then shifted inside [lo, hi]. */
+static void spread_labels_w(const double *x0, const double *w, int n, double pad,
+                            double lo, double hi, double *x1) {
+    if (n <= 0) return;
+    double *c = cp_xmalloc(n * sizeof(double));
+    c[0] = 0;
+    for (int i = 1; i < n; i++) c[i] = c[i - 1] + (w[i - 1] + w[i]) / 2 + pad;
+    double *val = cp_xmalloc(n * sizeof(double));
+    int *len = cp_xmalloc(n * sizeof(int));
+    int m = 0;
+    for (int i = 0; i < n; i++) {
+        val[m] = x0[i] - c[i]; len[m] = 1; m++;
+        while (m > 1 && val[m - 1] < val[m - 2]) {
+            double tot = val[m - 1] * len[m - 1] + val[m - 2] * len[m - 2];
+            int L = len[m - 1] + len[m - 2];
+            val[m - 2] = tot / L; len[m - 2] = L; m--;
+        }
+    }
+    int idx = 0;
+    for (int b = 0; b < m; b++)
+        for (int k = 0; k < len[b]; k++, idx++) x1[idx] = val[b] + c[idx];
+    double left = x1[0] - w[0] / 2, right = x1[n - 1] + w[n - 1] / 2;
+    double shift = left < lo ? lo - left : right > hi ? hi - right : 0;
+    for (int i = 0; i < n; i++) x1[i] += shift;
+    free(c); free(val); free(len);
+}
+
 static void draw_one_legend(GTable *T, const RObj *r, const RObj *tg,
                             const PlotSpec *spec, double dmin, double dmax,
                             const char *title, double baseH,
@@ -516,11 +550,31 @@ static void draw_one_legend(GTable *T, const RObj *r, const RObj *tg,
     double titleSpace = title ? LPTY(baseH + TXT_GAP) : 0;
     double topY, leftX;
 
-    if (r->leg_discrete) {                          /* categorical key */
+    if (r->leg_discrete && !vert) {                 /* flat key: a swatch grid */
         Factor *f = tg->key_f; Col *pal = tg->key_pal;
-        double gw = LPTX(LEG_GRID);
+        int rows = (f->nlev + r->leg_kcols - 1) / r->leg_kcols;
+        double gridH = LPTY(rows * LEG_GRID + (rows - 1) * LEG_GAP);
+        double sx = tg->l;                          /* left-aligned under its target */
+        double top = pk == PL_BENEATH ? 0 - LPTY(gapx) - titleSpace
+                                      : 1 + LPTY(gapx) + gridH;
+        cp_key_draw_grid(T, T->nrow - 2, 1, tg->key_lab, pal, f->nlev, r->leg_kcols,
+                         r->leg_cellw, sx, top, cw_pt, ch_pt, 1);
+        topY = top; leftX = sx;                     /* the title rests on the grid */
+    } else if (r->leg_discrete && r->leg_kcols > 1) {   /* side key in columns */
+        Factor *f = tg->key_f; Col *pal = tg->key_pal;
         double topEdge = blockTop - titleSpace;
-        double sx = pk == PL_RIGHT_OF ? 1 + LPTX(gapx) : 0 - LPTX(gapx) - gw;
+        double sx = pk == PL_RIGHT_OF ? 1 + LPTX(gapx) : 0 - LPTX(gapx + r->leg_across);
+        cp_key_draw_grid(T, T->nrow - 2, 1, tg->key_lab, pal, f->nlev, r->leg_kcols,
+                         r->leg_cellw, sx, topEdge, cw_pt, ch_pt, 0);
+        topY = blockTop; leftX = sx;
+    } else if (r->leg_discrete) {                   /* categorical key */
+        Factor *f = tg->key_f; Col *pal = tg->key_pal;
+        double topEdge = blockTop - titleSpace;
+        /* a left key is a block whose RIGHT edge meets the gutter: its
+         * labels run rightward from the swatches, and anchoring the swatch
+         * there put them over the row names */
+        double sx = pk == PL_RIGHT_OF ? 1 + LPTX(gapx)
+                  : 0 - LPTX(gapx + fmax(r->leg_across, LEG_GRID));
         cp_key_draw(T, T->nrow - 2, 1, tg->key_lab, pal, f->nlev, sx, topEdge, cw_pt, ch_pt);
         topY = blockTop; leftX = sx;
     } else {                                        /* continuous colorbar */
@@ -545,6 +599,10 @@ static void draw_one_legend(GTable *T, const RObj *r, const RObj *tg,
         topY = vert ? blockTop : by0 + barT;
         leftX = bx0;
     }
+    /* the title starts at the block's left edge; for a left legend that is
+     * the measured block width out from the gutter, not the bar, or a title
+     * wider than its bar runs right over the row names */
+    if (pk == PL_LEFT_OF) leftX = 0 - LPTX(gapx + r->leg_across);
     if (title) {
         g = gt_add(T, G_TEXT, T->nrow - 2, 1, T->nrow - 2, 1);
         g->str = title; g->size = SZ_BASE; g->col = C_BLACK;
@@ -564,9 +622,30 @@ static void draw_one_legend(GTable *T, const RObj *r, const RObj *tg,
 static double label_band(cairo_t *cr, const RObj *r, Side side) {
     /* an annotation's side title (title.side=left/right) sits against its
      * band the way a row name sits against its row */
-    if (r->o->type == HM_ANNOTATION)
+    if (r->o->type == HM_ANNOTATION) {
+        /* labels=data on a horizontal band: the run names stand outward,
+         * above a top_of band and below a beneath one, at the end of a
+         * leader -- a band of ANN_LEAD plus one text line on that side */
+        if (r->o->label_data && r->ann_horiz && r->ann_f) {
+            Side out = r->o->place.kind == PL_BENEATH ? SIDE_BOTTOM : SIDE_TOP;
+            if (side == out) {
+                if (r->o->label_angle == 90) {    /* on end: the longest name */
+                    double wmax = 0;
+                    for (int k = 0; k < r->ann_f->nlev; k++) {
+                        double tw = text_w(cr, SZ_AXIS_TEXT, r->ann_f->levels[k]);
+                        if (tw > wmax) wmax = tw;
+                    }
+                    return ANN_LEAD + TXT_GAP * 0.5 + wmax;
+                }
+                cairo_font_extents_t fe;
+                cairo_set_font_size(cr, SZ_AXIS_TEXT);
+                cairo_font_extents(cr, &fe);
+                return ANN_LEAD + TXT_GAP * 0.5 + fe.ascent + fe.descent;
+            }
+        }
         return r->o->title && r->o->title_side == side
              ? TXT_GAP + text_w(cr, SZ_AXIS_TEXT, r->o->title) : 0;
+    }
     if (r->o->type != HM_HEATMAP || !r->m) return 0;
     const Matrix *m = r->m;
     int row = side == SIDE_LEFT || side == SIDE_RIGHT;
@@ -594,7 +673,13 @@ static double title_band(cairo_t *cr, const RObj *r) {
 }
 
 /* The widest band among the objects whose `side` edge lies on coordinate `at`. */
-static double max_band_at(cairo_t *cr, const RObj *ro, int n, Side side, double at) {
+/* ... counting only objects whose span ALONG the boundary overlaps
+ * [lo, hi]: a top band's left title shares the heatmap's left edge but not
+ * its rows, so it must not push a left_of row annotation out of its way
+ * (ComplexHeatmap: row annotations hug the matrix; the band's title sits in
+ * the band's own row). */
+static double max_band_at(cairo_t *cr, const RObj *ro, int n, Side side, double at,
+                          double lo, double hi) {
     double best = 0;
     for (int i = 0; i < n; i++) {
         const RObj *r = &ro[i];
@@ -603,6 +688,9 @@ static double max_band_at(cairo_t *cr, const RObj *ro, int n, Side side, double 
                     : side == SIDE_LEFT   ? r->l
                                           : r->l + r->w;
         if (fabs(edge - at) > 1e-6) continue;
+        int horiz_edge = side == SIDE_BOTTOM || side == SIDE_TOP;
+        double s0 = horiz_edge ? r->l : r->b, s1 = horiz_edge ? r->l + r->w : r->b + r->h;
+        if (s1 <= lo + 1e-9 || s0 >= hi - 1e-9) continue;   /* no shared rows/columns */
         double e = label_band(cr, r, side);
         if (side == SIDE_TOP) e += title_band(cr, r);
         if (e > best) best = e;
@@ -704,14 +792,16 @@ static void gutter_bands(cairo_t *cr, const RObj *ro, int n,
         if (vert) {
             double hi = pk == PL_BENEATH ? a->b : r->b;               /* upper floor */
             double lo = pk == PL_BENEATH ? r->b + r->h : a->b + a->h; /* lower ceiling */
-            band = max_band_at(cr, ro, n, SIDE_BOTTOM, hi)
-                 + max_band_at(cr, ro, n, SIDE_TOP, lo);
+            double x0 = fmin(r->l, a->l), x1 = fmax(r->l + r->w, a->l + a->w);
+            band = max_band_at(cr, ro, n, SIDE_BOTTOM, hi, x0, x1)
+                 + max_band_at(cr, ro, n, SIDE_TOP, lo, x0, x1);
             at = hi;
         } else {
             double lf = pk == PL_RIGHT_OF ? a->l + a->w : r->l + r->w; /* left edge */
             double rt = pk == PL_RIGHT_OF ? r->l : a->l;               /* right edge */
-            band = max_band_at(cr, ro, n, SIDE_RIGHT, lf)
-                 + max_band_at(cr, ro, n, SIDE_LEFT, rt);
+            double y0 = fmin(r->b, a->b), y1 = fmax(r->b + r->h, a->b + a->h);
+            band = max_band_at(cr, ro, n, SIDE_RIGHT, lf, y0, y1)
+                 + max_band_at(cr, ro, n, SIDE_LEFT, rt, y0, y1);
             at = rt;
         }
         if (band <= 0) continue;
@@ -866,6 +956,12 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             }
             ro[i].ann_n = df->nrow;
             ro[i].ann_horiz = pl->kind == PL_TOP_OF || pl->kind == PL_BENEATH;
+            if (o->label_angle == 90 && !ro[i].ann_horiz) {
+                snprintf(err, CP_ERRLEN, "annotation `%s`: label.angle=90 stands the "
+                         "run labels of a horizontal band on end; a vertical band's "
+                         "labels already run across", o->data);
+                return -1;
+            }
             if (o->title_side && !ro[i].ann_horiz) {
                 snprintf(err, CP_ERRLEN, "annotation `%s`: title.side=left/right "
                          "puts the title beside a horizontal band (top_of/beneath); "
@@ -930,6 +1026,11 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                     for (int r = 0; r < df->nrow; r++) idx[r] = f->idx[perm[r]];
                     free(f->idx); f->idx = idx;
                 }
+                if (o->has_limits) {
+                    snprintf(err, CP_ERRLEN, "annotation `%s`: limits= pins a numeric "
+                             "band's range, and `%s` is categorical", o->data, col->name);
+                    return -1;
+                }
                 Col *pal = cp_xmalloc(f->nlev * sizeof(Col));
                 if (annotation_palette(o, f, pal, err)) return -1;
                 for (int r = 0; r < df->nrow; r++)
@@ -947,6 +1048,9 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                     snprintf(err, CP_ERRLEN, "annotation `%s` has no finite values", o->data);
                     return -1;
                 }
+                if (o->has_limits) {            /* pinned domain; out-of-range squishes */
+                    lo = o->lim_lo; hi = o->lim_hi;
+                }
                 FillScale vir;                  /* viridis unless palette=/values= */
                 if (annotation_ramp(o, &vir, err)) return -1;
                 for (int r = 0; r < df->nrow; r++) {
@@ -957,7 +1061,6 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                 ro[i].ann_dmin = lo; ro[i].ann_dmax = hi; ro[i].ann_fill = vir;
             }
             if (o->label_data) {
-                if (ro[i].ann_horiz) { snprintf(err, CP_ERRLEN, "labels=data needs a vertical annotation (place with left_of/right_of)"); return -1; }
                 if (ro[i].ann_continuous) { snprintf(err, CP_ERRLEN, "labels=data needs a categorical annotation"); return -1; }
             }
             ro[i].nr = ro[i].ann_horiz ? 1 : ro[i].ann_n;
@@ -1033,8 +1136,9 @@ int render_heatmap(const PlotSpec *spec, const char *out,
              * the same key an annotation gets, down the same code path. */
             if (ro[ro[i].target].o->type == HM_HEATMAP && ro[ro[i].target].m->discrete)
                 ro[i].leg_discrete = 1;
-            if (ro[i].leg_discrete && (pl->kind == PL_TOP_OF || pl->kind == PL_BENEATH)) {
-                snprintf(err, CP_ERRLEN, "discrete legends must be vertical; use right_of()/left_of()");
+            if ((o->leg_ncol || o->leg_nrow) && !ro[i].leg_discrete) {
+                snprintf(err, CP_ERRLEN, "legend(ncol=/nrow=) shapes a discrete key; "
+                         "a colourbar has no columns");
                 return -1;
             }
             /* only the four side placements are emitted by the draw loops; a
@@ -1260,6 +1364,9 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                      + (title ? baseH + TXT_GAP : 0)                          /* height */
                    : fmax(barW, titleW);
         }
+        r->leg_across = across;
+        if (r->leg_discrete && (pk == PL_BENEATH || pk == PL_TOP_OF))
+            continue;                        /* a flat key: sized once the width is known */
         double shift = pk == PL_RIGHT_OF ? shiftR : pk == PL_LEFT_OF ? shiftL
                      : pk == PL_BENEATH ? shiftB : shiftT;
         double ext = MARGIN + shift + HALF_LINE + across;
@@ -1288,6 +1395,8 @@ int render_heatmap(const PlotSpec *spec, const char *out,
      * sized so the primary heatmap's cells hit a target edge (>= a label line
      * when that side is labelled), then grown to full canvas via the heatmap's
      * normalized fraction, plus the measured margins. ---- */
+    int w_auto = w_pt <= 0;         /* the width is ours to choose */
+    int h_auto = h_pt <= 0;         /* ... and the height */
     if (w_pt <= 0 || h_pt <= 0) {
         RObj *hm = NULL;
         for (int i = 0; i < n; i++) if (ro[i].o->type == HM_HEATMAP) { hm = &ro[i]; break; }
@@ -1374,20 +1483,189 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             if (w_pt > 0) h_pt = chrome_h_keep + (w_pt - chrome_w_keep) / want;
             else          w_pt = chrome_w_keep + (h_pt - chrome_h_keep) * want;
         }
-        /* The side legends stack vertically, centred on the canvas, and
-         * were never counted: a small matrix with three keys got a canvas
-         * shorter than the stack, and the top and bottom keys were cut in
-         * half. Grow the height to hold the taller stack, as grammar mode
-         * grows its auto-fit canvas for a tall legend. Under aspect= the
-         * ratio wins and the stack is only warned about, below. */
+        /* The side legends stack vertically, centred on the canvas; a stack
+         * taller than the canvas wraps into further columns (below), but one
+         * legend taller than the canvas cannot wrap, so grow the height to
+         * hold the tallest. Under aspect= the ratio wins and it only warns. */
         if (h_pt <= 0 && !aspect_locked) {
-            double need = legend_stack_pt(ro, n, spec, baseH);
+            double need = legend_tallest_pt(ro, n, spec, baseH);
             double xt = spec->lab_x && *spec->lab_x ? baseH + HALF_LINE / 2 : 0;
             double around = marT + titleh + titlegap + marB + xt;
             if (need > 0 && need + around > ah) ah = need + around;
         }
         if (w_pt <= 0) w_pt = aspect_locked ? aw : fmin(HM_MAX_PT, fmax(HM_MIN_PT, aw));
         if (h_pt <= 0) h_pt = aspect_locked ? ah : fmin(HM_MAX_PT, fmax(HM_MIN_PT, ah));
+    }
+
+    /* ---- side labels that no longer sit at the canvas edge: a top band's
+     * left title starts at the matrix's left edge, and a left_of row
+     * annotation now hugs the matrix instead of being pushed out of the
+     * title's way -- so the title may reach past the canvas edge. Reserve
+     * what pokes out, once the canvas width is known. ---- */
+    for (int side = 0; side < 2; side++) {         /* 0 = left, 1 = right */
+        double cwe = w_pt - marL - marR
+                   - (spec->lab_y && *spec->lab_y ? baseH + HALF_LINE / 2 : 0);
+        double poke = 0;
+        for (int i = 0; i < n; i++) {
+            const RObj *r = &ro[i];
+            if (r->o->type != HM_HEATMAP && r->o->type != HM_ANNOTATION) continue;
+            double e = label_band(cr, r, side ? SIDE_RIGHT : SIDE_LEFT);
+            if (e <= 0) continue;
+            double room = (side ? 1 - (r->l + r->w) : r->l) * cwe;
+            if (e - room > poke) poke = e - room;
+        }
+        double *sh = side ? &shiftR : &shiftL, *mar = side ? &marR : &marL;
+        if (poke > *sh + 1e-6) {
+            double d = poke - *sh;
+            *sh = poke; *mar += d;
+            if (w_auto) w_pt += d;
+        }
+    }
+
+    /* ---- side legends: wrap a stack taller than the canvas into columns,
+     * ComplexHeatmap-style, rather than stretching the figure to the
+     * stack's height. Legends fill a column in spec order and the next
+     * column sits outward of it; the margin (and an auto width) grows by
+     * the added columns. Five keys beside a 15-row heatmap used to need a
+     * canvas 466pt tall, most of it white. ---- */
+    {
+        double xt = spec->lab_x && *spec->lab_x ? baseH + HALF_LINE / 2 : 0;
+        double avail = h_pt - marT - titleh - titlegap - marB - xt;
+        const double INTER = 2 * HALF_LINE, COLGAP = 2 * HALF_LINE;   /* pt */
+        /* one side KEY taller than the canvas wraps within itself first,
+         * column-major as ggplot2's guide_legend(ncol=) does; ncol=/nrow=
+         * fix the shape. A 43-level key was one 741pt column on a 385pt
+         * canvas, clipped. */
+        for (int i = 0; i < n; i++) {
+            RObj *r = &ro[i];
+            PlaceKind pk = r->o->place.kind;
+            if (r->o->type != HM_LEGEND || !r->leg_discrete
+                || (pk != PL_RIGHT_OF && pk != PL_LEFT_OF)) continue;
+            const RObj *tg = &ro[r->target];
+            int nl = tg->key_f->nlev;
+            const char *title = legend_title(spec, r, tg);
+            double th = title ? baseH + TXT_GAP : 0;
+            int k = r->o->leg_ncol ? r->o->leg_ncol
+                  : r->o->leg_nrow ? (nl + r->o->leg_nrow - 1) / r->o->leg_nrow : 1;
+            if (!r->o->leg_ncol && !r->o->leg_nrow
+                && th + nl * LEG_GRID + (nl - 1) * LEG_GAP > avail) {
+                int fit = (int)floor((avail - th + LEG_GAP) / (LEG_GRID + LEG_GAP));
+                if (fit < 1) fit = 1;
+                k = (nl + fit - 1) / fit;
+            }
+            if (k > nl) k = nl;
+            if (k <= 1) continue;
+            double wmax = 0;
+            for (int q = 0; q < nl; q++) {
+                double tw = text_w(cr, SZ_AXIS_TEXT, tg->key_lab[q]);
+                if (tw > wmax) wmax = tw;
+            }
+            double colw = LEG_GRID + TXT_GAP + wmax;
+            /* under a fixed width a key may take at most half the figure:
+             * past that it would squeeze the matrix to nothing, so keep
+             * fewer columns and say it clips */
+            if (!w_auto) {
+                int kmax = (int)floor((0.5 * w_pt + 2 * HALF_LINE) / (colw + 2 * HALF_LINE));
+                if (kmax < 1) kmax = 1;
+                if (k > kmax) {
+                    fprintf(stderr, "cinderplot: warning: the %d-level key needs %d "
+                            "columns to fit the canvas height and %d fit half the "
+                            "width; it is clipped -- give a larger --size\n",
+                            nl, k, kmax);
+                    k = kmax;
+                }
+            }
+            if (k <= 1) continue;
+            r->leg_kcols = k;
+            r->leg_cellw = colw + 2 * HALF_LINE;
+            double w = k * colw + (k - 1) * 2 * HALF_LINE;
+            double tw = title ? text_w(cr, SZ_BASE, title) : 0;
+            r->leg_across = fmax(w, tw);
+        }
+        for (int pass = 0; pass < 2; pass++) {
+            PlaceKind want = pass == 0 ? PL_RIGHT_OF : PL_LEFT_OF;
+            double colw[MAX_HMOBJS] = {0}, colh = 0;
+            int col = 0, any = 0;
+            for (int i = 0; i < n; i++) {
+                RObj *r = &ro[i];
+                if (r->o->type != HM_LEGEND || r->o->place.kind != want) continue;
+                const char *title = legend_title(spec, r, &ro[r->target]);
+                double h = legend_block_h(r, &ro[r->target], title, baseH, 1.0);
+                if (any && colh + INTER + h > avail) { col++; colh = 0; }
+                colh += (colh > 0 ? INTER : 0) + h;
+                if (r->leg_across > colw[col]) colw[col] = r->leg_across;
+                r->leg_col = col; any = 1;
+            }
+            if (!any) continue;
+            double off[MAX_HMOBJS], used = 0;
+            for (int k = 0; k <= col; k++) {
+                off[k] = used;
+                used += colw[k] + (k < col ? COLGAP : 0);
+            }
+            for (int i = 0; i < n; i++)
+                if (ro[i].o->type == HM_LEGEND && ro[i].o->place.kind == want)
+                    ro[i].leg_colshift = off[ro[i].leg_col];
+            double shift = pass == 0 ? shiftR : shiftL;
+            double need = MARGIN + shift + HALF_LINE + used;
+            double *mar = pass == 0 ? &marR : &marL;
+            if (need > *mar) {
+                if (w_auto) w_pt += need - *mar;   /* fixed --size: the panel narrows */
+                *mar = need;
+            }
+        }
+    }
+
+    /* ---- flat discrete keys (legend(beneath()/top_of())): a swatch grid
+     * as wide as the object it sits under, rows filled left to right, as
+     * ComplexHeatmap lays a horizontal legend. A 225-level Cancer Type key
+     * goes under the figure in a dozen rows instead of eleven columns
+     * beside it. The column count needs the final width, so the grid is
+     * sized here and the margin (and an auto height) grows by its rows. ---- */
+    {
+        double cwe = w_pt - marL - marR
+                   - (spec->lab_y && *spec->lab_y ? baseH + HALF_LINE / 2 : 0);
+        for (int i = 0; i < n; i++) {
+            RObj *r = &ro[i];
+            PlaceKind pk = r->o->place.kind;
+            if (r->o->type != HM_LEGEND || !r->leg_discrete
+                || (pk != PL_BENEATH && pk != PL_TOP_OF)) continue;
+            const RObj *tg = &ro[r->target];
+            int nl = tg->key_f->nlev;
+            double wmax = 0;
+            for (int k = 0; k < nl; k++) {
+                double tw = text_w(cr, SZ_AXIS_TEXT, tg->key_lab[k]);
+                if (tw > wmax) wmax = tw;
+            }
+            double cellw = LEG_GRID + TXT_GAP + wmax + 2 * HALF_LINE;
+            int ncol = r->o->leg_ncol ? r->o->leg_ncol
+                     : r->o->leg_nrow ? (nl + r->o->leg_nrow - 1) / r->o->leg_nrow
+                     : (int)floor((cwe * tg->w + 2 * HALF_LINE) / cellw);
+            if (ncol < 1) ncol = 1;
+            if (ncol > nl) ncol = nl;
+            int rows = (nl + ncol - 1) / ncol;
+            r->leg_kcols = ncol; r->leg_cellw = cellw;
+            /* an ncol=/nrow= grid wider than the room to the canvas edge:
+             * widen an auto canvas, warn under a fixed one */
+            double gridw = ncol * cellw - 2 * HALF_LINE;
+            double room = cwe * (1 - tg->l) + marR - MARGIN;
+            if (gridw > room + 1e-6) {
+                if (w_auto) { w_pt += gridw - room; cwe += gridw - room; }
+                else fprintf(stderr, "cinderplot: warning: the %d-column key is %.0fpt "
+                             "wide with %.0fpt to the edge; it is clipped -- give "
+                             "fewer columns (ncol=/nrow=) or a wider --size\n",
+                             ncol, gridw, room);
+            }
+            const char *title = legend_title(spec, r, tg);
+            double hgt = (title ? baseH + TXT_GAP : 0)
+                       + rows * LEG_GRID + (rows - 1) * LEG_GAP;
+            double shift = pk == PL_BENEATH ? shiftB : shiftT;
+            double need = MARGIN + shift + HALF_LINE + hgt;
+            double *mar = pk == PL_BENEATH ? &marB : &marT;
+            if (need > *mar) {
+                if (h_auto) h_pt += need - *mar;   /* fixed --size: the panel shortens */
+                *mar = need;
+            }
+        }
     }
 
     /* switch from the scratch measuring context to the real output surface */
@@ -1609,11 +1887,76 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                     g = gt_add(T, G_POLYLINE, CR, CC, CR, CC);
                     g->n = NB; g->px = px; g->py = py; g->col = c; g->lw = lw_pt(0.5);
                     g = gt_add(T, G_TEXT, CR, CC, CR, CC);
-                    g->str = r->ann_f->levels[rlev[k]]; g->size = SZ_AXIS_TEXT; g->col = c;
+                    g->str = r->ann_f->levels[rlev[k]]; g->size = SZ_AXIS_TEXT;
+                    g->col = r->o->has_label_col ? r->o->label_col : c;
                     g->tx = right ? txt_x + PTX(TXT_GAP * 0.5) : txt_x - PTX(TXT_GAP * 0.5);
                     g->ty = ty[k]; g->hj = right ? 0 : 1; g->va = V_INKCENTER;
                 }
                 free(cy); free(ty); free(rlev);
+            }
+            /* the same on a horizontal band: one label per run, standing
+             * outward and centred on the run, spread sideways by their real
+             * widths where runs are too narrow to hold them (wheatmap's
+             * WColorBarH(label.use.data=TRUE)) */
+            if (r->o->label_data && r->ann_horiz && r->ann_f) {
+                int up = r->o->place.kind != PL_BENEATH;
+                double edge = up ? r->b + r->h : r->b;
+                double txt_y = up ? edge + PTY(ANN_LEAD) : edge - PTY(ANN_LEAD);
+                double *cx = cp_xmalloc(r->ann_n * sizeof(double));   /* run centre (npc) */
+                double *tw = cp_xmalloc(r->ann_n * sizeof(double));   /* label width (npc) */
+                double *tx = cp_xmalloc(r->ann_n * sizeof(double));   /* spread position */
+                int *rlev = cp_xmalloc(r->ann_n * sizeof(int));
+                int nrun = 0;
+                for (int s = 0; s < r->ann_n; ) {
+                    int lev = r->ann_f->idx[r->ann_ord[s]], e = s;
+                    while (e + 1 < r->ann_n && r->ann_f->idx[r->ann_ord[e + 1]] == lev) e++;
+                    int s0 = s;
+                    s = e + 1;
+                    if (lev < 0) continue;                        /* NA run: no label */
+                    cx[nrun] = r->l + r->w * (s0 + e + 1) / 2.0 / r->ann_n;
+                    tw[nrun] = PTX(text_w(cr, SZ_AXIS_TEXT, r->ann_f->levels[lev]));
+                    rlev[nrun] = lev; nrun++;
+                }
+                /* label.angle=90: each label is one text line wide. When the
+                 * lines cannot sit side by side across the band, shrink them
+                 * (down to 4pt) before spreading, so forty narrow runs read
+                 * as forty labels rather than a fan of leaders */
+                int rot = r->o->label_angle == 90;
+                double fs = SZ_AXIS_TEXT;
+                if (rot && nrun > 0) {
+                    cairo_font_extents_t fe;
+                    cairo_set_font_size(cr, fs);
+                    cairo_font_extents(cr, &fe);
+                    double lh = fe.ascent + fe.descent;
+                    double room = r->w * cw_pt / nrun;     /* pt per run, on average */
+                    if (lh + TXT_GAP * 0.25 > room)
+                        fs = fmax(4.0, fs * room / (lh + TXT_GAP * 0.25));
+                    for (int k = 0; k < nrun; k++) tw[k] = PTX(lh * fs / SZ_AXIS_TEXT);
+                }
+                spread_labels_w(cx, tw, nrun, PTX(rot ? TXT_GAP * 0.25 : TXT_GAP), 0, 1, tx);
+                for (int k = 0; k < nrun; k++) {
+                    Col c = r->ann_pal[rlev[k]];
+                    const int NB = 16;            /* cubic bezier, vertical tangents */
+                    double *px = cp_xmalloc(NB * sizeof(double)), *py = cp_xmalloc(NB * sizeof(double));
+                    double ym = (edge + txt_y) / 2;
+                    for (int j = 0; j < NB; j++) {
+                        double u = 1.0 - (double)j / (NB - 1), tt = 1.0 - u;
+                        double b0 = u*u*u, b1 = 3*u*u*tt, b2 = 3*u*tt*tt, b3 = tt*tt*tt;
+                        px[j] = (b0 + b1) * cx[k] + (b2 + b3) * tx[k];
+                        py[j] = b0 * edge + (b1 + b2) * ym + b3 * txt_y;
+                    }
+                    g = gt_add(T, G_POLYLINE, CR, CC, CR, CC);
+                    g->n = NB; g->px = px; g->py = py; g->col = c; g->lw = lw_pt(0.5);
+                    g = gt_add(T, G_TEXT, CR, CC, CR, CC);
+                    g->str = r->ann_f->levels[rlev[k]]; g->size = fs;
+                    g->col = r->o->has_label_col ? r->o->label_col : c;
+                    g->tx = tx[k];
+                    g->ty = up ? txt_y + PTY(TXT_GAP * 0.5) : txt_y - PTY(TXT_GAP * 0.5);
+                    if (rot) {     /* reads upward, running away from the band */
+                        g->rot = 90; g->hj = up ? 0 : 1; g->va = V_INKCENTER;
+                    } else { g->hj = 0.5; g->va = up ? V_BOTTOM : V_TOP; }
+                }
+                free(cx); free(tw); free(tx); free(rlev);
             }
         }
         /* HM_LEGEND is drawn separately, as rigid margin chrome, below */
@@ -1638,7 +1981,9 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             g->hj = left ? 1 : 0; g->va = V_INKCENTER;
             continue;
         }
-        g->tx = r->l; g->ty = r->b + r->h + PTY(HALF_LINE / 2);
+        /* above a labelled top_of band, the title clears the run labels */
+        g->tx = r->l;
+        g->ty = r->b + r->h + PTY(HALF_LINE / 2 + label_band(cr, r, SIDE_TOP));
         g->hj = 0; g->va = V_BOTTOM;
     }
 
@@ -1878,33 +2223,36 @@ int render_heatmap(const PlotSpec *spec, const char *out,
     for (int pass = 0; pass < 2; pass++) {          /* right side, then left */
         PlaceKind want = pass == 0 ? PL_RIGHT_OF : PL_LEFT_OF;
         double shift = pass == 0 ? shiftR : shiftL;
-        int idx[MAX_HMOBJS], ni = 0;
-        for (int i = 0; i < n; i++)
-            if (ro[i].o->type == HM_LEGEND && ro[i].o->place.kind == want) idx[ni++] = i;
-        if (!ni) continue;
-        double heights[MAX_HMOBJS], total = 0, inter = PTY(2 * HALF_LINE);
-        for (int j = 0; j < ni; j++) {
-            RObj *r = &ro[idx[j]];
-            const char *title = legend_title(spec, r, &ro[r->target]);
-            heights[j] = legend_block_h(r, &ro[r->target], title, baseH, ch_pt);
-            total += heights[j];
-        }
-        total += (ni - 1) * inter;
-        if (total > 1 + 1e-9)
-            /* auto-fit grows the canvas for the stack; only a fixed --size
-             * (or the auto-fit ceiling, or aspect=) can leave it too short */
-            fprintf(stderr, "cinderplot: warning: the %s legends stack %.0fpt "
-                    "tall on a %.0fpt canvas; the top and bottom keys are "
-                    "clipped -- give a taller --size, or move a legend to "
-                    "the other side\n", pass == 0 ? "right_of" : "left_of",
-                    total * ch_pt, ch_pt);
-        double top = 0.5 + total / 2;               /* top of the stack */
-        for (int j = 0; j < ni; j++) {
-            RObj *r = &ro[idx[j]];
-            const char *title = legend_title(spec, r, &ro[r->target]);
-            draw_one_legend(T, r, &ro[r->target], spec, dmin, dmax, title,
-                            baseH, cw_pt, ch_pt, top, shift);
-            top -= heights[j] + inter;
+        /* one centred stack per column (the packing above chose them) */
+        for (int col = 0; col < MAX_HMOBJS; col++) {
+            int idx[MAX_HMOBJS], ni = 0;
+            for (int i = 0; i < n; i++)
+                if (ro[i].o->type == HM_LEGEND && ro[i].o->place.kind == want
+                    && ro[i].leg_col == col) idx[ni++] = i;
+            if (!ni) break;
+            double heights[MAX_HMOBJS], total = 0, inter = PTY(2 * HALF_LINE);
+            for (int j = 0; j < ni; j++) {
+                RObj *r = &ro[idx[j]];
+                const char *title = legend_title(spec, r, &ro[r->target]);
+                heights[j] = legend_block_h(r, &ro[r->target], title, baseH, ch_pt);
+                total += heights[j];
+            }
+            total += (ni - 1) * inter;
+            if (total > 1 + 1e-9)
+                /* only a single legend taller than the canvas gets here: a
+                 * fixed --size, the auto-fit ceiling, or aspect= */
+                fprintf(stderr, "cinderplot: warning: a %s legend is %.0fpt "
+                        "tall on a %.0fpt canvas; it is clipped -- give a "
+                        "taller --size\n", pass == 0 ? "right_of" : "left_of",
+                        total * ch_pt, ch_pt);
+            double top = 0.5 + total / 2;               /* top of the stack */
+            for (int j = 0; j < ni; j++) {
+                RObj *r = &ro[idx[j]];
+                const char *title = legend_title(spec, r, &ro[r->target]);
+                draw_one_legend(T, r, &ro[r->target], spec, dmin, dmax, title,
+                                baseH, cw_pt, ch_pt, top, shift + r->leg_colshift);
+                top -= heights[j] + inter;
+            }
         }
     }
     for (int i = 0; i < n; i++) {                    /* horizontal legends */

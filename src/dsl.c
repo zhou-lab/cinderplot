@@ -753,6 +753,9 @@ static int hm_opt_ok(HMType t, const char *key) {
     if (!strcmp(key, "title")) return t != HM_DENDROGRAM;
     if (!strcmp(key, "data")) return t == HM_HEATMAP || t == HM_ANNOTATION;
     if (!strcmp(key, "column") || !strcmp(key, "values") || !strcmp(key, "palette")
+        || !strcmp(key, "limits") || !strcmp(key, "label.angle")
+        || !strcmp(key, "label_angle") || !strcmp(key, "label.colour")
+        || !strcmp(key, "label.color") || !strcmp(key, "label_colour")
         || !strcmp(key, "title.side") || !strcmp(key, "title_side"))
         return t == HM_ANNOTATION;
     if (!strcmp(key, "cluster") || !strcmp(key, "rownames") || !strcmp(key, "colnames")
@@ -761,7 +764,8 @@ static int hm_opt_ok(HMType t, const char *key) {
         || !strcmp(key, "gap")) return t == HM_HEATMAP;
     if (!strcmp(key, "labels") || !strcmp(key, "box") || !strcmp(key, "grid"))
         return t == HM_HEATMAP || t == HM_ANNOTATION;
-    if (!strcmp(key, "missing")) return t == HM_LEGEND;
+    if (!strcmp(key, "missing") || !strcmp(key, "ncol") || !strcmp(key, "nrow"))
+        return t == HM_LEGEND;
     return 0;
 }
 static const char *hm_opt_menu(HMType t) {
@@ -770,8 +774,9 @@ static const char *hm_opt_menu(HMType t) {
                             "labels=, discrete=, aspect=, box=, grid=, colsplit=, "
                             "rowsplit=, gap=, placements";
     case HM_ANNOTATION: return "name=, data=, title=, title.side=, column=, values=, "
-                               "palette=, labels=, box=, grid=, placements";
-    case HM_LEGEND: return "name=, title=, missing=, placements (e.g. right_of(\"m\"))";
+                               "palette=, limits=, labels=, label.angle=, label.colour=, box=, grid=, "
+                               "placements";
+    case HM_LEGEND: return "name=, title=, missing=, ncol=, nrow=, placements (e.g. right_of(\"m\"))";
     default: return "name=, placements (e.g. left_of(\"m\"))";
     }
 }
@@ -820,6 +825,15 @@ static int parse_hm_args(P *p, HMObj *o, int want_data) {
                 char *v = string_lit(p);
                 if (!v) return fail(p, "name= expects a quoted string", "");
                 o->name = v; o->name_given = 1;
+            } else if (!strcmp(key, "ncol") || !strcmp(key, "nrow")) {
+                char *end;
+                double v = strtod(p->s, &end);
+                if (end == p->s || v < 1 || v != (int)v)
+                    return fail(p, "%s= expects a positive integer", key);
+                p->s = end;
+                if (key[1] == 'c') o->leg_ncol = (int)v; else o->leg_nrow = (int)v;
+                if (o->leg_ncol && o->leg_nrow)
+                    return fail(p, "legend(): give ncol= or nrow=, not both", "");
             } else if (!strcmp(key, "missing")) {
                 /* the label of the background/NA swatch on a track key;
                  * missing=none drops the swatch (the same off-spellings the
@@ -844,6 +858,28 @@ static int parse_hm_args(P *p, HMObj *o, int want_data) {
                 char *v = string_lit(p);
                 if (!v) return fail(p, "column= expects a quoted column name", "");
                 o->column = v;
+            } else if (!strcmp(key, "label.angle") || !strcmp(key, "label_angle")) {
+                /* run labels stood on end, ComplexHeatmap's column_title_rot:
+                 * forty narrow runs fit side by side only at 90 degrees */
+                char *end;
+                double v = strtod(p->s, &end);
+                if (end == p->s || (v != 0 && v != 90))
+                    return fail(p, "label.angle= takes 0 or 90", "");
+                p->s = end;
+                o->label_angle = v;
+            } else if (!strcmp(key, "label.colour") || !strcmp(key, "label.color")
+                       || !strcmp(key, "label_colour")) {
+                char *v = string_lit(p);
+                if (!v || parse_color(v, &o->label_col))
+                    return fail(p, "label.colour= expects a quoted colour", "");
+                o->has_label_col = 1;
+            } else if (!strcmp(key, "limits")) {
+                /* a numeric band's ramp domain, as scale_fill_*(limits=) is
+                 * the heatmap's: the midpoint of a blue-white-red ramp lands
+                 * where the reader expects, and two bands can share a ramp */
+                if (parse_lim_pair(p, "annotation(limits=)", &o->lim_lo, &o->lim_hi))
+                    return -1;
+                o->has_limits = 1;
             } else if (!strcmp(key, "colsplit") || !strcmp(key, "rowsplit")) {
                 char *v = string_lit(p);
                 if (!v || !*v)
@@ -1038,6 +1074,8 @@ static int parse_hm_args(P *p, HMObj *o, int want_data) {
         break;
     }
 done:
+    if ((o->label_angle || o->has_label_col) && !o->label_data)
+        return fail(p, "label.angle=/label.colour= style the run labels; add labels=data", "");
     if (o->gap > 0 && !o->colsplit && !o->rowsplit)
         return fail(p, "gap= sizes the colsplit=/rowsplit= separators; give one", "");
     if (o->title_side && !o->title)
@@ -1687,6 +1725,18 @@ static int parse_term(P *p, PlotSpec *spec) {
                         return fail(p, "hjust= takes 0..1", "");
                     p->s = end;
                     l->txt_hjust = v; l->has_txt_hjust = 1;
+                } else if ((gt == GEOM_TEXT || gt == GEOM_LABEL) && !strcmp(key, "vjust")) {
+                    /* ggplot2's vjust in text heights: 0 rests the text on y,
+                     * 1 hangs it below, -0.6 lifts it clear of a dot at y.
+                     * Any finite value, as ggplot takes */
+                    skip_ws(p);
+                    char *end;
+                    double v = strtod(p->s, &end);
+                    if (end == p->s || !isfinite(v))
+                        return fail(p, "vjust= expects a number (0 = text rests on y, "
+                                    "1 = hangs below, negative lifts it)", "");
+                    p->s = end;
+                    l->txt_vjust = v; l->has_txt_vjust = 1;
                 } else if ((gt == GEOM_TEXT || gt == GEOM_LABEL) && !strcmp(key, "nudge_x")) {
                     l->nudge_x = strtod(p->s, (char **)&p->s);
                     if (!isfinite(l->nudge_x)) return fail(p, "nudge_x= must be finite", "");
@@ -1717,6 +1767,9 @@ static int parse_term(P *p, PlotSpec *spec) {
             }
         }
         if (expect(p, ')')) return -1;
+        if (l->has_txt_vjust && l->txt_angle != 0)
+            return fail(p, "geom_text(vjust=) with angle= is not implemented (the "
+                        "rotated frame centres vertically); use nudge_y= instead", "");
         /* a reference line with no position parsed and drew nothing */
         if (gt == GEOM_HLINE && !l->has_intercept)
             return fail(p, "geom_hline() needs yintercept=", "");

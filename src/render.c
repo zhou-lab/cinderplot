@@ -2683,6 +2683,12 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     return -1;
                 }
             } else val = &ad->cols[ad->ncol - 1];
+            if (o->has_limits) {
+                snprintf(err, CP_ERRLEN, "annotation(%s): limits= pins a numeric "
+                         "band's range; a band under a grammar panel is "
+                         "categorical", o->data);
+                return -1;
+            }
             Factor *af = factor_make(ad, val);
             int *catlev = cp_xmalloc(xf->nlev * sizeof(int));
             int miss = 0;
@@ -4277,6 +4283,12 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         rl[m].hw = text_w(cr, fs, s) / 2 + bpad;
                         rl[m].hh = font_h(cr, fs) / 2 + bpad;
                         rl[m].ax = axp + ndx * panelw_pt; rl[m].ay = ayp + ndy * panelh_pt;
+                        /* vjust=: move the text's centre (0.5 - vjust) text
+                         * heights off y, ggplot2's anchoring, so vjust=0 rests
+                         * the label on y and -0.6 lifts it clear of a dot
+                         * there whatever the y range */
+                        if (L->has_txt_vjust)
+                            rl[m].ay += (0.5 - L->txt_vjust) * font_h(cr, fs);
                         if (L->repel) {         /* scatter starts (golden angle) to break jams */
                             double th = m * 2.3999632, rad = rl[m].hh + 3;
                             rl[m].cx = rl[m].ax + rad * cos(th);

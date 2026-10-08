@@ -54,6 +54,10 @@ cinderplot data.csv -x hp -y mpg -c cyl -f gear out.pdf      # shortcut flags
   heatmap body in SVG carries `image-rendering:pixelated` so viewers keep
   its cell edges crisp (cairo drops the nearest-filter hint otherwise);
   smooth-scaled raster point layers are deliberately left interpolated.
+- **SVG and PNG get a white canvas** (ggplot2 paints `plot.background`
+  white, R's `svg()` a white rect), so a figure stays readable in a
+  dark-themed viewer; `--transparent` drops it. PDF keeps no ground — PDF
+  viewers draw a white page.
 - `--dump-spec` prints the desugared expression without rendering.
 - The delimiter is **sniffed from the first line** — a tab anywhere means TSV,
   otherwise CSV. The extension is ignored, except that `.gz` (gzip or bgzip) is
@@ -195,7 +199,10 @@ and ignored (the output path is a command-line argument here).
   reference-line-label placement); vjust takes 0/0.5/1. `angle=` rotates the
   text (degrees CCW), with hjust applied in the rotated frame — the standing
   per-bar label; vjust with angle errors. `geom_text(angle=, hjust=)` takes
-  the same; `geom_label()` and the repel geoms refuse rotation (the box does
+  the same, and `geom_text()`/`geom_label()` take `vjust=` in ggplot2's units
+  (any value: 0 rests the text on y, 1 hangs it below, `vjust=-0.6` lifts a
+  value label clear of the dot at y, whatever the y range) beside `nudge_y=`
+  in data units; `geom_label()` and the repel geoms refuse rotation (the box does
   not rotate; repel measures unrotated extents). Tilted axis TICK labels are
   a different verb: `scale_x_discrete(angle=45)`, and crowded discrete labels
   already auto-rotate. Marks take
@@ -384,20 +391,55 @@ ramp, so several bands repeat the same colours for unrelated levels.
 draws viridis by default; `palette=` takes any ramp (`bwr`, `parula`,
 `magma`, ... or a ColorBrewer ramp such as `RdBu`, listed low to high) and
 `values=c("#2166ac", "white", "#b2182b")` spreads 2–12 colours over its range
-(ggplot2's `gradientn`). A qualitative set on a numeric band, or a ramp on a
-categorical one, is an error naming the mismatch.
+(ggplot2's `gradientn`). `limits=c(0, 1)` pins a numeric band's ramp to that
+domain, as `scale_fill_*(limits=)` does the heatmap's: the white middle of a
+blue-white-red band then sits at 0.5 whatever the data span, values outside
+squish to the ends, and two bands can share one ramp. A qualitative set on a
+numeric band, or a ramp (or `limits=`) on a categorical one, is an error
+naming the mismatch.
 `title.side=left` (or `right`) puts a horizontal band's `title=` beside it at
 the row-name size, wheatmap's `label.side="l"`, so a stack of thin bars stays
-compact; the default sits it above.
+compact; the default sits it above. A side title sits in its band's own row:
+a `left_of` row annotation still hugs the matrix (the title shares no rows
+with it), and the canvas margin grows for a title that reaches past the edge.
+`labels=data` on a categorical band writes each run's level name beside it,
+in the level's colour, joined to the run by a short leader (wheatmap's
+`label.use.data`): to the side of a `left_of`/`right_of` band, and above a
+`top_of` (below a `beneath`) band, centred on the run. Labels too crowded
+for their runs are spread apart by their measured widths and the leaders
+lean to reach them; the label band is reserved, and a `title=` above the
+band moves up to clear it. `label.angle=90` stands a horizontal band's labels on
+end (ComplexHeatmap's `column_title_rot=90`), shrinking them toward 4pt when
+the runs are too narrow to hold one line each, so forty runs read as forty
+labels; `label.colour="black"` sets the text ink (default: each level's own
+colour, which is unreadable for light hues), the leader keeping the run's
+colour.
 An annotation may be anchored
 by its data column name, e.g. `legend(right_of("diagnosis"))`. **One object per
 slot**: a second `left_of("m")` errors and says which object holds the slot —
 chain the next one off that object (`dendrogram(left_of("dx"))`), as the
 example above does; legends are exempt and stack. The `right_of`/`left_of`
-legends stack down that side, centred on the canvas, and auto-fit makes the
-canvas tall enough for the stack (a small matrix with three keys grows
-taller rather than cutting the end keys); an explicit `--size` too short for
-it is kept, with a warning naming the side.
+legends stack down that side, centred on the canvas, in spec order; **a
+stack taller than the canvas wraps into further columns**, outward
+(ComplexHeatmap's packing), so the figure keeps the matrix's height and
+grows wider instead — or, under a fixed `--size` width, the panel narrows.
+Only a single legend taller than the canvas cannot wrap: auto-fit grows the
+height for it, and a fixed `--size` keeps its size and warns.
+A **discrete key may lie flat**: `legend(beneath("band"))` or `top_of(...)`
+lays the swatches in a grid under (or over) the figure, as wide as its
+target, filled row by row (ComplexHeatmap's horizontal legend;
+`theme(legend.position="bottom")` in ggplot2). The column count is as many as
+fit the target's width; `ncol=` or `nrow=` fixes it. The margin, and an
+auto height, grow by its rows; a grid wider than the canvas widens an auto
+width, and warns under a fixed `--size`. A **side key** (`right_of`/`left_of`)
+taller than the canvas wraps within itself into columns, filled down then
+across as ggplot2's `guide_legend(ncol=)` does; `ncol=`/`nrow=` fix its
+shape too. Under a fixed width a key may take at most half the figure, past
+which it keeps fewer columns and warns. `ncol=`/`nrow=` on a colourbar is an
+error. A legend's block (title, bar or
+swatches, and their labels) always sits OUTSIDE that side's row names and
+`title.side=` band titles, its edge meeting the label gutter, so a
+`left_of` legend never overprints `rownames=left`.
 
 `labs(x=)`/`labs(y=)` name the axes; `labs(title=)` titles the figure, and
 `title=` on a placed object names *that panel* — which is how a stack of
@@ -856,8 +898,9 @@ statistical transformations beyond binning, density and loess.
    caps at 64 levels for the same reason. There is no discrete-category or legend-level cap any
    more. Still hard limits: 8 layers, 12 tracks, 16 heatmap objects, 256
    breaks/labels. A legend stack taller than the figure grows the auto-fit
-   canvas, in grammar and heatmap mode alike; under an explicit `--size` it
-   warns before clipping.
+   canvas in grammar mode, and wraps into further columns in heatmap mode;
+   under an explicit `--size` a legend that still cannot fit warns before
+   clipping.
 8. **`coord_flip()` is grammar-mode only** — it errors with `scale_x_genome()`
    and `ideogram()`, and is ignored in heatmap and track modes.
 9. **A dense scatter is the one slow case — use `geom_point(raster=TRUE)`.**

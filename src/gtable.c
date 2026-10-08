@@ -10,6 +10,11 @@
 
 static double g_dpi = 96;                       /* PNG raster resolution */
 void cp_set_dpi(double dpi) { if (dpi > 0) g_dpi = dpi; }
+/* --transparent: no white ground under the figure. ggplot2 paints its
+ * plot.background white and R's svg() a white rect, so that is the default;
+ * a transparent SVG vanished on a dark-themed viewer (black text on black). */
+static int g_transparent = 0;
+void cp_set_transparent(int on) { g_transparent = on; }
 
 /* ---- --editable-svg: text as <text>, not glyph outlines -------------------
  * Cairo's SVG surface always vectorises glyphs, which is portable but not
@@ -169,15 +174,24 @@ static cairo_status_t outbuf_write(void *closure, const unsigned char *data, uns
 cairo_surface_t *cp_surface_create(const char *out, double w_pt, double h_pt) {
     g_out.n = 0;                                /* one live file surface per run */
     const char *dot = strrchr(out, '.');
-    if (dot && strcasecmp(dot, ".svg") == 0)
-        return cairo_svg_surface_create_for_stream(outbuf_write, &g_out, w_pt, h_pt);
+    if (dot && strcasecmp(dot, ".svg") == 0) {
+        cairo_surface_t *s = cairo_svg_surface_create_for_stream(outbuf_write, &g_out,
+                                                                 w_pt, h_pt);
+        if (!g_transparent) {                   /* a white canvas rect, first in the file */
+            cairo_t *bg = cairo_create(s);
+            cairo_set_source_rgb(bg, 1, 1, 1); cairo_paint(bg); cairo_destroy(bg);
+        }
+        return s;
+    }
     if (dot && strcasecmp(dot, ".png") == 0) {
         double sc = g_dpi / 72.0;               /* points -> pixels */
         int w = (int)(w_pt * sc + 0.5), h = (int)(h_pt * sc + 0.5);   /* round */
         cairo_surface_t *s = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
         cairo_surface_set_device_scale(s, sc, sc);   /* keep drawing in points */
-        cairo_t *bg = cairo_create(s);          /* opaque white ground, like ggsave */
-        cairo_set_source_rgb(bg, 1, 1, 1); cairo_paint(bg); cairo_destroy(bg);
+        if (!g_transparent) {                   /* opaque white ground, like ggsave */
+            cairo_t *bg = cairo_create(s);
+            cairo_set_source_rgb(bg, 1, 1, 1); cairo_paint(bg); cairo_destroy(bg);
+        }
         return s;
     }
     return cairo_pdf_surface_create_for_stream(outbuf_write, &g_out, w_pt, h_pt);

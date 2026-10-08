@@ -75,6 +75,29 @@ void cp_key_draw(GTable *T, int r, int c, char *const *labels, const Col *pal,
     }
 }
 
+/* A discrete key as a grid of `ncol` columns, each `cellw_pt` wide, the
+ * first cell's top-left at (sx, top) npc of cell (r, c); filled row-major
+ * when `byrow`, else column-major. */
+void cp_key_draw_grid(GTable *T, int r, int c, char *const *labels, const Col *pal,
+                      int nlev, int ncol, double cellw_pt, double sx, double top,
+                      double cw_pt, double ch_pt, int byrow) {
+    double gw = LEG_GRID / cw_pt, gh = LEG_GRID / ch_pt, gap = LEG_GAP / ch_pt;
+    int nrow = (nlev + ncol - 1) / ncol;
+    for (int k = 0; k < nlev; k++) {
+        /* byrow: across then down (a flat key); else down then across, as
+         * ggplot2's guide_legend(ncol=) fills a side key */
+        int cc = byrow ? k % ncol : k / nrow, rr = byrow ? k / ncol : k % nrow;
+        double x0 = sx + cc * cellw_pt / cw_pt;
+        double y1 = top - rr * (gh + gap);
+        Grob *g = gt_add(T, G_RECT, r, c, r, c);
+        g->sub = 1; g->col = pal[k];
+        g->x0 = x0; g->x1 = x0 + gw; g->y1 = y1; g->y0 = y1 - gh;
+        g = gt_add(T, G_TEXT, r, c, r, c);
+        g->str = labels[k]; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
+        g->tx = x0 + gw + TXT_GAP / cw_pt; g->ty = y1 - gh / 2; g->hj = 0; g->va = V_INKCENTER;
+    }
+}
+
 /* The colourbar: LEG_LEN long, LEG_BAR thick, its lower-left corner at
  * (bx0, by0) npc of cell (r, c). `vert` stands it up (values increase
  * upward) or lays it flat (values increase rightward); `dir` says which side
