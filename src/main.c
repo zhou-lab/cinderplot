@@ -25,13 +25,14 @@
 #include <strings.h>   /* strcasecmp */
 
 /* The figure font, read by every cairo_select_font_face() site across the
- * five modes; --font FAMILY overrides it below. */
+ * six modes; --font FAMILY overrides it below. */
 const char *cp_font_family = FONT_FAMILY_DEFAULT;
 double cp_line_scale = 1.0;
-/* base font size in pt for every label, all five modes; --font-size PT sets it
+/* base font size in pt for every label, all six modes; --font-size PT sets it
  * and theme_*(base_size=) overrides that per figure. 11.0 is the ggplot2
  * theme_gray default and reproduces the former compile-time SZ_BASE exactly. */
 double cp_base_size = 11.0;
+double cp_key_w = 17.3, cp_key_h = 17.3, cp_key_gap = HALF_LINE * 0.4;
 
 static const char *USAGE =
     "usage: cinderplot [DSL-expr | flags] [data] out.{pdf,svg,png}\n"
@@ -70,12 +71,13 @@ static void print_help(void) {
     printf("    %sfacet_wrap%s(~g)  small multiples — %sfacet_grid%s(r ~ c) for a two-way grid\n", G, R, G, R);
     printf("    %sscale_*%s · %stheme_*%s · %slabs%s(title=…) · %sguides%s() · %scoord_*%s()\n", G, R, G, R, G, R, G, R, G, R);
 
-    printf("\n  %sFIVE MODES%s   %s(chosen from the verbs you use)%s\n", H, R, D, R);
+    printf("\n  %sSIX MODES%s   %s(chosen from the verbs you use)%s\n", H, R, D, R);
     printf("    %splots%s     %saes(…) + geom_*()%s              %s— the ggplot2 grammar%s\n", G, R, K, R, D, R);
     printf("    %sheatmaps%s  %sheatmap() + annotation()%s       %s— clustering, dendrograms%s\n", G, R, K, R, D, R);
     printf("    %sgenome%s    %sregion() + genes() + matrix()%s  %s— locus browser, tabix tracks%s\n", G, R, K, R, D, R);
     printf("    %strees%s     %sgeom_tree() + geom_tiplab()%s    %s— Newick input, not a table%s\n", G, R, K, R, D, R);
     printf("    %schords%s    %schord(...)%s                     %s— from/to/value links, circlize-style%s\n", G, R, K, R, D, R);
+    printf("    %svenns%s     %svenn(...)%s                      %s— item x set membership, dots per sample%s\n", G, R, K, R, D, R);
 
     printf("\n  %sEXAMPLES%s\n", H, R);
     printf("    %scinderplot%s %s'mtcars.csv + aes(wt, mpg, colour=factor(cyl)) + geom_point()'%s -o s.pdf\n", D, R, K, R);
@@ -461,11 +463,14 @@ int main(int argc, char **argv) {
     }
     if (no_legend)                          /* --no-legend: every guide */
         spec.no_legend = spec.no_legend_size = spec.no_legend_shape = 1;
-    if (no_legend) spec.no_legend_linetype = 1;
+    if (no_legend) spec.no_legend_linetype = spec.no_legend_fill = spec.no_legend_colour = 1;
     /* base font size: a spec-level theme_*(base_size=) beats the --font-size flag
      * (which has already set cp_base_size), exactly as base_line_size beats the
-     * env var. Set here, before any mode dispatch, so all five modes see it. */
+     * env var. Set here, before any mode dispatch, so all six modes see it. */
     if (spec.base_size > 0) cp_base_size = spec.base_size;
+    if (spec.key_w > 0) cp_key_w = spec.key_w;   /* theme(legend.key.*=) */
+    if (spec.key_h > 0) cp_key_h = spec.key_h;
+    if (spec.has_key_gap) cp_key_gap = spec.key_gap;
 
     /* 0 = auto-fit: track & heatmap modes size themselves from content;
      * grammar mode keeps the classic 6x4in default. */
@@ -489,6 +494,15 @@ int main(int argc, char **argv) {
     }
     /* annotation() beside aes()/geom_* is a grammar-mode band (dsl_parse has
      * already vetted the combination), so only a pure heatmap spec comes here */
+    if (spec.venn_mode) {                        /* Venn diagram mode */
+        if (render_venn(&spec, spec.data_path ? spec.data_path : data,
+                        out, w_pt, h_pt, err)) {
+            fprintf(stderr, "cinderplot: %s\n", err);
+            return 1;
+        }
+        fprintf(stderr, "wrote %s\n", out);
+        return 0;
+    }
     if (spec.chord_mode) {                       /* chord diagram mode */
         if (render_chord(&spec, spec.data_path ? spec.data_path : data,
                          out, w_pt, h_pt, err)) {
@@ -511,7 +525,7 @@ int main(int argc, char **argv) {
      * variable, and any per-layer y override. Tell the loader, so a wide table
      * costs only the columns actually plotted. A per-layer data= file is read
      * separately and is unaffected, the filter being one-shot. */
-    char *needed[MAX_LAYERS + 16];
+    char *needed[3 * MAX_LAYERS + 16];
     int nneeded = 0;
     const AesEntry *aes[] = { &spec.x, &spec.y, &spec.colour, &spec.xend,
                               &spec.yend, &spec.ymin, &spec.label, &spec.size,
@@ -519,11 +533,17 @@ int main(int argc, char **argv) {
                               &spec.linetype };
     for (size_t i = 0; i < sizeof aes / sizeof *aes; i++)
         if (aes[i]->col) needed[nneeded++] = aes[i]->col;
+    if (spec.pfill.col) needed[nneeded++] = spec.pfill.col;
+    if (spec.x.reorder_by) needed[nneeded++] = spec.x.reorder_by;
+    if (spec.y.reorder_by) needed[nneeded++] = spec.y.reorder_by;
     if (spec.facet_var) needed[nneeded++] = spec.facet_var;
     if (spec.facet_rowvar) needed[nneeded++] = spec.facet_rowvar;
     if (spec.facet_colvar) needed[nneeded++] = spec.facet_colvar;
-    for (int i = 0; i < spec.nlayers; i++)
+    for (int i = 0; i < spec.nlayers; i++) {
         if (spec.layers[i].ycol) needed[nneeded++] = spec.layers[i].ycol;
+        if (spec.layers[i].eb_lo) needed[nneeded++] = spec.layers[i].eb_lo;
+        if (spec.layers[i].eb_hi) needed[nneeded++] = spec.layers[i].eb_hi;
+    }
     if (nneeded) cp_set_needed_cols(needed, nneeded);
 
     DataFrame *df = df_read_csv(spec.data_path, err);

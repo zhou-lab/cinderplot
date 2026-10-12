@@ -44,7 +44,8 @@ static void svg_note_image(cairo_t *cr, int nearest) {
     }
     svg_imgs[nsvg_imgs++] = (unsigned char)nearest;
 }
-typedef struct { double x, y, size, m[6]; int has_m; Col col; char *str; } SvgTxt;
+typedef struct { double x, y, size, m[6]; int has_m, bold; Col col; char *str; } SvgTxt;
+static int g_txt_bold;   /* the G_TEXT being shown is bold (venn set titles) */
 static SvgTxt *svgt; static int nsvgt, csvgt;
 void cp_set_svg_text(int on) { svg_text_on = on; }
 
@@ -69,6 +70,7 @@ static int svg_show(cairo_t *cr, double x, double y, double size, const char *s)
     double mm[6] = { m.xx, m.yx, m.xy, m.yy, m.x0, m.y0 };
     for (int i = 0; i < 6; i++) t->m[i] = fabs(mm[i]) < 1e-12 ? 0 : mm[i];
     t->col.r = r; t->col.g = gg; t->col.b = b;
+    t->bold = g_txt_bold;
     t->str = cp_xstrdup(s);
     return 1;
 }
@@ -138,6 +140,7 @@ static int svg_inject_text(const char *out) {
                 t->x, t->y, cp_font_family, t->size,
                 (int)(t->col.r * 255 + 0.5), (int)(t->col.g * 255 + 0.5),
                 (int)(t->col.b * 255 + 0.5));
+        if (t->bold) fputs(" font-weight=\"bold\"", f);
         if (t->has_m)
             fprintf(f, " transform=\"matrix(%g %g %g %g %g %g)\"",
                     t->m[0], t->m[1], t->m[2], t->m[3], t->m[4], t->m[5]);
@@ -569,6 +572,27 @@ void gt_render(GTable *t, cairo_t *cr) {
              * saving is 9x and individual marks are indistinguishable anyway --
              * the batched path is used. */
             enum { BATCH = 8192, BATCH_MIN = 50000 };
+            if (g->pfill || g->stroke_lw > 0) {
+                /* filled glyph (geom_point(shape=21..25)): body, then outline.
+                 * Vector only, per point -- figure-scale layers. */
+                for (int k = 0; k < g->n; k++) {
+                    double r0 = g->pradius ? g->pradius[k] : g->radius;
+                    int sh = g->pshape ? g->pshape[k] : g->shape;
+                    cairo_new_path(cr);          /* no join from a text's current point */
+                    cp_point_path(cr, sh, DX(g->px[k]), DY(g->py[k]), r0);
+                    if (g->pfill) {
+                        set_col_a(cr, g->pfill[k], g->alpha);
+                        if (g->stroke_lw > 0) cairo_fill_preserve(cr); else cairo_fill(cr);
+                    }
+                    if (g->stroke_lw > 0) {
+                        set_col_a(cr, g->pcol[k], g->alpha);
+                        cairo_set_line_width(cr, g->stroke_lw);
+                        cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+                        cairo_stroke(cr);
+                    }
+                }
+                break;
+            }
             if (g->raster) {
                 /* geom_point(raster=TRUE): draw the marks into an offscreen
                  * image at RASTER_DPI and embed that one image, the way ggrastr
@@ -641,6 +665,10 @@ void gt_render(GTable *t, cairo_t *cr) {
         }
         case G_TEXT: {
             cairo_text_extents_t e; cairo_font_extents_t fe;
+            if (g->bold)
+                cairo_select_font_face(cr, cp_font_family, CAIRO_FONT_SLANT_NORMAL,
+                                       CAIRO_FONT_WEIGHT_BOLD);
+            g_txt_bold = g->bold;
             cairo_set_font_size(cr, g->size);
             cairo_text_extents(cr, g->str, &e);
             cairo_font_extents(cr, &fe);
@@ -682,6 +710,10 @@ void gt_render(GTable *t, cairo_t *cr) {
             }
             if (!svg_show(cr, sx, sy, g->size, g->str))
                 cairo_show_text(cr, g->str);
+            if (g->bold)
+                cairo_select_font_face(cr, cp_font_family, CAIRO_FONT_SLANT_NORMAL,
+                                       CAIRO_FONT_WEIGHT_NORMAL);
+            g_txt_bold = 0;
             break;
         }
         case G_AXIS_X: {

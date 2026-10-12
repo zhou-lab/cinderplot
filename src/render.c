@@ -40,7 +40,7 @@ static double leg_est_w(cairo_t *cr, char **lv, int k, int nc) {
             double w = text_w(cr, SZ_AXIS_TEXT, lv[i]);
             if (w > lw) lw = w;
         }
-        total += KEY_SIZE + TXT_GAP + lw + (c < nc - 1 ? HALF_LINE : 0);
+        total += KEY_W + TXT_GAP + lw + (c < nc - 1 ? HALF_LINE : 0);
     }
     return total;
 }
@@ -75,14 +75,14 @@ static GTable *build_legend(cairo_t *cr, const Theme *th, const char *title, con
             double w = text_w(cr, SZ_AXIS_TEXT, f->levels[i]);
             if (w > lw[c]) lw[c] = w;
         }
-        total += KEY_SIZE + TXT_GAP + lw[c] + (c < ncol - 1 ? HALF_LINE : 0);
+        total += KEY_W + TXT_GAP + lw[c] + (c < ncol - 1 ? HALF_LINE : 0);
     }
     double title_w = text_w(cr, SZ_BASE, title);
     if (title_w > total) lw[ncol - 1] += title_w - total;
 
     t->ncol = 4 * ncol - 1;
     for (int c = 0; c < ncol; c++) {
-        t->colw[4 * c]     = upt(KEY_SIZE);
+        t->colw[4 * c]     = upt(KEY_W);
         t->colw[4 * c + 1] = upt(TXT_GAP);
         t->colw[4 * c + 2] = upt(lw[c]);
         if (c < ncol - 1) t->colw[4 * c + 3] = upt(HALF_LINE);
@@ -93,8 +93,8 @@ static GTable *build_legend(cairo_t *cr, const Theme *th, const char *title, con
     t->rowh[0] = upt(has_title ? font_h(cr, SZ_BASE) : 0);
     t->rowh[1] = upt(has_title ? HALF_LINE : 0);
     for (int i = 0; i < rows; i++) {
-        t->rowh[2 + 2 * i] = upt(KEY_SIZE);
-        if (i < rows - 1) t->rowh[3 + 2 * i] = upt(HALF_LINE * 0.4);
+        t->rowh[2 + 2 * i] = upt(KEY_H);
+        if (i < rows - 1) t->rowh[3 + 2 * i] = upt(KEY_GAP);
     }
 
     Grob *g;
@@ -140,9 +140,15 @@ static GTable *build_legend(cairo_t *cr, const Theme *th, const char *title, con
 }
 
 /* continuous-colour legend: a vertical colorbar with tick labels */
+/* guide_colourbar(direction=, barwidth=, barheight=): set once per render */
+static int g_cbar_horiz; static double g_cbar_w, g_cbar_h;
+static GTable *build_colorbar_horiz(cairo_t *cr, const Theme *th, const char *title,
+                                    const FillScale *fs, double lo, double hi);
 static GTable *build_colorbar_legend(cairo_t *cr, const Theme *th, const char *title,
                                      const FillScale *fs, double lo, double hi) {
-    const double BARW = 12, BARH = 80;      /* colorbar pt dimensions */
+    if (g_cbar_horiz) return build_colorbar_horiz(cr, th, title, fs, lo, hi);
+    const double BARW = g_cbar_w > 0 ? g_cbar_w : 12;     /* colorbar pt dimensions */
+    const double BARH = g_cbar_h > 0 ? g_cbar_h : 80;
     double br[16];
     int nb = extended_breaks(lo, hi, 5, br, 16), nf = 0;
     for (int i = 0; i < nb; i++) if (br[i] >= lo && br[i] <= hi) br[nf++] = br[i];
@@ -192,6 +198,62 @@ static GTable *build_colorbar_legend(cairo_t *cr, const Theme *th, const char *t
     return t;
 }
 
+/* a horizontal colourbar: title on top, the bar, ticks and labels below --
+ * ggplot's guide_colourbar(direction = "horizontal"), the compact one to put
+ * under a facet */
+static GTable *build_colorbar_horiz(cairo_t *cr, const Theme *th, const char *title,
+                                    const FillScale *fs, double lo, double hi) {
+    const double BARL = g_cbar_w > 0 ? g_cbar_w : 80;     /* length (x) */
+    const double BART = g_cbar_h > 0 ? g_cbar_h : 10;     /* thickness (y) */
+    double br[16];
+    int nb = extended_breaks(lo, hi, 4, br, 16), nf = 0;
+    for (int i = 0; i < nb; i++) if (br[i] >= lo && br[i] <= hi) br[nf++] = br[i];
+    int dec = axis_decimals(br, nf);
+    double over = 0;                          /* labels overhang the bar ends */
+    for (int i = 0; i < nf; i++) {
+        char b[32]; fmt_break(br[i], dec, b, sizeof b);
+        double hw = text_w(cr, SZ_AXIS_TEXT, b) / 2;
+        if (hw > over) over = hw;
+    }
+    double titlew = title ? text_w(cr, SZ_BASE, title) : 0;
+    double w = fmax(BARL + 2 * over, titlew);
+    double x0 = (w - BARL) / 2;               /* bar start, pt */
+    GTable *t = cp_xcalloc(1, sizeof(GTable));
+    t->ncol = 1; t->colw[0] = upt(w);
+    t->nrow = 4;
+    t->rowh[0] = upt(title ? font_h(cr, SZ_BASE) : 0);
+    t->rowh[1] = upt(title ? HALF_LINE / 2 : 0);
+    t->rowh[2] = upt(BART);
+    t->rowh[3] = upt(TICK_LEN + TXT_GAP + font_h(cr, SZ_AXIS_TEXT));
+    Grob *g;
+    if (title) {
+        g = gt_add(t, G_TEXT, 0, 0, 0, 0);
+        g->str = title; g->size = SZ_BASE; g->col = th->title;
+        g->tx = 0.5; g->ty = 1; g->hj = 0.5; g->va = V_TOP;
+    }
+    const int NSTEP = 64;
+    for (int k = 0; k < NSTEP; k++) {
+        double v = lo + (k + 0.5) / NSTEP * (hi - lo);
+        g = gt_add(t, G_RECT, 2, 0, 2, 0);
+        g->sub = 1; g->col = fill_map_value(fs, v, lo, hi);
+        g->x0 = (x0 + BARL * k / NSTEP) / w; g->x1 = (x0 + BARL * (k + 1) / NSTEP) / w;
+        g->y0 = 0; g->y1 = 1;
+    }
+    double rowh3 = TICK_LEN + TXT_GAP + font_h(cr, SZ_AXIS_TEXT);
+    for (int i = 0; i < nf; i++) {
+        double frac = hi > lo ? (br[i] - lo) / (hi - lo) : 0.5;
+        double xn = (x0 + BARL * frac) / w;
+        char *lab = cp_xmalloc(32); fmt_break(br[i], dec, lab, 32);
+        g = gt_add(t, G_LINE, 3, 0, 3, 0);
+        g->col = th->tick; g->lw = lw_pt(0.5);
+        g->x0 = g->x1 = xn; g->y0 = 1; g->y1 = 1 - TICK_LEN / rowh3;
+        g = gt_add(t, G_TEXT, 3, 0, 3, 0);
+        g->str = lab; g->size = SZ_AXIS_TEXT; g->col = th->title;
+        g->tx = xn; g->ty = 1 - (TICK_LEN + TXT_GAP) / rowh3; g->hj = 0.5; g->va = V_TOP;
+    }
+    return t;
+}
+
 /* ---- aes(size=): map a numeric value to a point radius. ggplot's default
  * scale_size_continuous uses area_pal(range=c(1,6)): the value is rescaled to
  * [0,1], then the SIZE aesthetic = 1 + 5*sqrt(t) (so radius scales as sqrt of
@@ -222,19 +284,19 @@ static GTable *build_size_legend(cairo_t *cr, const Theme *th, const char *title
         if (w > label_w) label_w = w;
     }
     double title_w = title ? text_w(cr, SZ_BASE, title) : 0;
-    if (title_w > KEY_SIZE + TXT_GAP + label_w)
-        label_w = title_w - KEY_SIZE - TXT_GAP;
+    if (title_w > KEY_W + TXT_GAP + label_w)
+        label_w = title_w - KEY_W - TXT_GAP;
 
     t->ncol = 3;
-    t->colw[0] = upt(KEY_SIZE);
+    t->colw[0] = upt(KEY_W);
     t->colw[1] = upt(TXT_GAP);
     t->colw[2] = upt(label_w);
     t->nrow = 2 + 2 * nb - 1;
     t->rowh[0] = upt(title ? font_h(cr, SZ_BASE) : 0);
     t->rowh[1] = upt(title ? HALF_LINE : 0);
     for (int i = 0; i < nb; i++) {
-        t->rowh[2 + 2 * i] = upt(KEY_SIZE);
-        if (i < nb - 1) t->rowh[3 + 2 * i] = upt(HALF_LINE * 0.4);
+        t->rowh[2 + 2 * i] = upt(KEY_H);
+        if (i < nb - 1) t->rowh[3 + 2 * i] = upt(KEY_GAP);
     }
 
     Grob *g;
@@ -487,6 +549,106 @@ static int cmp_double_asc(const void *a, const void *b) {
     return d < 0 ? -1 : d > 0 ? 1 : 0;
 }
 
+/* aes(shape=) level -> glyph: scale_shape_manual(values=) pch (named, else
+ * positional), else the level index (ggplot's palette order) */
+static int shape_glyph_of(const PlotSpec *spec, const Factor *f, int lev) {
+    for (int k = 0; k < spec->n_shape_pch; k++)
+        if (spec->shape_pch_names[k] ? !strcmp(spec->shape_pch_names[k], f->levels[lev])
+                                     : k == lev) {
+            switch (spec->shape_pch[k]) {
+            case 15: case 0: case 22: return 2;
+            case 17: case 2: case 24: return 1;
+            case 18: case 5: case 23: return 3;
+            case 25: case 6: return 4;
+            case 3: case 4: case 8: return 5;
+            default: return 0;
+            }
+        }
+    return lev;
+}
+
+/* reorder(): the summary of one level's values (finite ones only). NaN when
+ * the level has none, which sorts after every scored level, as R's order()
+ * puts NA last. `v` is sorted in place for the median. */
+static double reorder_stat(double *v, int n, int fun) {
+    if (fun == RF_LENGTH) return n;
+    if (n == 0) return NAN;
+    double a = 0;
+    switch (fun) {
+    case RF_MEDIAN:
+        qsort(v, n, sizeof(double), cmp_double_asc);
+        return n % 2 ? v[n / 2] : 0.5 * (v[n / 2 - 1] + v[n / 2]);
+    case RF_SUM: for (int i = 0; i < n; i++) a += v[i]; return a;
+    case RF_MAX: a = v[0]; for (int i = 1; i < n; i++) if (v[i] > a) a = v[i]; return a;
+    case RF_MIN: a = v[0]; for (int i = 1; i < n; i++) if (v[i] < a) a = v[i]; return a;
+    default: for (int i = 0; i < n; i++) a += v[i]; return a / n;
+    }
+}
+
+/* Score each level of f over the rows `ok` admits (NULL = every row) and
+ * write the levels that have any such row to `order`, sorted by score
+ * (largest first when desc), ties and NaN scores keeping the current level
+ * order. Returns how many levels were written. */
+static int reorder_levels(const Factor *f, int nrow, const double *by,
+                          const int *ok, int fun, int desc, int *order) {
+    int nl = f->nlev;
+    int *cnt = cp_xcalloc(nl, sizeof(int)), *has = cp_xcalloc(nl, sizeof(int));
+    for (int r = 0; r < nrow; r++) {
+        int l = f->idx[r];
+        if (l < 0 || (ok && !ok[r])) continue;
+        has[l] = 1;
+        if (isfinite(by[r])) cnt[l]++;
+    }
+    int *off = cp_xmalloc((nl + 1) * sizeof(int));
+    off[0] = 0;
+    for (int l = 0; l < nl; l++) off[l + 1] = off[l] + cnt[l];
+    double *buf = cp_xmalloc((off[nl] ? off[nl] : 1) * sizeof(double));
+    int *fill = cp_xcalloc(nl, sizeof(int));
+    for (int r = 0; r < nrow; r++) {
+        int l = f->idx[r];
+        if (l < 0 || (ok && !ok[r]) || !isfinite(by[r])) continue;
+        buf[off[l] + fill[l]++] = by[r];
+    }
+    double *score = cp_xmalloc((nl ? nl : 1) * sizeof(double));
+    int k = 0;
+    for (int l = 0; l < nl; l++) {
+        score[l] = reorder_stat(buf + off[l], cnt[l], fun);
+        if (has[l]) order[k++] = l;
+    }
+    /* insertion sort: stable, and k is a category count */
+    for (int i = 1; i < k; i++) {
+        int l = order[i], j = i;
+        while (j > 0) {
+            double a = score[order[j - 1]], b = score[l];
+            int after;               /* does order[j-1] belong after l? */
+            if (isnan(a)) after = !isnan(b);
+            else if (isnan(b)) after = 0;
+            else after = desc ? a < b : a > b;
+            if (!after) break;
+            order[j] = order[j - 1]; j--;
+        }
+        order[j] = l;
+    }
+    free(cnt); free(has); free(off); free(buf); free(fill); free(score);
+    return k;
+}
+
+/* Apply reorder() to a whole factor: every level, every row. */
+static void factor_reorder(Factor *f, int nrow, const double *by, int fun, int desc) {
+    int *order = cp_xmalloc((f->nlev ? f->nlev : 1) * sizeof(int));
+    int k = reorder_levels(f, nrow, by, NULL, fun, desc, order);
+    int *pos = cp_xmalloc((f->nlev ? f->nlev : 1) * sizeof(int));
+    for (int l = 0; l < f->nlev; l++) pos[l] = -1;
+    for (int i = 0; i < k; i++) pos[order[i]] = i;
+    for (int l = 0; l < f->nlev; l++) if (pos[l] < 0) pos[l] = k++;   /* unused: last */
+    char **nl = cp_xmalloc((f->nlev ? f->nlev : 1) * sizeof(char *));
+    for (int l = 0; l < f->nlev; l++) nl[pos[l]] = f->levels[l];
+    free(f->levels);
+    f->levels = nl;
+    for (int r = 0; r < nrow; r++) if (f->idx[r] >= 0) f->idx[r] = pos[f->idx[r]];
+    free(order); free(pos);
+}
+
 /* Cell size for geom_tile along one axis: 1 for a discrete axis (categories are
  * at 1..k), else the smallest positive gap between distinct values in the panel.
  * A regular grid therefore tiles exactly; an irregular one gets the tightest
@@ -542,6 +704,117 @@ typedef struct {
     int shared;                          /* 1 = the fixed-scale instance */
 } PanelScale;
 
+static int cut_index(const double *m, int nm, double v) {
+    int best = 0;
+    for (int i = 1; i < nm; i++) if (fabs(m[i] - v) < fabs(m[best] - v)) best = i;
+    return best;
+}
+
+/* facet space="free_x"/"free_y": the weight of one panel column (horiz) or
+ * row -- its drawn axis range, the largest among the panels it holds (one
+ * panel in ggplot2's single-row/-column case; under facet_grid the panels of
+ * a column share the range anyway). Under coord_flip the horizontal axis is
+ * the y scale. */
+static double space_weight(const PanelScale *ps, int npan, int ncolp, int idx,
+                           int horiz, int flip) {
+    double w = 0;
+    for (int p = 0; p < npan; p++) {
+        if (horiz ? p % ncolp != idx : p / ncolp != idx) continue;
+        const PanelScale *S = &ps[p];
+        double r = (horiz != flip) ? S->x1 - S->x0 : S->y1 - S->y0;
+        if (r > w) w = r;
+    }
+    return w > 0 ? w : 1;
+}
+
+/* The panel-column block of the outer table spans columns 4 .. 2*ncolp+2
+ * (panel c at 4 + 2c, the gap after it at 5 + 2c) and panel row r owns rows
+ * 3 + 4r .. 6 + 4r (strip, panel, band, gap/axis); see SR/PR/PC below. */
+static int space_rows(GTable *T, const PanelScale *ps, int npan, int ncolp,
+                      int nrowp, int flip, double w_pt, double h_pt, char *err) {
+    gt_resolve(T, 0, 0, w_pt, h_pt);
+    int b0 = 4, b1 = 2 * ncolp + 2;            /* block, inclusive */
+    double X0 = T->colx[b0], X1 = T->colx[b1 + 1];
+    double gaps = 0;
+    for (int c = 0; c < ncolp - 1; c++) gaps += T->colx[6 + 2 * c] - T->colx[5 + 2 * c];
+    double N = X1 - X0 - gaps;
+    if (N <= 0) return 0;
+    /* cut[r][2c] = panel c's left edge, cut[r][2c+1] = its right edge */
+    int nc = 2 * ncolp;
+    double *cut = cp_xmalloc(nrowp * nc * sizeof(double));
+    for (int r = 0; r < nrowp; r++) {
+        double w[GT_MAXDIM], S = 0, have = 0; int k = 0;
+        for (int c = 0; c < ncolp; c++) {
+            int p = r * ncolp + c;
+            w[c] = 0;
+            if (p < npan) {
+                const PanelScale *P = &ps[p];
+                w[c] = flip ? P->y1 - P->y0 : P->x1 - P->x0;
+                if (!(w[c] > 0)) w[c] = 1;
+                have += w[c]; k++;
+            }
+        }
+        for (int c = 0; c < ncolp; c++) {      /* an empty cell of a short last row */
+            if (!(w[c] > 0)) w[c] = k ? have / k : 1;
+            S += w[c];
+        }
+        double x = X0;
+        for (int c = 0; c < ncolp; c++) {
+            cut[r * nc + 2 * c] = x;
+            x += N * w[c] / S;
+            cut[r * nc + 2 * c + 1] = x;
+            if (c < ncolp - 1) x += T->colx[6 + 2 * c] - T->colx[5 + 2 * c];
+        }
+        cut[r * nc + nc - 1] = X1;             /* no rounding drift at the edge */
+    }
+    /* merge the cuts into one sorted, de-duplicated list */
+    int ncut = nrowp * nc;
+    double *m = cp_xmalloc(ncut * sizeof(double));
+    memcpy(m, cut, ncut * sizeof(double));
+    qsort(m, ncut, sizeof(double), cmp_double_asc);
+    int nm = 0;
+    for (int i = 0; i < ncut; i++)
+        if (!nm || m[i] - m[nm - 1] > 1e-6) m[nm++] = m[i];
+    int K = nm - 1;                            /* new block columns */
+    int shift = K - (b1 - b0 + 1);
+    if (T->ncol + shift > GT_MAXDIM) {
+        snprintf(err, CP_ERRLEN, "facet_wrap(space=\"free_x\"): %d panel rows "
+                 "need more layout columns than the limit; use fewer panels per "
+                 "row", nrowp);
+        free(cut); free(m); return -1;
+    }
+    #define CUTIX(v) cut_index(m, nm, (v))
+    /* old block column j of row r -> new [lo, hi] */
+    for (int gi = 0; gi < T->ngrobs; gi++) {
+        Grob *g = &T->grobs[gi];
+        int r = -1;                             /* the panel row it lives in */
+        for (int q = 0; q < nrowp; q++)
+            if (g->r0 >= 3 + 4 * q && g->r1 <= 6 + 4 * q) { r = q; break; }
+        int rr = r < 0 ? 0 : r;                 /* spanning grobs: outer edges agree */
+        int *cs[2] = { &g->c0, &g->c1 };
+        for (int e = 0; e < 2; e++) {
+            int j = *cs[e];
+            if (j > b1) { *cs[e] = j + shift; continue; }
+            if (j < b0) continue;
+            int c = (j - b0) / 2, isgap = (j - b0) % 2;
+            double lo = isgap ? cut[rr * nc + 2 * c + 1] : cut[rr * nc + 2 * c];
+            double hi = isgap ? cut[rr * nc + 2 * c + 2] : cut[rr * nc + 2 * c + 1];
+            *cs[e] = b0 + (e == 0 ? CUTIX(lo) : CUTIX(hi) - 1);
+        }
+    }
+    #undef CUTIX
+    /* rebuild the column widths: the block as fixed pieces, the rest shifted */
+    Unit nw[GT_MAXDIM];
+    int n = 0;
+    for (int j = 0; j < b0; j++) nw[n++] = T->colw[j];
+    for (int i = 0; i < K; i++) nw[n++] = upt(m[i + 1] - m[i]);
+    for (int j = b1 + 1; j < T->ncol; j++) nw[n++] = T->colw[j];
+    memcpy(T->colw, nw, n * sizeof(Unit));
+    T->ncol = n;
+    free(cut); free(m);
+    return 0;
+}
+
 /* Breaks and labels for one continuous axis over its expanded range [lo, hi]
  * (transformed space): the user's breaks=/labels= when given, else the
  * extended-Wilkinson ladder, or the powers on a log axis. One routine for the
@@ -591,11 +864,28 @@ static int axis_breaks(int logb, double lo, double hi, int nuser, const double *
  * of routines, called with p = -1 for the whole data and p >= 0 for one
  * panel's rows, so the two passes cannot disagree again. Transformed space
  * throughout; the endpoint columns may hold NaN (the geoms skip those). */
+/* Range columns a layer brings itself -- geom_errorbar(aes(ymin=, ymax=)) and
+ * geom_errorbarh(aes(xmin=, xmax=)) -- train the axis like ymin=/ymax= do.
+ * Set once per render before any training, cleared at its start. */
+static const Column *g_extra_x[2 * MAX_LAYERS], *g_extra_y[2 * MAX_LAYERS];
+static int g_nextra_x, g_nextra_y;
+static void train_extra(const Column *const *ec, int n, int logb, int r,
+                        double *lo, double *hi) {
+    for (int i = 0; i < n; i++) {
+        double v = ec[i]->num[r];
+        if (isnan(v)) continue;
+        double t = cp_logt(logb, v);
+        if (!isfinite(t)) continue;
+        if (t < *lo) *lo = t;
+        if (t > *hi) *hi = t;
+    }
+}
 static void train_rows_x(const PlotSpec *spec, const DataFrame *df, const int *use,
                          const Factor *ff, int p, const Column *xc, const Column *xec,
                          double *lo, double *hi) {
     for (int r = 0; r < df->nrow; r++) {
         if (!use[r] || (p >= 0 && ff->idx[r] != p)) continue;
+        train_extra(g_extra_x, g_nextra_x, spec->log_x, r, lo, hi);
         double t = cp_logt(spec->log_x, xc->num[r]);
         if (t < *lo) *lo = t;
         if (t > *hi) *hi = t;
@@ -611,6 +901,7 @@ static void train_rows_y(const PlotSpec *spec, const DataFrame *df, const int *u
                          const Column *yminc, double *lo, double *hi) {
     for (int r = 0; r < df->nrow; r++) {
         if (!use[r] || (p >= 0 && ff->idx[r] != p)) continue;
+        train_extra(g_extra_y, g_nextra_y, spec->log_y, r, lo, hi);
         double t = cp_logt(spec->log_y, yc->num[r]);
         if (t < *lo) *lo = t;
         if (t > *hi) *hi = t;
@@ -903,6 +1194,17 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     if (xf && spec->x.nlevels
         && factor_relevel(xf, df->nrow, spec->x.levels, spec->x.nlevels,
                           "x", err)) return -1;
+    const double *xby = NULL;          /* reorder(x, by): the by column */
+    if (xf && spec->x.reorder_by) {
+        const Column *bc = df_col(df, spec->x.reorder_by);
+        if (!bc || bc->type != COL_NUM) {
+            snprintf(err, CP_ERRLEN, "reorder(): column `%s` %s", spec->x.reorder_by,
+                     bc ? "is not numeric" : "not found");
+            return -1;
+        }
+        xby = bc->num;
+        factor_reorder(xf, df->nrow, xby, spec->x.reorder_fun, spec->x.reorder_desc);
+    }
     if (!disc_x && (xc->type != COL_NUM)) {
         snprintf(err, CP_ERRLEN, "x column `%s` is not numeric", spec->x.col); return -1;
     }
@@ -926,6 +1228,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     }
     const Column *yc = NULL;
     Factor *yf = NULL;
+    const double *yby = NULL;          /* reorder(y, by): the by column */
     int disc_y = 0;
     if (spec->y.col) {
         yc = df_col(df, spec->y.col);
@@ -951,6 +1254,16 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             if (spec->y.nlevels
                 && factor_relevel(yf, df->nrow, spec->y.levels, spec->y.nlevels,
                                   "y", err)) return -1;
+            if (spec->y.reorder_by) {
+                const Column *bc = df_col(df, spec->y.reorder_by);
+                if (!bc || bc->type != COL_NUM) {
+                    snprintf(err, CP_ERRLEN, "reorder(): column `%s` %s", spec->y.reorder_by,
+                             bc ? "is not numeric" : "not found");
+                    return -1;
+                }
+                yby = bc->num;
+                factor_reorder(yf, df->nrow, yby, spec->y.reorder_fun, spec->y.reorder_desc);
+            }
             if (spec->log_y) {
                 snprintf(err, CP_ERRLEN, "scale_y_log%d() cannot apply to a discrete y",
                          spec->log_y);
@@ -1017,8 +1330,29 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     }
     int hasrange = 0;
     for (int i = 0; i < spec->nlayers; i++)
-        if (spec->layers[i].type == GEOM_ERRORBAR
+        if ((spec->layers[i].type == GEOM_ERRORBAR && !spec->layers[i].eb_lo)
             || spec->layers[i].type == GEOM_LINERANGE) hasrange = 1;
+    /* a range layer's own aes(xmin=, xmax=) / aes(ymin=, ymax=) columns */
+    const Column *eb_lo_c[MAX_LAYERS] = {0}, *eb_hi_c[MAX_LAYERS] = {0};
+    g_nextra_x = g_nextra_y = 0;
+    g_cbar_horiz = spec->cbar_horiz; g_cbar_w = spec->cbar_w; g_cbar_h = spec->cbar_h;
+    for (int i = 0; i < spec->nlayers; i++) {
+        const Layer *L = &spec->layers[i];
+        if (L->type != GEOM_ERRORBAR || !L->eb_lo) continue;
+        const char *nm[2] = { L->eb_lo, L->eb_hi };
+        const Column **dst[2] = { &eb_lo_c[i], &eb_hi_c[i] };
+        for (int e = 0; e < 2; e++) {
+            const Column *c = df_col(df, nm[e]);
+            if (!c || c->type != COL_NUM) {
+                snprintf(err, CP_ERRLEN, "geom_errorbar%s(aes()): column `%s` %s",
+                         L->eb_horiz ? "h" : "", nm[e], c ? "must be numeric" : "not found");
+                return -1;
+            }
+            *dst[e] = c;
+            if (L->eb_horiz) g_extra_x[g_nextra_x++] = c;
+            else g_extra_y[g_nextra_y++] = c;
+        }
+    }
     if (hasrange && (!yminc || !spec->yend.col)) {
         snprintf(err, CP_ERRLEN, "geom_errorbar()/geom_linerange() need "
                  "aes(ymin=, ymax=)");
@@ -1102,6 +1436,38 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 return -1;
             }
         }
+    }
+    /* aes(fill=) beside aes(colour=): the body of a filled point glyph,
+     * always discrete; scale_fill_manual() keys it (the colour scale then
+     * belongs to colour=). */
+    Factor *pff = NULL; Col *fpal = NULL;
+    int col_manual = spec->has_manual && !(spec->pfill.col && spec->manual_fill);
+    if (spec->pfill.col) {
+        const Column *pc = df_col(df, spec->pfill.col);
+        if (!pc) { snprintf(err, CP_ERRLEN, "column `%s` not found", spec->pfill.col); return -1; }
+        if (pc->type == COL_NUM && !spec->pfill.is_factor) {
+            snprintf(err, CP_ERRLEN, "a continuous fill= on a filled point is not "
+                     "implemented; map a discrete column (or factor(%s)) to fill= "
+                     "and the continuous one to colour=", spec->pfill.col);
+            return -1;
+        }
+        pff = factor_make(df, pc);
+        if (spec->pfill.nlevels
+            && factor_relevel(pff, df->nrow, spec->pfill.levels, spec->pfill.nlevels,
+                              "fill", err)) return -1;
+        fpal = cp_xmalloc((pff->nlev ? pff->nlev : 1) * sizeof(Col));
+        if (spec->has_manual && spec->manual_fill) {
+            int named = spec->n_manual > 0 && spec->manual_names[0] != NULL;
+            for (int i = 0; i < pff->nlev; i++) {
+                Col c = C_NA;
+                if (named) {
+                    for (int k = 0; k < spec->n_manual; k++)
+                        if (spec->manual_names[k] && !strcmp(spec->manual_names[k], pff->levels[i]))
+                            { c = spec->manual_cols[k]; break; }
+                } else if (i < spec->n_manual) c = spec->manual_cols[i];
+                fpal[i] = c;
+            }
+        } else hue_palette(pff->nlev, fpal);
     }
     if (spec->identity_scale && cont_col) {
         snprintf(err, CP_ERRLEN, "scale_*_identity needs a text column of "
@@ -1410,7 +1776,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
               && (!szc || isfinite(szc->num[r]))
               && (!xec || !isinf(xec->num[r]))
               && (!yec || !isinf(yec->num[r]))
-              && (!yminc || !isinf(yminc->num[r]));
+              && (!yminc || !isinf(yminc->num[r]))
+              && (!pff || pff->idx[r] >= 0);
         if (!ok) d_na++;
         /* every value the row puts on a log axis has to be positive, the
          * endpoints included: an errorbar reaching down to 0 on a log y used
@@ -2295,6 +2662,17 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     int *map = cp_xmalloc(xf->nlev * sizeof(int));
                     for (int l = 0; l < xf->nlev; l++) map[l] = -1;
                     int k = 0;
+                    if (xby) {
+                        /* reorder(): this panel's levels by this panel's rows */
+                        int *ok = cp_xmalloc(df->nrow * sizeof(int));
+                        for (int r = 0; r < df->nrow; r++)
+                            ok[r] = use[r] && xgf->idx[r] == XG(p);
+                        int *ord = cp_xmalloc(xf->nlev * sizeof(int));
+                        k = reorder_levels(xf, df->nrow, xby, ok, spec->x.reorder_fun,
+                                           spec->x.reorder_desc, ord);
+                        for (int i = 0; i < k; i++) map[ord[i]] = i;
+                        free(ok); free(ord);
+                    } else
                     for (int l = 0; l < xf->nlev; l++)
                         for (int r = 0; r < df->nrow; r++)
                             if (use[r] && xgf->idx[r] == XG(p) && xf->idx[r] == l) {
@@ -2349,6 +2727,16 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     int *map = cp_xmalloc(yf->nlev * sizeof(int));
                     for (int l = 0; l < yf->nlev; l++) map[l] = -1;
                     int k = 0;
+                    if (yby) {
+                        int *ok = cp_xmalloc(df->nrow * sizeof(int));
+                        for (int r = 0; r < df->nrow; r++)
+                            ok[r] = use[r] && ygf->idx[r] == YG(p);
+                        int *ord = cp_xmalloc(yf->nlev * sizeof(int));
+                        k = reorder_levels(yf, df->nrow, yby, ok, spec->y.reorder_fun,
+                                           spec->y.reorder_desc, ord);
+                        for (int i = 0; i < k; i++) map[ord[i]] = i;
+                        free(ok); free(ord);
+                    } else
                     for (int l = 0; l < yf->nlev; l++)
                         for (int r = 0; r < df->nrow; r++)
                             if (use[r] && ygf->idx[r] == YG(p) && yf->idx[r] == l) {
@@ -2537,6 +2925,22 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         colw = res < 1e300 ? 0.9 * res : 0.9;
         free(xs);
     }
+    /* the same 0.9 x resolution along y: the cap of a horizontal errorbar */
+    double rowres = 0.9;
+    for (int li = 0; li < spec->nlayers; li++)
+        if (spec->layers[li].type == GEOM_ERRORBAR && spec->layers[li].eb_horiz && yc && !disc_y) {
+            double *ys = cp_xmalloc(nuse * sizeof(double));
+            int ny = 0;
+            for (int r = 0; r < df->nrow; r++)
+                if (use[r]) ys[ny++] = TY(yc->num[r]);
+            qsort(ys, ny, sizeof(double), cmp_double);
+            double res = 1e300;
+            for (int i = 1; i < ny; i++)
+                if (ys[i] - ys[i - 1] > 1e-9 && ys[i] - ys[i - 1] < res) res = ys[i] - ys[i - 1];
+            rowres = res < 1e300 ? 0.9 * res : 0.9;
+            free(ys);
+            break;
+        }
 
     /* ---- boxplot dodge: side-by-side boxes when colour is a different
      * grouping than x (i.e. some x-category holds >1 colour group) ---- */
@@ -2626,13 +3030,18 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         }
     }
     double labh = font_h(cr, SZ_AXIS_TEXT), baseh = font_h(cr, SZ_BASE);
-    double striph = ff ? labh + 2 * STRIP_PAD : 0;
+    /* strip text: ggplot's rel(0.8) of base, or theme(strip.text=) */
+    double stx_sz = spec->strip_x_sz > 0 ? spec->strip_x_sz
+                  : spec->strip_x_sz < 0 ? -spec->strip_x_sz * SZ_BASE : SZ_AXIS_TEXT;
+    double sty_sz = spec->strip_y_sz > 0 ? spec->strip_y_sz
+                  : spec->strip_y_sz < 0 ? -spec->strip_y_sz * SZ_BASE : SZ_AXIS_TEXT;
+    double striph = ff ? font_h(cr, stx_sz) + 2 * STRIP_PAD : 0;
     /* facet_wrap strips every panel row. facet_grid instead puts ONE row of
      * column strips along the top and a column of rotated row strips down the
      * right, ggplot2-style, so an 8-panel grid spends one strip's height
      * rather than four. */
     double striph_top  = (!grid || colf) ? striph : 0;
-    double striph_side = (grid && rowf) ? striph : 0;
+    double striph_side = (grid && rowf) ? font_h(cr, sty_sz) + 2 * STRIP_PAD : 0;
     int nstriprows = grid ? (colf ? 1 : 0) : nrowp;
 
     const char *xtitle = spec->lab_x ? spec->lab_x : genome_x ? "" : spec->x.expr;
@@ -2721,6 +3130,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
      * in fc_pal[p * cf->nlev + level]; levels absent from a panel stay NA
      * (never drawn). ---- */
     Col *fc_pal = NULL;
+    double *fc_cmin = NULL, *fc_cmax = NULL;   /* free_colour, continuous: per panel */
     GTable *fc_leg[12] = {0};        /* free_colour, single facet row: the
                                       * per-panel legend blocks */
     if (spec->free_colour) {
@@ -2729,10 +3139,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                      "scale per facet and needs facet_wrap()");
             return -1;
         }
-        if (!cf) {
-            snprintf(err, CP_ERRLEN, "scales=\"free_colour\" needs a discrete "
-                     "colour/fill aesthetic (a continuous one has a single "
-                     "shared ramp)");
+        if (!cf && !cont_col) {
+            snprintf(err, CP_ERRLEN, "scales=\"free_colour\" needs a colour/fill "
+                     "aesthetic to free (a discrete colour, or a continuous one)");
             return -1;
         }
         if (spec->identity_scale) {
@@ -2745,7 +3154,27 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                      "per facet and supports at most 12 facets (%d given)", npan);
             return -1;
         }
-        int named = spec->has_manual && spec->n_manual > 0
+        if (cont_col) {
+            /* a continuous colour: each facet trains its own range and gets
+             * its own colourbar, so a 0.7-2 % panel is not flattened by a
+             * 73-87 % one beside it. scale limits= still pin every panel. */
+            fc_cmin = cp_xmalloc(npan * sizeof(double));
+            fc_cmax = cp_xmalloc(npan * sizeof(double));
+            for (int p = 0; p < npan; p++) {
+                double lo = 1e300, hi = -1e300;
+                if (cscale.has_limits) { lo = cscale.lim_lo; hi = cscale.lim_hi; }
+                else
+                    for (int rr = 0; rr < df->nrow; rr++)
+                        if (use[rr] && ff->idx[rr] == p && isfinite(colc->num[rr])) {
+                            if (colc->num[rr] < lo) lo = colc->num[rr];
+                            if (colc->num[rr] > hi) hi = colc->num[rr];
+                        }
+                if (lo > hi) { lo = 0; hi = 1; }
+                if (hi <= lo) hi = lo + 1;
+                fc_cmin[p] = lo; fc_cmax[p] = hi;
+            }
+        } else {
+        int named = col_manual && spec->n_manual > 0
                   && spec->manual_names[0] != NULL;
         fc_pal = cp_xmalloc((size_t)npan * cf->nlev * sizeof(Col));
         for (int i = 0; i < npan * cf->nlev; i++) fc_pal[i] = C_NA;
@@ -2760,7 +3189,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         { seen = 1; break; }
                 if (seen) present[k++] = l;
             }
-            if (!named && (spec->has_manual || spec->brewer_disc)
+            if (!named && (col_manual || spec->brewer_disc)
                 && k > spec->n_manual) {
                 snprintf(err, CP_ERRLEN, "facet `%s` has %d colour levels but "
                          "the %s gives %d", ff->levels[p], k,
@@ -2768,7 +3197,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                          spec->n_manual);
                 return -1;
             }
-            if (!spec->has_manual && !spec->brewer_disc) hue_palette(k, tmp);
+            if (!col_manual && !spec->brewer_disc) hue_palette(k, tmp);
             for (int j = 0; j < k; j++) {
                 int l = present[j];
                 Col c2 = C_NA;
@@ -2777,13 +3206,14 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         if (spec->manual_names[m2]
                             && !strcmp(spec->manual_names[m2], cf->levels[l]))
                             { c2 = spec->manual_cols[m2]; break; }
-                } else if (spec->has_manual || spec->brewer_disc) {
+                } else if (col_manual || spec->brewer_disc) {
                     c2 = spec->manual_cols[j];   /* positional, per panel */
                 } else c2 = tmp[j];
                 fc_pal[(size_t)p * cf->nlev + l] = c2;
             }
         }
         free(present); free(tmp);
+        }
     }
 
     /* ---- the panel size the auto-fit below will choose, worked out here
@@ -2820,7 +3250,18 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     /* Guides stack top-to-bottom: colour (or fill) first, then size — the
      * order ggplot uses for a point layer mapping both; annotation() bands
      * append one legend block each, titled by their value column. */
-    GTable *guides[4 + MAX_HMOBJS]; int nguide = 0;   /* colour, size, linetype, shape, bands */
+    GTable *guides[18 + MAX_HMOBJS]; int nguide = 0;   /* fill, colour, size, linetype, shape, bands */
+    /* with a separate fill= (filled points) the two guides drop separately */
+    int no_col_leg = spec->pfill.col ? spec->no_legend_colour : spec->no_legend;
+    if (pff && !spec->no_legend_fill) {   /* the filled glyphs' body key */
+        const char *ft = spec->lab_fill ? spec->lab_fill : spec->pfill.expr;
+        int nc2 = spec->legend_ncol ? spec->legend_ncol
+                : spec->legend_nrow ? (pff->nlev + spec->legend_nrow - 1) / spec->legend_nrow : 1;
+        GTable *lg = build_legend(cr, th, ft, pff, fpal, 1, 0, 0, 0, NULL, nc2,
+                                  spec->legend_reverse, NULL, err);
+        if (!lg) return -1;
+        guides[nguide++] = lg;
+    }
     if (cf) {
         pal = cp_xmalloc(cf->nlev * sizeof(Col));
         if (spec->identity_scale) {
@@ -2834,7 +3275,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                              cf->levels[i], spec->colour.col);
                     return -1;
                 }
-        } else if (spec->has_manual && !spec->brewer_disc
+        } else if (col_manual && !spec->brewer_disc
             && spec->n_manual > 0 && spec->manual_names[0] == NULL
             && cf->nlev > spec->n_manual) {
             /* a positional list shorter than the factor painted the tail
@@ -2854,7 +3295,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                      spec->colour.col, cf->nlev);
             return -1;
         }
-        if (spec->has_manual) {                 /* scale_*_manual(values=) */
+        if (col_manual) {                 /* scale_*_manual(values=) */
             int named = spec->n_manual > 0 && spec->manual_names[0] != NULL;
             for (int i = 0; i < cf->nlev; i++) {
                 Col c = C_NA;                   /* grey for an unmapped level */
@@ -2870,7 +3311,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
          * and bars are coloured from it; only the guide is dropped. An
          * identity scale never draws one: the colours state nothing beyond
          * themselves (ggplot's guide = "none" default for identity). */
-        if (spec->free_colour && !spec->no_legend) {
+        if (spec->free_colour && !no_col_leg) {
             /* one legend block per facet, titled by the facet's name, keyed
              * to that facet's own palette and level subset. With the facets
              * in ONE ROW, each block goes in a legend row directly under its
@@ -2921,7 +3362,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 if (nrowp == 1 || spec->legend_inside) fc_leg[p] = lg;
                 else guides[nguide++] = lg;
             }
-        } else if (!spec->no_legend && !spec->identity_scale) {
+        } else if (!no_col_leg && !spec->identity_scale) {
             int nc2 = spec->legend_ncol ? spec->legend_ncol
                     : spec->legend_nrow
                     ? (cf->nlev + spec->legend_nrow - 1) / spec->legend_nrow : 1;
@@ -2932,11 +3373,11 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                  * natural panel height holds, as free_colour blocks do. A
                  * 32-level stack used to grow the canvas to 9in and still
                  * clip its title. */
-                double pitch = KEY_SIZE + 0.4 * HALF_LINE;
+                double pitch = KEY_H + KEY_GAP;
                 double thead = col_title && *col_title ? baseh + HALF_LINE : 0;
-                double stack_h = thead + cf->nlev * pitch - 0.4 * HALF_LINE;
+                double stack_h = thead + cf->nlev * pitch - KEY_GAP;
                 if (stack_h + leg_chrome_h > 1.25 * auto_h) {
-                    int rows_fit = (int)((auto_h - leg_chrome_h - thead + 0.4 * HALF_LINE) / pitch);
+                    int rows_fit = (int)((auto_h - leg_chrome_h - thead + KEY_GAP) / pitch);
                     if (rows_fit < 1) rows_fit = 1;
                     nc2 = (cf->nlev + rows_fit - 1) / rows_fit;
                 }
@@ -2949,7 +3390,17 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             if (!lg) return -1;
             guides[nguide++] = lg;
         }
-    } else if (cont_col && !spec->no_legend) {
+    } else if (cont_col && !no_col_leg && fc_cmin) {
+        /* free_colour, continuous: a colourbar per facet, titled by the
+         * facet unless labs(colour=) says otherwise; under one facet row each
+         * goes under its own panel */
+        for (int p = 0; p < npan; p++) {
+            const char *bt = spec->lab_colour ? spec->lab_colour : ff->levels[p];
+            GTable *lg = build_colorbar_legend(cr, th, bt, &cscale, fc_cmin[p], fc_cmax[p]);
+            if (nrowp == 1 || spec->legend_inside) fc_leg[p] = lg;
+            else guides[nguide++] = lg;
+        }
+    } else if (cont_col && !no_col_leg) {
         guides[nguide++] = build_colorbar_legend(cr, th, col_title, &cscale, cdmin, cdmax);
     }
     if (szc && !spec->no_legend_size) {          /* size legend: representative breaks */
@@ -2978,7 +3429,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
          * otherwise the reader reads a colour that means nothing. */
         Col *spal = cp_xmalloc(shf->nlev * sizeof(Col));
         int *sidx = cp_xmalloc(shf->nlev * sizeof(int));
-        for (int i = 0; i < shf->nlev; i++) { spal[i] = C_BLACK; sidx[i] = i; }
+        for (int i = 0; i < shf->nlev; i++) { spal[i] = C_BLACK; sidx[i] = shape_glyph_of(spec, shf, i); }
         const char *sh_title = spec->lab_shape ? spec->lab_shape : spec->shape.expr;
         GTable *lg = build_legend(cr, th, sh_title, shf, spal, 1, 0, 0, 0, sidx, 1, 0, NULL, err);
         if (!lg) return -1;
@@ -3030,7 +3481,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
      * sized by the widest label of the panels immediately to its right. */
     int lfree_l = (flip ? spec->free_x : spec->free_y) && !grid;
     for (int c = 0; c < ncolp; c++) {
-        T->colw[PC(c)] = unull(1);
+        T->colw[PC(c)] = unull(spec->space_x ? space_weight(ps, npan, ncolp, c, 1, flip) : 1);
         if (c < ncolp - 1) {
             double gap = PANEL_SPACE;
             if (lfree_l) {
@@ -3136,18 +3587,35 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                           + striph_side       /* facet_grid row strips */
                           + (leg ? gt_fixed_w(leg) + 2 * HALF_LINE : 0);
             double panel_w = fmax(1, (w_pt - chrome) / ncolp);
+            double wsum = 0;
+            if (spec->space_x)
+                for (int c = 0; c < ncolp; c++)
+                    wsum += space_weight(ps, npan, ncolp, c, 1, flip);
             double need = 0;
             for (int p = 0; p < npan; p++) {
                 const PanelScale *S = &ps[p];
+                if (spec->space_x) {        /* this panel's share of the width */
+                    double share = space_weight(ps, npan, ncolp, p % ncolp, 1, flip) / wsum;
+                    if (!grid && nrowp > 1) {   /* per-row widths (space_rows) */
+                        double rs = 0, me = flip ? S->y1 - S->y0 : S->x1 - S->x0;
+                        int r0 = p / ncolp * ncolp;
+                        for (int q = r0; q < r0 + ncolp && q < npan; q++)
+                            rs += flip ? ps[q].y1 - ps[q].y0 : ps[q].x1 - ps[q].x0;
+                        share = rs > 0 ? me / rs : 1.0 / ncolp;
+                    }
+                    panel_w = fmax(1, (w_pt - chrome - (ncolp - 1) * PANEL_SPACE) * share);
+                }
                 int n = flip ? S->nybr : S->nxbr;
                 char **lb = flip ? S->ylabs : S->xlabs;
                 double sum = 0;
                 for (int i = 0; i < n; i++)
                     sum += cp_label_w(cr, SZ_AXIS_TEXT, lb[i]) + TXT_GAP;
-                if (sum > need) need = sum;
+                if (spec->space_x) {        /* compare per panel: widths differ */
+                    if (sum > panel_w && bang < 90) bang = sum > panel_w * 1.6 ? 90 : 45;
+                } else if (sum > need) need = sum;
             }
             /* 45 degrees buys a factor of ~1/cos(45); past that go vertical. */
-            if (need > panel_w) bang = need > panel_w * 1.6 ? 90 : 45;
+            if (!spec->space_x && need > panel_w) bang = need > panel_w * 1.6 ? 90 : 45;
         }
     }
     /* Height the rotated labels need: the longest one leaned over, plus the
@@ -3193,7 +3661,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     int bfree_l = (flip ? spec->free_y : spec->free_x) && !grid;
     for (int r = 0; r < nrowp; r++) {
         T->rowh[SR(r)] = upt(grid ? (r == 0 ? striph_top : 0) : striph);
-        T->rowh[PR(r)] = unull(1);
+        T->rowh[PR(r)] = unull(spec->space_y ? space_weight(ps, npan, ncolp, r, 0, flip) : 1);
         T->rowh[PR(r) + 1] = upt(band_h);        /* annotation bands (0 = none) */
         if (r < nrowp - 1)
             T->rowh[PR(r) + 2] = upt(bfree_l ? TICK_LEN + TXT_GAP + blab_h + PANEL_SPACE
@@ -3267,7 +3735,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 g->col = th->strip_bg;
             }
             g = gt_add(T, G_TEXT, SR(0), PC(c), SR(0), PC(c));
-            g->str = colf->levels[c]; g->size = SZ_AXIS_TEXT; g->col = th->strip_text;
+            g->str = colf->levels[c]; g->size = stx_sz; g->col = th->strip_text;
             g->tx = 0.5; g->ty = 0.5; g->hj = 0.5; g->va = V_INKCENTER;
         }
         for (int r = 0; rowf && r < nrowp; r++) {
@@ -3276,7 +3744,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 g->col = th->strip_bg;
             }
             g = gt_add(T, G_TEXT, PR(r), rstrip_c, PR(r), rstrip_c);
-            g->str = rowf->levels[r]; g->size = SZ_AXIS_TEXT; g->col = th->strip_text;
+            g->str = rowf->levels[r]; g->size = sty_sz; g->col = th->strip_text;
             g->tx = 0.5; g->ty = 0.5; g->hj = 0.5; g->rot = -90;
         }
     }
@@ -3295,11 +3763,12 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
          * colour lookup below (points, lines, bars, boxes) follows the
          * panel without being told — the same trick the ranges use above. */
         if (fc_pal) pal = fc_pal + (size_t)p * cf->nlev;
+        if (fc_cmin) { cdmin = fc_cmin[p]; cdmax = fc_cmax[p]; }
 
         if (ff && !grid) {
             if (th->strip_bg_on) { g = gt_add(T, G_RECT, SR(pr), C, SR(pr), C); g->col = th->strip_bg; }
             g = gt_add(T, G_TEXT, SR(pr), C, SR(pr), C);
-            g->str = ff->levels[p]; g->size = SZ_AXIS_TEXT; g->col = th->strip_text;
+            g->str = ff->levels[p]; g->size = stx_sz; g->col = th->strip_text;
             g->tx = 0.5; g->ty = 0.5; g->hj = 0.5; g->va = V_INKCENTER;
         }
 
@@ -3643,6 +4112,14 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 Col *pcol = cp_xmalloc(np * sizeof(Col));
                 double *prad = szc ? cp_xmalloc(np * sizeof(double)) : NULL;   /* size aes */
                 int *pshp = shf ? cp_xmalloc(np * sizeof(int)) : NULL;         /* shape aes */
+                /* geom_point(shape=21..25): a filled glyph -- body from fill=
+                 * (or a layer fill= constant), outline from colour= (or a layer
+                 * colour= constant, else black), stroke= wide; no fill source
+                 * leaves it hollow, ggplot's fill = NA */
+                int filled = JL->pt_shape >= 21;
+                int fill_const = JL->has_color && JL->color_is_fill;
+                Col *pfil = filled && (pff || fill_const)
+                          ? cp_xmalloc((np ? np : 1) * sizeof(Col)) : NULL;
                 np = 0;
                 for (int r = 0; r < df->nrow; r++) {
                     if (!use[r] || (ff && ff->idx[r] != p)) continue;
@@ -3662,15 +4139,29 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         jy += (u2 * 2 - 1) * jh;
                     }
                     px[np] = NPCX(jx); py[np] = NPCY(jy);
+                    if (filled) {
+                        pcol[np] = JL->has_color && !JL->color_is_fill ? JL->color
+                                 : cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BLACK;
+                        if (pfil) pfil[np] = fill_const ? JL->color : fpal[pff->idx[r]];
+                    } else
                     pcol[np] = spec->layers[li].has_color ? spec->layers[li].color
                              : cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BLACK;
                     if (prad) prad[np] = size_to_radius(szc->num[r], szmin, szmax);
-                    if (pshp) pshp[np] = shf->idx[r];
+                    if (pshp) pshp[np] = shape_glyph_of(spec, shf, shf->idx[r]);
                     np++;
                 }
                 g = gt_add(T, G_POINTS, R, C, R, C);
                 g->n = np; g->px = px; g->py = py; g->pcol = pcol; g->pradius = prad;
                 g->pshape = pshp;
+                if (filled) {
+                    static const int glyph21[5] = { 0, 2, 3, 1, 4 };  /* 21..25 */
+                    g->shape = glyph21[JL->pt_shape - 21];
+                    g->pfill = pfil;
+                    /* ggplot: lwd = stroke * .stroke / 2, in 1/96 in */
+                    g->stroke_lw = JL->pt_stroke < 0 ? 0
+                                 : (JL->pt_stroke > 0 ? JL->pt_stroke : 0.5) * 96 / 25.4 / 2 * 0.75;
+                    if (!pfil && g->stroke_lw <= 0) g->stroke_lw = 0.5;   /* hollow, no stroke: still visible */
+                }
                 g->raster = spec->layers[li].raster;
                 g->radius = spec->layers[li].point_size > 0
                           ? PT_RADIUS * spec->layers[li].point_size / 1.5 : PT_RADIUS;
@@ -3803,19 +4294,37 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                  * The bars follow a colour= mapping but not a fill= one
                  * (ggplot draws those black): painted in the fill palette
                  * the half of each whisker inside its bar disappears. */
-                double wda = spec->layers[li].eb_width > 0
-                           ? spec->layers[li].eb_width : colw;
+                const Layer *EL = &spec->layers[li];
+                int horiz = EL->eb_horiz;
+                const Column *lo_c = EL->eb_lo ? eb_lo_c[li] : yminc;
+                const Column *hi_c = EL->eb_lo ? eb_hi_c[li] : yec;
+                double wda = EL->eb_width > 0 ? EL->eb_width : horiz ? rowres : colw;
                 int mapped = spec->colour.col && !spec->colour.is_fill;
                 for (int r = 0; r < df->nrow; r++) {
                     if (!use[r] || (ff && ff->idx[r] != p)) continue;
-                    if (isnan(yminc->num[r]) || isnan(yec->num[r])) continue;
-                    double tx = TXR(r);
-                    double ylo = NPCY(TY(yminc->num[r]));
-                    double yhi = NPCY(TY(yec->num[r]));
-                    Col ec = spec->layers[li].has_color ? spec->layers[li].color
+                    if (isnan(lo_c->num[r]) || isnan(hi_c->num[r])) continue;
+                    Col ec = EL->has_color ? EL->color
                            : !mapped ? C_BLACK
                            : cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BLACK;
-                    double elw = LAYER_LW(&spec->layers[li], 0.5);
+                    double elw = LAYER_LW(EL, 0.5);
+                    if (horiz) {        /* xmin..xmax at y, caps of height wda */
+                        double ty = TY(yc->num[r]);
+                        double xlo = NPCX(cp_logt(spec->log_x, lo_c->num[r]));
+                        double xhi = NPCX(cp_logt(spec->log_x, hi_c->num[r]));
+                        g = gt_add(T, G_LINE, R, C, R, C);
+                        g->col = ec; g->lw = elw; g->clip = 1;
+                        g->x0 = xlo; g->x1 = xhi; g->y0 = g->y1 = NPCY(ty);
+                        for (int e2 = 0; e2 < 2; e2++) {
+                            g = gt_add(T, G_LINE, R, C, R, C);
+                            g->col = ec; g->lw = elw; g->clip = 1;
+                            g->x0 = g->x1 = e2 ? xhi : xlo;
+                            g->y0 = NPCY(ty - wda / 2); g->y1 = NPCY(ty + wda / 2);
+                        }
+                        continue;
+                    }
+                    double tx = TXR(r);
+                    double ylo = NPCY(TY(lo_c->num[r]));
+                    double yhi = NPCY(TY(hi_c->num[r]));
                     g = gt_add(T, G_LINE, R, C, R, C);
                     g->col = ec; g->lw = elw; g->clip = 1;
                     g->x0 = g->x1 = NPCX(tx);
@@ -4165,7 +4674,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
 
                         for (int w = 0; w < 2; w++) {    /* whiskers */
                             g = gt_add(T, G_LINE, R, C, R, C);
-                            g->col = lc; g->lw = lw_pt(0.5); g->clip = 1;
+                            g->col = lc; g->lw = LAYER_LW(BL, 0.5); g->clip = 1;
                             g->x0 = g->x1 = xm;
                             g->y0 = NPCY(w ? b.q1 : b.q3); g->y1 = NPCY(w ? b.wlo : b.whi);
                         }
@@ -4173,10 +4682,12 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         g->col = body; g->sub = 1; g->clip = 1;
                         g->x0 = xl; g->x1 = xr; g->y0 = NPCY(b.q1); g->y1 = NPCY(b.q3);
                         g = gt_add(T, G_RECT, R, C, R, C);   /* box outline */
-                        g->col = lc; g->sub = 1; g->stroke = 1; g->lw = lw_pt(0.5); g->clip = 1;
+                        g->col = lc; g->sub = 1; g->stroke = 1; g->lw = LAYER_LW(BL, 0.5); g->clip = 1;
                         g->x0 = xl; g->x1 = xr; g->y0 = NPCY(b.q1); g->y1 = NPCY(b.q3);
-                        g = gt_add(T, G_LINE, R, C, R, C);   /* median (fatten 2) */
-                        g->col = lc; g->lw = lw_pt(1.0); g->clip = 1;
+                        g = gt_add(T, G_LINE, R, C, R, C);   /* median: linewidth x fatten */
+                        g->col = lc; g->clip = 1;
+                        g->lw = lw_pt((BL->line_lw > 0 ? BL->line_lw : 0.5)
+                                      * (BL->box_fatten > 0 ? BL->box_fatten : 2));
                         g->x0 = xl; g->x1 = xr; g->y0 = g->y1 = NPCY(b.med);
 
                         int nout = 0;
@@ -4525,6 +5036,16 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             g->tx = spec->leg_ix; g->ty = spec->leg_iy;
         }
     }
+
+    /* ---- facet_wrap(space="free_x") over several rows: per-row widths ----
+     * A grid column is one width for every row, so sizing columns by their
+     * widest panel left a 2x3 wrap whose bottom row is 12:12 at equal widths
+     * however the rows above differ. Under facet_wrap each row instead sizes
+     * its own panels by their own ranges: resolve the table once, cut every
+     * row's panel run at its own positions, merge all rows' cuts into fixed
+     * columns, and move each row's grobs onto its own columns. */
+    if (spec->space_x && !grid && nrowp > 1 && ncolp > 1)
+        if (space_rows(T, ps, npan, ncolp, nrowp, flip, w_pt, h_pt, err)) return -1;
 
     /* ---- go ---- */
     gt_resolve(T, 0, 0, w_pt, h_pt);

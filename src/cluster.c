@@ -66,7 +66,7 @@ HClust *hclust_ward(const double *x, int n, int p, char *err) {
         }
 #define DD(i, j) D[(size_t)(i) * n + (j)]
 
-    HClust *h = cp_xmalloc(sizeof *h);
+    HClust *h = cp_xcalloc(1, sizeof *h);       /* hidden = NULL: every merge drawn */
     h->n = n;
     h->merge = cp_xmalloc((n - 1) * sizeof *h->merge);
     h->height = cp_xmalloc((n - 1) * sizeof(double));

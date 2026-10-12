@@ -125,6 +125,59 @@ static int parse_colour_values(P *p, Col *cols, char **names, int cap, int *n,
 /* levels=c("a", "b", ...) — an explicit discrete order. Elements may be quoted
  * or bare (so numeric levels read as c(8, 4, 6)); they are matched against the
  * factor's level labels at render time. Leaves *out owning the strings. */
+/* unit(n, "pt"|"mm"|"cm"|"in"|"lines") -> points. "lines" is grid's 12 pt
+ * font at line height 1.2 (14.4 pt), the context ggplot's legend.key.size
+ * of unit(1.2, "lines") resolves in. */
+static int parse_unit_pt(P *p, const char *key, double *out) {
+    skip_ws(p);
+    char *f = ident(p);
+    if (!f || strcmp(f, "unit") || expect(p, '(')) {
+        free(f);
+        return fail(p, "theme(%s=) expects unit(n, \"pt\"), with pt, mm, cm, in "
+                    "or lines", key);
+    }
+    free(f);
+    skip_ws(p);
+    char *end;
+    double v = strtod(p->s, &end);
+    if (end == p->s || !isfinite(v) || v < 0)
+        return fail(p, "unit() expects a number >= 0 near \"%.20s\"", p->s);
+    p->s = end;
+    if (expect(p, ',')) return fail(p, "unit() needs a unit: unit(n, \"pt\")%s", "");
+    char *u = string_lit(p);
+    if (!u) u = ident(p);
+    if (!u) return fail(p, "unit() needs a unit: pt, mm, cm, in or lines%s", "");
+    double k;
+    if (!strcmp(u, "pt") || !strcmp(u, "points")) k = 72.0 / 72.27;
+    else if (!strcmp(u, "bigpts")) k = 1;
+    else if (!strcmp(u, "mm")) k = 72.0 / 25.4;
+    else if (!strcmp(u, "cm")) k = 72.0 / 2.54;
+    else if (!strcmp(u, "in") || !strcmp(u, "inches")) k = 72.0;
+    else if (!strcmp(u, "lines")) k = 12 * 1.2;
+    else { int r = fail(p, "unit \"%s\" is not implemented; use pt, mm, cm, in "
+                        "or lines", u); free(u); return r; }
+    free(u);
+    if (expect(p, ')')) return -1;
+    *out = v * k;
+    return 0;
+}
+
+/* facet_*(space=): ggplot2's "fixed", "free_x", "free_y", "free" -- panel
+ * widths (free_x) and heights (free_y) proportional to the axis range */
+static int parse_space(P *p, PlotSpec *spec) {
+    char *v = string_lit(p);
+    if (!v) v = ident(p);
+    if (!v) return fail(p, "space= expects fixed, free_x, free_y, or free", "");
+    if (!strcmp(v, "fixed")) { spec->space_x = 0; spec->space_y = 0; }
+    else if (!strcmp(v, "free_x")) { spec->space_x = 1; spec->space_y = 0; }
+    else if (!strcmp(v, "free_y")) { spec->space_x = 0; spec->space_y = 1; }
+    else if (!strcmp(v, "free")) { spec->space_x = 1; spec->space_y = 1; }
+    else { int r = fail(p, "space=%s invalid; use fixed, free_x, free_y, or free", v);
+           free(v); return r; }
+    free(v);
+    return 0;
+}
+
 static int parse_levels(P *p, char ***out, int *n) {
     skip_ws(p);
     if (p->s[0] == 'c' && p->s[1] == '(') p->s += 2;
@@ -157,7 +210,7 @@ static int aes_r_idiom(P *p, const char *id) {
     if (*p->s == '(') {
         if (!strcmp(id, "as.factor") || !strcmp(id, "as.character") || !strcmp(id, "as.ordered"))
             return fail(p, "aes(): %s() is not implemented; use factor(col) (add levels=c(...) for an order)", id);
-        if (!strcmp(id, "reorder") || !strcmp(id, "fct_reorder") || !strcmp(id, "fct_relevel")
+        if (!strcmp(id, "fct_relevel")
             || !strcmp(id, "fct_rev") || !strcmp(id, "fct_infreq") || !strcmp(id, "forcats"))
             return fail(p, "aes(): %s() is not implemented; order the levels explicitly "
                         "with factor(col, levels=c(\"a\", \"b\", ...))", id);
@@ -193,8 +246,66 @@ static int aes_value(P *p, AesEntry *e) {
                     "for a `name with spaces` use backticks", p->s);
     char *id = colname(p);
     if (!id) return *p->err ? -1 : fail(p, "expected a column name near \"%.20s\"", p->s);
-    if (strcmp(id, "factor") && aes_r_idiom(p, id)) return -1;
-    if (!strcmp(id, "factor")) {
+    int is_reorder = !strcmp(id, "reorder") || !strcmp(id, "fct_reorder");
+    if (strcmp(id, "factor") && !is_reorder && aes_r_idiom(p, id)) return -1;
+    if (is_reorder) {
+        /* reorder(col, by[, FUN=mean]) is base R: the default summary is the
+         * mean. fct_reorder(col, by[, .fun=median][, .desc=]) is forcats: the
+         * default is the median. A leading minus on `by` sorts largest
+         * first, as reorder(x, -v) does in R. */
+        int fct = id[0] == 'f';
+        if (expect(p, '(')) return -1;
+        e->col = colname(p);
+        if (!e->col) return *p->err ? -1 : fail(p, "expected a column name in reorder() near \"%.20s\"", p->s);
+        skip_ws(p);
+        if (expect(p, ','))
+            return fail(p, "%s() needs the column to order by: reorder(col, value)", id);
+        skip_ws(p);
+        if (*p->s == '-') { e->reorder_desc = 1; p->s++; }
+        e->reorder_by = colname(p);
+        if (!e->reorder_by)
+            return *p->err ? -1 : fail(p, "expected the column to order by in reorder() near \"%.20s\"", p->s);
+        e->reorder_fun = fct ? RF_MEDIAN : RF_MEAN;
+        skip_ws(p);
+        while (*p->s == ',') {
+            p->s++;
+            skip_ws(p);
+            const char *save = p->s;
+            char *key = ident(p);
+            skip_ws(p);
+            if (key && *p->s == '=' && p->s[1] != '=') p->s++;
+            else { p->s = save; free(key); key = strdup(fct ? ".fun" : "FUN"); }
+            if (!strcmp(key, "FUN") || !strcmp(key, ".fun") || !strcmp(key, ".f")) {
+                char *f = ident(p);
+                if (!f) { free(key); return fail(p, "%s(): FUN= expects mean, median, sum, length, max or min", id); }
+                if (!strcmp(f, "mean")) e->reorder_fun = RF_MEAN;
+                else if (!strcmp(f, "median")) e->reorder_fun = RF_MEDIAN;
+                else if (!strcmp(f, "sum")) e->reorder_fun = RF_SUM;
+                else if (!strcmp(f, "length")) e->reorder_fun = RF_LENGTH;
+                else if (!strcmp(f, "max")) e->reorder_fun = RF_MAX;
+                else if (!strcmp(f, "min")) e->reorder_fun = RF_MIN;
+                else { free(key);
+                    return fail(p, "reorder(): FUN=%s is not implemented; use mean, median, "
+                                "sum, length, max or min", f); }
+                free(f);
+            } else if (!strcmp(key, ".desc") || !strcmp(key, "decreasing")) {
+                int d = 0;
+                if (parse_bool(p, &d)) { free(key); return fail(p, "%s= expects TRUE or FALSE", id[0] == 'f' ? ".desc" : "decreasing"); }
+                if (d) e->reorder_desc = !e->reorder_desc;
+            } else {
+                char msg[CP_ERRLEN];
+                snprintf(msg, sizeof msg, "%s() option `%s` is not implemented; "
+                         "supported: %s", id, key, fct ? ".fun=, .desc=" : "FUN=, decreasing=");
+                free(key);
+                return fail(p, "%s", msg);
+            }
+            free(key);
+            skip_ws(p);
+        }
+        if (expect(p, ')')) return -1;
+        e->is_factor = 1;
+        free(id);
+    } else if (!strcmp(id, "factor")) {
         if (expect(p, '(')) return -1;
         e->col = colname(p);
         if (!e->col) return *p->err ? -1 : fail(p, "expected a column name in factor() near \"%.20s\"", p->s);
@@ -230,7 +341,7 @@ static int parse_aes(P *p, PlotSpec *spec) {
      * fill= is colour). A second mapping onto an occupied slot used to win
      * silently -- aes(x=hp, xmin=wt) plotted wt -- so remember which key
      * claimed each slot and refuse the collision, naming both. */
-    const char *claimed[12] = {0};
+    const char *claimed[13] = {0};
     skip_ws(p);
     if (*p->s == ')') { p->s++; return 0; }
     for (;;) {
@@ -276,7 +387,23 @@ static int parse_aes(P *p, PlotSpec *spec) {
             else return fail(p, "too many positional aes() arguments near \"%.20s\"", p->s);
         }
         const char *k2 = key ? key : (slot == 0 ? "x" : "y");
-        if (claimed[slot]) {
+        /* fill= beside colour= (either order): two aesthetics, as ggplot2
+         * has them -- the fill goes to the second slot, which only a filled
+         * point glyph (geom_point(shape=21..25)) reads; validated later */
+        int split = 0;
+        if (slot == 9 && claimed[9] && !claimed[12]
+            && (claimed[9][0] == 'f') != (k2[0] == 'f')) {
+            if (k2[0] == 'f') { e = &spec->pfill; slot = 12; }
+            else {                               /* fill came first: move it */
+                spec->pfill = spec->colour;
+                memset(&spec->colour, 0, sizeof spec->colour);
+                claimed[12] = claimed[9];
+            }
+            spec->pfill.is_fill = 1;
+            spec->colour.is_fill = 0;            /* colour= is the outline */
+            split = 1;
+        }
+        if (claimed[slot] && !split) {
             char msg[CP_ERRLEN];
             if (!strcmp(claimed[slot], k2))
                 snprintf(msg, sizeof msg, "aes(%s=) is given twice", k2);
@@ -293,6 +420,10 @@ static int parse_aes(P *p, PlotSpec *spec) {
         }
         claimed[slot] = k2;                  /* key is kept alive by this */
         if (aes_value(p, e)) return -1;
+        if (e->reorder_by && slot != 0 && slot != 1)
+            return fail(p, "aes(%s=reorder(...)) is not implemented; reorder() "
+                        "orders the x or y axis only (give a legend order with "
+                        "factor(col, levels=c(...)))", k2);
         skip_ws(p);
         if (*p->s == ',') { p->s++; continue; }
         return expect(p, ')');
@@ -1472,7 +1603,7 @@ static int parse_term(P *p, PlotSpec *spec) {
      * synonym rather than making the caller care. */
     else if (!strcmp(name, "geom_raster")) gt = GEOM_TILE;
     else if (!strcmp(name, "geom_segment")) gt = GEOM_SEGMENT;
-    else if (!strcmp(name, "geom_errorbar")) gt = GEOM_ERRORBAR;
+    else if (!strcmp(name, "geom_errorbar") || !strcmp(name, "geom_errorbarh")) gt = GEOM_ERRORBAR;
     else if (!strcmp(name, "geom_linerange")) gt = GEOM_LINERANGE;
     else if (!strcmp(name, "geom_rect")) gt = GEOM_RECT;
     else if (!strcmp(name, "geom_density")) gt = GEOM_DENSITY;
@@ -1490,6 +1621,7 @@ static int parse_term(P *p, PlotSpec *spec) {
         l->type = gt; l->bins = 30; l->adjust = 1;   /* adjust default = 1 (density) */
         l->slope = 1;                                /* geom_abline default slope */
         l->repel = is_repel;
+        l->eb_horiz = !strcmp(name, "geom_errorbarh");
         skip_ws(p);
         {
             /* generic layer args: color=/colour=/fill= sets a constant colour
@@ -1512,6 +1644,62 @@ static int parse_term(P *p, PlotSpec *spec) {
                     /* ggplot2's per-layer mapping. There is one aes() here,
                      * so say where the mapping goes instead of the generic
                      * argument menu, which reads as if aes() were a typo. */
+                    if (gt == GEOM_ERRORBAR) {
+                        /* the bar's own range: aes(ymin=, ymax=) vertical, or
+                         * aes(xmin=, xmax=) horizontal (ggplot >= 3.5 infers
+                         * the orientation the same way; geom_errorbarh is
+                         * the older spelling). x and y stay top-level, so
+                         * both directions can come from one point table. */
+                        p->s++;
+                        char *k[2] = {0}, *v[2] = {0};
+                        int horiz = -1;
+                        for (;;) {
+                            skip_ws(p);
+                            if (*p->s == ')') { p->s++; break; }
+                            char *kk = ident(p);
+                            if (!kk || expect(p, '=')) { free(kk);
+                                return fail(p, "%s(aes(...)) takes xmin=/xmax= or ymin=/ymax=", name); }
+                            char *vv = colname(p);
+                            if (!vv) { free(kk);
+                                return *p->err ? -1 : fail(p, "%s(aes()) expects a column name", name); }
+                            int h = !strcmp(kk, "xmin") || !strcmp(kk, "xmax") ? 1
+                                  : !strcmp(kk, "ymin") || !strcmp(kk, "ymax") ? 0 : -1;
+                            if (h < 0) {
+                                char msg[CP_ERRLEN];
+                                snprintf(msg, sizeof msg, "%s(aes(%s=)) is not implemented; "
+                                         "a layer aes() here takes only the bar range "
+                                         "(xmin=/xmax= or ymin=/ymax=), x and y stay in the "
+                                         "top-level aes()", name, kk);
+                                free(kk); free(vv);
+                                return fail(p, "%s", msg);
+                            }
+                            if (horiz >= 0 && h != horiz) { free(kk); free(vv);
+                                return fail(p, "%s(aes()) mixes x and y ranges; give "
+                                            "two layers, one per direction", name); }
+                            horiz = h;
+                            int hi = !strcmp(kk + 1, "max");
+                            free(k[hi]); free(v[hi]);
+                            k[hi] = kk; v[hi] = vv;
+                            skip_ws(p);
+                            if (*p->s == ',') p->s++;
+                        }
+                        if (!v[0] || !v[1]) {
+                            free(k[0]); free(k[1]); free(v[0]); free(v[1]);
+                            return fail(p, "%s(aes()) needs both ends: xmin= and xmax=, "
+                                        "or ymin= and ymax=", name);
+                        }
+                        if (l->eb_horiz && !horiz) {
+                            free(k[0]); free(k[1]); free(v[0]); free(v[1]);
+                            return fail(p, "geom_errorbarh() draws xmin..xmax; for "
+                                        "ymin/ymax use geom_errorbar()%s", "");
+                        }
+                        free(k[0]); free(k[1]);
+                        free(l->eb_lo); free(l->eb_hi);
+                        l->eb_lo = v[0]; l->eb_hi = v[1]; l->eb_horiz = horiz;
+                        skip_ws(p);
+                        if (*p->s == ',') { p->s++; skip_ws(p); }
+                        continue;
+                    }
                     if (gt == GEOM_HLINE || gt == GEOM_VLINE)
                         return fail(p, "%s(aes(...)) -- one line per data row -- is "
                                     "not implemented; give a literal intercept "
@@ -1571,7 +1759,8 @@ static int parse_term(P *p, PlotSpec *spec) {
                                 "chooses the binning", key);
                 } else if ((gt == GEOM_LINE || gt == GEOM_SMOOTH || gt == GEOM_SEGMENT
                             || gt == GEOM_HLINE || gt == GEOM_VLINE || gt == GEOM_ABLINE
-                            || gt == GEOM_ERRORBAR || gt == GEOM_LINERANGE)
+                            || gt == GEOM_ERRORBAR || gt == GEOM_LINERANGE
+                            || gt == GEOM_BOXPLOT)
                            && (!strcmp(key, "size") || !strcmp(key, "linewidth"))) {
                     /* the stroke width of a line geom, in ggplot's linewidth
                      * units (0.5 = geom_line's default, 1 = geom_smooth's).
@@ -1588,6 +1777,17 @@ static int parse_term(P *p, PlotSpec *spec) {
                     }
                     p->s = end;
                     l->line_lw = v;
+                } else if (gt == GEOM_BOXPLOT && !strcmp(key, "fatten")) {
+                    /* ggplot's median emphasis: the median line is drawn at
+                     * linewidth x fatten (default 2) */
+                    skip_ws(p);
+                    char *end;
+                    double v = strtod(p->s, &end);
+                    if (end == p->s || !(v > 0))
+                        return fail(p, "geom_boxplot(fatten=) expects a number > 0 "
+                                    "(2 is ggplot's default)%s", "");
+                    p->s = end;
+                    l->box_fatten = v;
                 } else if (!strcmp(key, "color") || !strcmp(key, "colour") || !strcmp(key, "fill")) {
                     char *v = string_lit(p);
                     if (!v || parse_color(v, &l->color))
@@ -1684,6 +1884,31 @@ static int parse_term(P *p, PlotSpec *spec) {
                     l->point_size = strtod(p->s, (char **)&p->s);
                     if (!(l->point_size > 0) || !isfinite(l->point_size)) return fail(p, "geom_point(size=...) must be > 0", "");
                 } else if ((gt == GEOM_POINT || gt == GEOM_JITTER)
+                           && (!strcmp(key, "shape") || !strcmp(key, "pch"))) {
+                    /* a constant glyph: the solid circle (16/19/20, the
+                     * default) or a FILLED glyph 21..25 -- circle, square,
+                     * diamond, triangle, down-triangle -- whose body takes
+                     * fill= and outline colour=, as ggplot2's */
+                    skip_ws(p);
+                    char *end;
+                    double v = strtod(p->s, &end);
+                    if (end == p->s || v != (int)v
+                        || !(v == 16 || v == 19 || v == 20 || (v >= 21 && v <= 25)))
+                        return fail(p, "geom_point(shape=) supports 16/19/20 (solid "
+                                    "circle) and 21-25 (filled circle, square, "
+                                    "diamond, triangle, down-triangle with an "
+                                    "outline)%s", "");
+                    p->s = end;
+                    l->pt_shape = (int)v;
+                } else if ((gt == GEOM_POINT || gt == GEOM_JITTER) && !strcmp(key, "stroke")) {
+                    skip_ws(p);
+                    char *end;
+                    double v = strtod(p->s, &end);
+                    if (end == p->s || !(v >= 0) || !isfinite(v))
+                        return fail(p, "geom_point(stroke=) expects a number >= 0%s", "");
+                    p->s = end;
+                    l->pt_stroke = v > 0 ? v : -1;      /* 0 = no outline */
+                } else if ((gt == GEOM_POINT || gt == GEOM_JITTER)
                            && (!strcmp(key, "raster")
                                              || !strcmp(key, "rasterise")
                                              || !strcmp(key, "rasterize"))) {
@@ -1691,7 +1916,8 @@ static int parse_term(P *p, PlotSpec *spec) {
                      * the grammar is that ggplot2 habits transfer. */
                     if (parse_bool(p, &l->raster))
                         return fail(p, "geom_point(raster=) expects TRUE or FALSE", "");
-                } else if (gt == GEOM_ERRORBAR && !strcmp(key, "width")) {
+                } else if (gt == GEOM_ERRORBAR && (!strcmp(key, "width")
+                                                   || !strcmp(key, "height"))) {
                     skip_ws(p);
                     char *end;
                     double v = strtod(p->s, &end);
@@ -2136,9 +2362,51 @@ static int parse_term(P *p, PlotSpec *spec) {
         spec->nhls++;
         return 0;
     }
+    if (!strcmp(name, "scale_shape_manual")) {
+        /* values=c(level=pch, ...) -- R's pch codes: 16/19/20 circle,
+         * 15 square, 17 triangle, 18 diamond, 25 down-triangle, 3 plus */
+        skip_ws(p);
+        char *key = ident(p);
+        if (!key || strcmp(key, "values") || expect(p, '=')) { free(key);
+            return fail(p, "scale_shape_manual() takes values=c(level=pch, ...)%s", ""); }
+        free(key);
+        skip_ws(p);
+        if (!(p->s[0] == 'c' && p->s[1] == '(')) return fail(p, "values= expects c(...)%s", "");
+        p->s += 2;
+        spec->n_shape_pch = 0;
+        for (;;) {
+            skip_ws(p);
+            if (*p->s == ')') { p->s++; break; }
+            char *nm = NULL;
+            const char *save = p->s;
+            if (*p->s == '"') {
+                char *s2 = string_lit(p); skip_ws(p);
+                if (*p->s == '=') { p->s++; nm = s2; } else { free(s2); p->s = save; }
+            } else {
+                char *id = ident(p); skip_ws(p);
+                if (id && *p->s == '=') { p->s++; nm = id; } else { free(id); p->s = save; }
+            }
+            skip_ws(p);
+            char *end;
+            double v = strtod(p->s, &end);
+            if (end == p->s || v != (int)v || v < 0 || v > 25) { free(nm);
+                return fail(p, "scale_shape_manual: values are pch codes 0-25%s", ""); }
+            p->s = end;
+            if (spec->n_shape_pch >= 32) { free(nm); return fail(p, "scale_shape_manual holds at most 32 values%s", ""); }
+            spec->shape_pch[spec->n_shape_pch] = (int)v;
+            spec->shape_pch_names[spec->n_shape_pch++] = nm;
+            skip_ws(p);
+            if (*p->s == ',') { p->s++; continue; }
+            if (*p->s == ')') { p->s++; break; }
+            return fail(p, "expected , or ) in values=c(...)%s", "");
+        }
+        return expect(p, ')');
+    }
     if (!strcmp(name, "scale_fill_manual") || !strcmp(name, "scale_colour_manual")
-        || !strcmp(name, "scale_color_manual"))
+        || !strcmp(name, "scale_color_manual")) {
+        spec->manual_fill = name[6] == 'f';
         return parse_manual_scale(p, spec, name);
+    }
     if (!strcmp(name, "scale_fill_distiller") || !strcmp(name, "scale_colour_distiller")
         || !strcmp(name, "scale_color_distiller")) {
         FillScale *fs = name[6] == 'f' ? &spec->fill : &spec->colour_scale;
@@ -2164,6 +2432,100 @@ static int parse_term(P *p, PlotSpec *spec) {
         const char *k = name + (name[10] == 'u' ? 13 : 12);   /* colour vs color */
         spec->has_colour_scale = 1;
         return parse_grad_scale(p, &spec->colour_scale, k, "scale_colour_");
+    }
+    if (!strcmp(name, "venn")) {
+        /* venn("membership.tsv", item=, set=[, n=][, colour=][, sets=c()]
+         * [, set_colours=c()][, subtitle=c()][, labels=c()]) -- its own
+         * mode: one row per (item, set) membership, optional per-row count
+         * n (one dot per sample) and item colour. */
+        spec->venn_mode = 1;
+        skip_ws(p);
+        if (*p->s == '"') {
+            spec->data_path = string_lit(p);
+            skip_ws(p);
+            if (*p->s == ',') { p->s++; skip_ws(p); }
+        }
+        while (*p->s != ')') {
+            char *key = ident(p);
+            if (!key || expect(p, '=')) return fail(p, "bad venn() argument", "");
+            skip_ws(p);
+            char **colslot = !strcmp(key, "item") ? &spec->venn_item
+                           : !strcmp(key, "set") ? &spec->venn_set
+                           : !strcmp(key, "n") ? &spec->venn_n
+                           : !strcmp(key, "shape") ? &spec->venn_shape
+                           : !strcmp(key, "colour") || !strcmp(key, "color") ? &spec->venn_colour
+                           : NULL;
+            if (colslot) {                       /* a column: bare or quoted */
+                char *v = *p->s == '"' ? string_lit(p) : colname(p);
+                if (!v) { free(key); return fail(p, "venn(): %s= expects a column name", key); }
+                *colslot = v;
+            } else if (!strcmp(key, "captions")) {
+                int on = 1;
+                if (parse_bool(p, &on)) { free(key); return fail(p, "captions= expects TRUE or FALSE%s", ""); }
+                spec->venn_no_captions = !on;
+            } else if (!strcmp(key, "subtitle")) {
+                /* "none" (or "") drops every subtitle; c("a", "") per set,
+                 * an empty string dropping that set's line */
+                if (*p->s == '"') {
+                    char *v = string_lit(p);
+                    if (!v) { free(key); return fail(p, "bad subtitle=%s", ""); }
+                    if (strcmp(v, "none") && *v) { free(key); free(v);
+                        return fail(p, "subtitle= expects \"none\" or c(...) per set%s", ""); }
+                    spec->venn_subtitles = cp_xcalloc(4, sizeof(char *));
+                    for (int i = 0; i < 4; i++) spec->venn_subtitles[i] = cp_xstrdup("");
+                    spec->n_venn_subtitles = 4;
+                    free(v);
+                } else {
+                    if (!(p->s[0] == 'c' && p->s[1] == '(')) { free(key);
+                        return fail(p, "subtitle= expects c(\"...\", ...) or \"none\"%s", ""); }
+                    p->s += 2;
+                    spec->venn_subtitles = cp_xcalloc(4, sizeof(char *));
+                    spec->n_venn_subtitles = 0;
+                    for (;;) {
+                        skip_ws(p);
+                        if (*p->s == ')') { p->s++; break; }
+                        char *v = string_lit(p);
+                        if (!v) { free(key); return fail(p, "subtitle=c(...) expects quoted strings%s", ""); }
+                        if (spec->n_venn_subtitles < 4) spec->venn_subtitles[spec->n_venn_subtitles++] = v;
+                        skip_ws(p);
+                        if (*p->s == ',') { p->s++; continue; }
+                        if (*p->s == ')') { p->s++; break; }
+                        free(key); return fail(p, "expected , or ) in subtitle=c(...)%s", "");
+                    }
+                }
+            } else if (!strcmp(key, "sets")) {
+                char ***dst = key[1] == 'e' ? &spec->venn_sets : &spec->venn_subtitles;
+                int *nd = key[1] == 'e' ? &spec->n_venn_sets : &spec->n_venn_subtitles;
+                if (parse_levels(p, dst, nd)) { free(key); return -1; }
+            } else if (!strcmp(key, "set_colours") || !strcmp(key, "set_colors")) {
+                if (!(p->s[0] == 'c' && p->s[1] == '(')) { free(key);
+                    return fail(p, "set_colours= expects c(\"#rrggbb\", ...)%s", ""); }
+                p->s += 2;
+                char *nm[4];
+                if (parse_colour_values(p, spec->venn_set_cols, nm, 4,
+                                        &spec->n_venn_set_cols, "set_colours=c(...)")) {
+                    free(key); return -1;
+                }
+            } else if (!strcmp(key, "labels")) {
+                if (!(p->s[0] == 'c' && p->s[1] == '(')) { free(key);
+                    return fail(p, "labels= expects c(item=\"Label\", ...)%s", ""); }
+                p->s += 2;
+                spec->venn_labs = cp_xcalloc(256, sizeof(char *));
+                spec->venn_lab_names = cp_xcalloc(256, sizeof(char *));
+                if (parse_label_values(p, spec->venn_labs, spec->venn_lab_names, 256,
+                                       &spec->n_venn_labs)) { free(key); return -1; }
+            } else {
+                char msg[CP_ERRLEN];
+                snprintf(msg, sizeof msg, "venn() option `%s` not implemented; supported: "
+                         "item=, set=, n=, colour=, shape=, sets=, set_colours=, subtitle=, labels=, captions=", key);
+                free(key);
+                return fail(p, "%s", msg);
+            }
+            free(key);
+            skip_ws(p);
+            if (*p->s == ',') { p->s++; skip_ws(p); }
+        }
+        return expect(p, ')');
     }
     if (!strcmp(name, "chord")) {
         /* chord("links.csv"[, from=][, to=][, value=][, gap=][, alpha=]) —
@@ -2409,23 +2771,40 @@ static int parse_term(P *p, PlotSpec *spec) {
                 if (key[1] == 'c') spec->facet_ncol = (int)v;
                 else spec->facet_nrow = (int)v;
             } else if (!strcmp(key, "scales")) {
-                char *v = string_lit(p);
-                if (!v) v = ident(p);          /* scales=free reads as well as "free" */
-                if (!v) return fail(p, "scales= expects fixed, free_x, free_y, or free", "");
-                if (!strcmp(v, "fixed")) { spec->free_x = 0; spec->free_y = 0; }
-                else if (!strcmp(v, "free_x")) { spec->free_x = 1; spec->free_y = 0; }
-                else if (!strcmp(v, "free_y")) { spec->free_x = 0; spec->free_y = 1; }
-                else if (!strcmp(v, "free"))   { spec->free_x = 1; spec->free_y = 1; }
-                else if (!strcmp(v, "free_colour") || !strcmp(v, "free_color")) {
+                /* one value, or c("free", "free_colour") to free the axes AND
+                 * the colour scale together */
+                skip_ws(p);
+                int list = p->s[0] == 'c' && p->s[1] == '(';
+                if (list) p->s += 2;
+                int fx = 0, fy = 0, fc = 0;
+                for (;;) {
+                    skip_ws(p);
+                    char *v = string_lit(p);
+                    if (!v) v = ident(p);          /* scales=free reads as well as "free" */
+                    if (!v) return fail(p, "scales= expects fixed, free_x, free_y, free, "
+                                        "free_colour, or c(...) of them", "");
+                    if (!strcmp(v, "fixed")) ;
+                    else if (!strcmp(v, "free_x")) fx = 1;
+                    else if (!strcmp(v, "free_y")) fy = 1;
+                    else if (!strcmp(v, "free"))   { fx = 1; fy = 1; }
                     /* each facet builds its own colour scale and legend block
                      * — one figure, several colour meanings (no ggplot2
                      * equivalent; patchwork territory) */
-                    spec->free_x = 0; spec->free_y = 0; spec->free_colour = 1;
+                    else if (!strcmp(v, "free_colour") || !strcmp(v, "free_color")) fc = 1;
+                    else return fail(p, "scales=%s invalid; use fixed, free_x, "
+                                     "free_y, free, or free_colour", v);
+                    free(v);
+                    skip_ws(p);
+                    if (!list) break;
+                    if (*p->s == ',') { p->s++; continue; }
+                    if (*p->s == ')') { p->s++; break; }
+                    return fail(p, "expected , or ) in scales=c(...)%s", "");
                 }
-                else return fail(p, "scales=%s invalid; use fixed, free_x, "
-                                 "free_y, free, or free_colour", v);
+                spec->free_x = fx; spec->free_y = fy; spec->free_colour = fc;
+            } else if (!strcmp(key, "space")) {
+                if (parse_space(p, spec)) { free(key); return -1; }
             } else return fail(p, "facet_wrap() option `%s` not implemented; "
-                               "supported: levels=c(...), scales=, ncol=, nrow=", key);
+                               "supported: levels=c(...), scales=, space=, ncol=, nrow=", key);
             free(key);
             skip_ws(p);
         }
@@ -2470,7 +2849,7 @@ static int parse_term(P *p, PlotSpec *spec) {
             p->s++;
             char *key = ident(p);
             if (!key || expect(p, '='))
-                return fail(p, "facet_grid() supports scales=", "");
+                return fail(p, "facet_grid() supports scales= and space=", "");
             if (!strcmp(key, "scales")) {
                 /* per ggplot2's facet_grid: a freed x is shared down a COLUMN
                  * and a freed y across a ROW, not per panel */
@@ -2492,6 +2871,8 @@ static int parse_term(P *p, PlotSpec *spec) {
                     return fail(p, "scales=%s invalid; use fixed, free_x, free_y, "
                                 "or free", v); }
                 free(v);
+            } else if (!strcmp(key, "space")) {
+                if (parse_space(p, spec)) { free(key); return -1; }
             } else if (!strcmp(key, "levels")) {
                 free(key);
                 return fail(p, "facet_grid() option `levels=` is not implemented "
@@ -2507,7 +2888,7 @@ static int parse_term(P *p, PlotSpec *spec) {
             } else {
                 char msg[CP_ERRLEN];
                 snprintf(msg, sizeof msg, "facet_grid() option `%s` not "
-                         "implemented; supported: scales=", key);
+                         "implemented; supported: scales=, space=", key);
                 free(key);
                 return fail(p, "%s", msg);
             }
@@ -2545,7 +2926,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                 if (!strcmp(v, "none")) {          /* the commonest ggplot2 legend line */
                     free(v);
                     spec->no_legend = spec->no_legend_size = spec->no_legend_shape = 1;
-                    spec->no_legend_linetype = 1;
+                    spec->no_legend_linetype = spec->no_legend_fill = spec->no_legend_colour = 1;
                     skip_ws(p);
                     if (*p->s == ',') { p->s++; skip_ws(p); }
                     continue;
@@ -2576,10 +2957,71 @@ static int parse_term(P *p, PlotSpec *spec) {
                                 "coordinates in [0, 1]", "");
                 spec->leg_ix = x2; spec->leg_iy = y2;
                 spec->legend_inside = 1;
+            } else if (!strcmp(key, "strip.text") || !strcmp(key, "strip.text.x")
+                       || !strcmp(key, "strip.text.y")) {
+                /* element_text(size=N) in pt, or size=rel(r) of base_size;
+                 * ggplot's default is rel(0.8). .x is the top strips, .y
+                 * facet_grid's row strips. */
+                char *f = ident(p);
+                if (!f || strcmp(f, "element_text") || expect(p, '(')) {
+                    char msg[CP_ERRLEN];
+                    snprintf(msg, sizeof msg, "theme(%s=%s()) is not implemented; "
+                             "%s=element_text(size=N) is", key, f ? f : "", key);
+                    free(f);
+                    return fail(p, "%s", msg);
+                }
+                free(f);
+                double v = 0;
+                skip_ws(p);
+                while (*p->s != ')') {
+                    char *k = ident(p);
+                    if (!k || expect(p, '=')) { free(k);
+                        return fail(p, "element_text() takes key=value arguments%s", ""); }
+                    if (strcmp(k, "size")) {
+                        char msg[CP_ERRLEN];
+                        snprintf(msg, sizeof msg, "element_text(%s=) is not implemented "
+                                 "for %s; size= is", k, key);
+                        free(k);
+                        return fail(p, "%s", msg);
+                    }
+                    free(k);
+                    skip_ws(p);
+                    int rel = 0;
+                    if (!strncmp(p->s, "rel(", 4)) { rel = 1; p->s += 4; }
+                    char *end;
+                    v = strtod(p->s, &end);
+                    if (end == p->s || !(v > 0))
+                        return fail(p, "element_text(size=) expects a number > 0 or rel(r)%s", "");
+                    p->s = end;
+                    if (rel) { if (expect(p, ')')) return -1; v = -v; }
+                    skip_ws(p);
+                    if (*p->s == ',') { p->s++; skip_ws(p); }
+                }
+                p->s++;
+                if (v == 0) return fail(p, "theme(%s=element_text()) needs size=", key);
+                if (strcmp(key, "strip.text.y")) spec->strip_x_sz = v;
+                if (strcmp(key, "strip.text.x")) spec->strip_y_sz = v;
+            } else if (!strcmp(key, "legend.key.size") || !strcmp(key, "legend.key.height")
+                       || !strcmp(key, "legend.key.width")
+                       || !strcmp(key, "legend.key.spacing.y")
+                       || !strcmp(key, "legend.key.spacing")) {
+                /* ggplot2's legend key cell and the gap between key rows.
+                 * The default key is 17.3 pt whatever base_size says -- as
+                 * in ggplot -- so a small-font figure shrinks it here. */
+                double v;
+                if (parse_unit_pt(p, key, &v)) return -1;
+                if (!strcmp(key, "legend.key.size")) spec->key_w = spec->key_h = v;
+                else if (!strcmp(key, "legend.key.height")) spec->key_h = v;
+                else if (!strcmp(key, "legend.key.width")) spec->key_w = v;
+                else { spec->key_gap = v; spec->has_key_gap = 1; }
+                if (strncmp(key, "legend.key.spacing", 18) && !(v > 0))
+                    return fail(p, "theme(%s=) must be > 0", key);
             } else return fail(p, "theme(%s=) is not implemented; the presets "
                                "(theme_bw() etc., with base_line_size=) cover "
                                "the rest — supported here: legend.position, "
-                               "legend.position.inside", key);
+                               "legend.position.inside, legend.key.size, "
+                               "legend.key.height, legend.key.width, "
+                               "legend.key.spacing.y, strip.text[.x|.y]", key);
             skip_ws(p);
             if (*p->s == ',') { p->s++; skip_ws(p); }
         }
@@ -2715,6 +3157,63 @@ static int parse_term(P *p, PlotSpec *spec) {
             skip_ws(p);
             char *v = word(p);                       /* "none" / guide_legend */
             if (!v) { free(key); return fail(p, "guides() values must be \"none\" or guide_legend(...)", ""); }
+            if (!strcmp(v, "guide_colourbar") || !strcmp(v, "guide_colorbar")) {
+                /* guide_colourbar(direction=, barwidth=, barheight=): the
+                 * continuous colour bar's orientation and size. Sizes are
+                 * ggplot's: a bare number is in lines (14.4 pt), else
+                 * unit(n, "pt"|"mm"|...). */
+                free(v);
+                if (!is_col) { free(key);
+                    return fail(p, "guide_colourbar() applies to colour/fill only%s", ""); }
+                skip_ws(p);
+                if (*p->s != '(') { free(key); return fail(p, "guide_colourbar expects (...)%s", ""); }
+                p->s++;
+                skip_ws(p);
+                while (*p->s != ')') {
+                    char *gk = ident(p);
+                    if (!gk || expect(p, '=')) { free(key); free(gk);
+                        return fail(p, "bad guide_colourbar() argument%s", ""); }
+                    skip_ws(p);
+                    if (!strcmp(gk, "direction")) {
+                        char *d = string_lit(p);
+                        if (!d || (strcmp(d, "horizontal") && strcmp(d, "vertical"))) {
+                            free(d); free(gk); free(key);
+                            return fail(p, "direction= expects \"horizontal\" or \"vertical\"%s", "");
+                        }
+                        spec->cbar_horiz = d[0] == 'h';
+                        free(d);
+                    } else if (!strcmp(gk, "barwidth") || !strcmp(gk, "barheight")) {
+                        double v2;
+                        if (!strncmp(p->s, "unit", 4)) {
+                            if (parse_unit_pt(p, gk, &v2)) { free(gk); free(key); return -1; }
+                        } else {
+                            char *end;
+                            v2 = strtod(p->s, &end);
+                            if (end == p->s) { free(gk); free(key);
+                                return fail(p, "barwidth=/barheight= expect a number (lines) or unit()%s", ""); }
+                            p->s = end;
+                            v2 *= 14.4;                  /* lines */
+                        }
+                        if (!(v2 > 0)) { free(gk); free(key);
+                            return fail(p, "barwidth=/barheight= must be > 0%s", ""); }
+                        if (gk[3] == 'w') spec->cbar_w = v2; else spec->cbar_h = v2;
+                    } else {
+                        char msg[CP_ERRLEN];
+                        snprintf(msg, sizeof msg, "guide_colourbar option `%s` not "
+                                 "implemented (direction=, barwidth=, barheight=)", gk);
+                        free(gk); free(key);
+                        return fail(p, "%s", msg);
+                    }
+                    free(gk);
+                    skip_ws(p);
+                    if (*p->s == ',') { p->s++; skip_ws(p); }
+                }
+                p->s++;
+                free(key);
+                skip_ws(p);
+                if (*p->s == ',') { p->s++; skip_ws(p); }
+                continue;
+            }
             if (!strcmp(v, "guide_legend") && !is_col) {
                 free(v);
                 fail(p, "guides(%s=guide_legend(...)): guide_legend() options apply to "
@@ -2758,7 +3257,11 @@ static int parse_term(P *p, PlotSpec *spec) {
                     return fail(p, "guide_legend: give ncol= or nrow=, not both", "");
             } else if (!strcmp(v, "none")) {
                 free(v);
-                if (is_col) spec->no_legend = 1;
+                if (is_col) {
+                    spec->no_legend = 1;
+                    if (key[0] == 'f') spec->no_legend_fill = 1;
+                    else spec->no_legend_colour = 1;
+                }
                 else if (is_size) spec->no_legend_size = 1;
                 else if (is_lt) spec->no_legend_linetype = 1;
                 else spec->no_legend_shape = 1;
@@ -2797,7 +3300,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                    "classic/...(), theme(legend.position=), guides(); heatmap(), annotation(), "
                    "legend(), dendrogram(), highlight(); region()/regions(), coverage(), interval(), "
                    "genes(), arcs(), matrix(), signal(), cytoband(), ideogram(); geom_tree/tiplab/nodelab/"
-                   "tippoint/nodepoint(); chord()", name);
+                   "tippoint/nodepoint(); chord(); venn()", name);
 }
 
 int dsl_parse(const char *src, PlotSpec *spec, char *err) {
@@ -2850,7 +3353,7 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
      * silent no-op: the spec parsed, the run succeeded, and the default ramp
      * came out. Alias it onto the colour scale instead. scale_colour_*() still
      * wins if both are given. */
-    if (!is_hm && !is_trk && spec->has_fill && !spec->has_colour_scale) {
+    if (!is_hm && !is_trk && spec->has_fill && !spec->has_colour_scale && !spec->pfill.col) {
         spec->colour_scale = spec->fill;
         spec->has_colour_scale = 1;
     }
@@ -2863,7 +3366,7 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
     }
     /* labs(fill=) titles that same aesthetic, so honour it when labs(colour=)
      * was not given. */
-    if (!is_hm && !is_trk && spec->lab_fill && !spec->lab_colour)
+    if (!is_hm && !is_trk && spec->lab_fill && !spec->lab_colour && !spec->pfill.col)
         spec->lab_colour = spec->lab_fill;
 
     /* ---- the range geoms and the ymin alias ----
@@ -2892,10 +3395,46 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
         }
     }
 
+    /* aes(fill=) beside aes(colour=) has one reader: a filled point glyph */
+    if (spec->pfill.col) {
+        int filled = 0;
+        for (int i = 0; i < spec->nlayers; i++)
+            if ((spec->layers[i].type == GEOM_POINT || spec->layers[i].type == GEOM_JITTER)
+                && spec->layers[i].pt_shape >= 21) filled = 1;
+        if (!filled)
+            return fail(&p, "aes(): colour= and fill= both map the colour aesthetic "
+                        "unless a point layer draws a filled glyph -- "
+                        "geom_point(shape=21) fills by fill= and outlines by colour= "
+                        "(on geom_boxplot the key alone chooses body vs chrome); "
+                        "else give one", "");
+        if (spec->has_fill && spec->pfill.col && !spec->has_manual)
+            return fail(&p, "a continuous scale_fill_*() with a filled point is not "
+                        "implemented; fill= is the discrete body colour "
+                        "(scale_fill_manual(values=) keys it), colour= takes the "
+                        "continuous scale", "");
+    }
+
     /* ---- mode mixing ---- */
     int any_tree = spec->tree_mode || spec->tree_tiplab || spec->tree_nodelab
                 || spec->tree_nodepoint || spec->tree_tippoint;
     int any_grammar = spec->nlayers || spec->x.col || spec->facet_var || spec->facet_grid;
+    if (spec->venn_mode) {
+        if (spec->chord_mode || any_grammar || spec->nhobjs || spec->ntracks || any_tree
+            || spec->polar || spec->nannos || spec->coord_flip)
+            return fail(&p, "venn() is its own mode and cannot be mixed with "
+                        "aes()/geom_*, facet_wrap(), coord_*(), heatmap(), chord(), "
+                        "tracks, trees or annotate()", "");
+        if (spec->lab_x || spec->lab_y || spec->lab_colour || spec->lab_fill
+            || spec->lab_shape || spec->lab_size || spec->lab_linetype || spec->lab_subtitle)
+            return fail(&p, "venn() draws no axes or legend; labs(title=, caption=) "
+                        "apply (set subtitles come from subtitle=)", "");
+        if (spec->has_xlim || spec->has_ylim || spec->log_x || spec->log_y
+            || spec->has_colour_scale || spec->has_fill || spec->no_legend
+            || spec->legend_inside || spec->n_manual_labs || spec->has_manual)
+            return fail(&p, "venn() takes no scales or guides; colours come from "
+                        "set_colours= and the colour= column", "");
+        return 0;
+    }
     if (spec->chord_mode) {
         if (any_grammar || spec->nhobjs || spec->ntracks || any_tree || spec->polar
             || spec->nannos || spec->coord_flip)

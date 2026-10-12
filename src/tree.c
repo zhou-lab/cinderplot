@@ -730,7 +730,7 @@ int render_tree(const PlotSpec *spec, const char *out,
             double kw = text_w(cr, SZ_AXIS_TEXT, b);
             if (kw > w) w = kw;
         }
-        legw = 2 * HALF_LINE + KEY_SIZE + TXT_GAP + w;
+        legw = 2 * HALF_LINE + KEY_W + TXT_GAP + w;
     }
 
     T->ncol = 4;
@@ -775,7 +775,7 @@ int render_tree(const PlotSpec *spec, const char *out,
         double ch = h_pt - 2 * MARGIN;
         int nk = leg->discrete ? leg->f->nlev : 0;
         double lh = font_h(cr, SZ_AXIS_TEXT);
-        double blockh = leg->discrete ? nk * fmax(KEY_SIZE, lh) : 6 * KEY_SIZE;
+        double blockh = leg->discrete ? nk * fmax(KEY_H, lh) : 6 * KEY_H;
         double titleh2 = leg_title ? font_h(cr, SZ_BASE) + HALF_LINE / 2 : 0;
         double top = 0.5 + (blockh + titleh2) / 2 / ch;
         if (leg_title) {
@@ -787,23 +787,23 @@ int render_tree(const PlotSpec *spec, const char *out,
         /* npc inside the legend CELL, which is legw wide -- not the figure. */
         double cw = legw > 0 ? legw : 1;
         if (leg->discrete) {
-            double kh = fmax(KEY_SIZE, lh) / ch;
+            double kh = fmax(KEY_H, lh) / ch;
             for (int k = 0; k < nk; k++) {
                 double yc = y - (k + 0.5) * kh;
                 double *px = cp_xmalloc(sizeof(double)), *py = cp_xmalloc(sizeof(double));
                 Col *pc = cp_xmalloc(sizeof(Col));
-                px[0] = (KEY_SIZE / 2) / cw; py[0] = yc; pc[0] = leg->pal[k];
+                px[0] = (KEY_W / 2) / cw; py[0] = yc; pc[0] = leg->pal[k];
                 Grob *g2 = gt_add(T, G_POINTS, R, 3, R, 3);
                 g2->n = 1; g2->px = px; g2->py = py; g2->pcol = pc;
                 g2->radius = PT_RADIUS * 1.4;
                 g2 = gt_add(T, G_TEXT, R, 3, R, 3);
                 g2->str = leg->f->levels[k]; g2->size = SZ_AXIS_TEXT; g2->col = C_BLACK;
-                g2->tx = (KEY_SIZE + TXT_GAP) / cw; g2->ty = yc;
+                g2->tx = (KEY_W + TXT_GAP) / cw; g2->ty = yc;
                 g2->hj = 0; g2->va = V_INKCENTER;
             }
         } else {
             const int NB = 48;               /* the ramp, sampled into bands */
-            double barh = blockh / ch, bw = KEY_SIZE * 0.55 / cw;
+            double barh = blockh / ch, bw = KEY_W * 0.55 / cw;
             for (int k = 0; k < NB; k++) {
                 double f0 = (double)k / NB, f1 = (double)(k + 1) / NB;
                 Grob *g2 = gt_add(T, G_RECT, R, 3, R, 3);

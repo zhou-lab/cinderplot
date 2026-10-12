@@ -107,6 +107,74 @@ static HClust *cluster_dim(const Matrix *m, int dim, int **ord, char *err) {
     return h;
 }
 
+/* Cluster within the blocks of a split (ComplexHeatmap's column_split with
+ * cluster_column_slices = FALSE): the blocks follow the split annotation's
+ * level order, ward.D2 orders each block on its own, and one HClust holds
+ * every block's merges plus HIDDEN joins between the block roots, so a
+ * dendrogram draws one tree per block on a common height scale. `grp[i]` is
+ * the block of data index i (-1 = no level, gathered last); dim as in
+ * cluster_dim. Writes the display order into ord (n entries). */
+static HClust *cluster_within(const Matrix *m, int dim, const int *grp, int ngrp,
+                              int *ord, char *err) {
+    int n = dim == 0 ? m->nr : m->nc, p = dim == 0 ? m->nc : m->nr;
+    HClust *H = cp_xcalloc(1, sizeof(HClust));
+    H->n = n;
+    H->merge = cp_xmalloc((size_t)(n > 1 ? n - 1 : 1) * sizeof *H->merge);
+    H->height = cp_xmalloc((size_t)(n > 1 ? n - 1 : 1) * sizeof(double));
+    H->hidden = cp_xcalloc((size_t)(n > 1 ? n - 1 : 1), 1);
+    H->order = ord;
+    int *mem = cp_xmalloc(n * sizeof(int));
+    int nord = 0, nstep = 0, prev_root = 0, have_root = 0;   /* R refs: <0 leaf, >0 step */
+    double hmax = 0;
+    for (int g = 0; g <= ngrp; g++) {                /* g == ngrp: the NA block */
+        int k = 0;
+        for (int i = 0; i < n; i++)
+            if ((g < ngrp ? grp[i] == g : grp[i] < 0)) mem[k++] = i;
+        if (!k) continue;
+        int root;
+        if (k == 1) {
+            ord[nord++] = mem[0];
+            root = -(mem[0] + 1);
+        } else {
+            double *obs = cp_xmalloc((size_t)k * p * sizeof(double));
+            for (int a = 0; a < k; a++)
+                for (int q = 0; q < p; q++)
+                    obs[(size_t)a * p + q] = dim == 0 ? m->v[(size_t)mem[a] * m->nc + q]
+                                                      : m->v[(size_t)q * m->nc + mem[a]];
+            char cerr[CP_ERRLEN];
+            HClust *h = hclust_ward(obs, k, p, cerr);
+            free(obs);
+            if (!h) {
+                snprintf(err, CP_ERRLEN, "clustering within a split block: %.*s",
+                         CP_ERRLEN - 40, cerr);
+                free(mem); return NULL;
+            }
+            int off = nstep;
+            for (int s = 0; s < k - 1; s++) {
+                for (int e = 0; e < 2; e++) {
+                    int v = h->merge[s][e];
+                    H->merge[nstep][e] = v < 0 ? -(mem[-v - 1] + 1) : v + off;
+                }
+                H->height[nstep] = h->height[s];
+                if (h->height[s] > hmax) hmax = h->height[s];
+                nstep++;
+            }
+            for (int a = 0; a < k; a++) ord[nord++] = mem[h->order[a]];
+            root = nstep;                            /* 1-based step of the block root */
+        }
+        if (have_root) {                             /* hidden join to the blocks so far */
+            H->merge[nstep][0] = prev_root; H->merge[nstep][1] = root;
+            H->hidden[nstep] = 1;
+            nstep++;
+            prev_root = nstep;
+        } else { prev_root = root; have_root = 1; }
+    }
+    for (int s = 0; s < nstep; s++)                  /* joins sit above every block */
+        if (H->hidden[s]) H->height[s] = hmax * 1.05 + 1e-9;
+    free(mem);
+    return H;
+}
+
 static const char *cluster_word(ClusterMode c) {
     return c == CL_ROWS ? "rows" : c == CL_COLS ? "cols" : c == CL_BOTH ? "both"
          : c == CL_DIAGONAL ? "diagonal" : c == CL_SYMMETRIC ? "symmetric" : "none";
@@ -423,7 +491,9 @@ static void dend_seg(GTable *T, int CR, int CC, const RObj *r,
 static void draw_dendro(GTable *T, int CR, int CC, const RObj *r) {
     HClust *t = r->tree;
     int nn = t->n;
-    double maxh = nn > 1 ? t->height[nn - 2] : 1;
+    double maxh = 0;                /* the tallest DRAWN merge sets the scale */
+    for (int s = 0; s < nn - 1; s++)
+        if (!(t->hidden && t->hidden[s]) && t->height[s] > maxh) maxh = t->height[s];
     if (maxh <= 0) maxh = 1;
     double *npos = cp_xmalloc((nn - 1) * sizeof(double));   /* node leaf-fraction */
     for (int s = 0; s < nn - 1; s++) {
@@ -433,6 +503,10 @@ static void draw_dendro(GTable *T, int CR, int CC, const RObj *r) {
         double ha = a < 0 ? 0 : t->height[a - 1] / maxh;
         double hb = b < 0 ? 0 : t->height[b - 1] / maxh;
         double hs = t->height[s] / maxh;
+        if (t->hidden && t->hidden[s]) {    /* a join between split blocks */
+            npos[s] = (pa + pb) / 2;
+            continue;
+        }
         dend_seg(T, CR, CC, r, pa, ha, pa, hs);         /* riser A */
         dend_seg(T, CR, CC, r, pb, hb, pb, hs);         /* riser B */
         dend_seg(T, CR, CC, r, pa, hs, pb, hs);         /* crossbar */
@@ -1186,6 +1260,42 @@ int render_heatmap(const PlotSpec *spec, const char *out,
         }
     }
 
+    /* ---- colsplit=/rowsplit= on a clustered axis: cluster within each block
+     * (the split annotation is only known once placed, so the heatmap's
+     * whole-axis ordering is redone here). The order is rewritten IN PLACE,
+     * so every annotation sharing it follows; dendrograms are re-pointed. ---- */
+    for (int i = 0; i < n; i++) {
+        RObj *r = &ro[i];
+        if (r->o->type != HM_HEATMAP) continue;
+        for (int axis = 0; axis < 2; axis++) {       /* 0 = columns, 1 = rows */
+            const char *ref = axis ? r->o->rowsplit : r->o->colsplit;
+            ClusterMode cm = r->o->cluster;
+            int clustered = axis ? (cm == CL_ROWS || cm == CL_BOTH)
+                                 : (cm == CL_COLS || cm == CL_BOTH);
+            if (!ref || !clustered) continue;
+            int k = find_obj(ro, n, ref);
+            RObj *a = k >= 0 ? &ro[k] : NULL;
+            int ncell = axis ? r->m->nr : r->m->nc;
+            if (!a || a->o->type != HM_ANNOTATION || !a->ann_f
+                || a->ann_horiz == axis || a->ann_n != ncell)
+                continue;                            /* the gap pass below says why */
+            int *word = axis ? r->roword : r->coword;
+            HClust *t = cluster_within(r->m, axis ? 0 : 1, a->ann_f->idx,
+                                       a->ann_f->nlev, cp_xmalloc(ncell * sizeof(int)), err);
+            if (!t) return -1;
+            memcpy(word, t->order, ncell * sizeof(int));
+            if (axis) r->rowclust = t; else r->colclust = t;
+            for (int j = 0; j < n; j++) {            /* dendrograms on this axis */
+                RObj *d = &ro[j];
+                if (d->o->type != HM_DENDROGRAM || !d->tree) continue;
+                int horiz = d->dir == DEND_TOP || d->dir == DEND_BENEATH;
+                if (horiz == axis || chain_heatmap(ro, &ro[d->anchor]) != r) continue;
+                d->tree = t;
+                for (int s = 0; s < ncell; s++) d->slot[word[s]] = s;
+            }
+        }
+    }
+
     /* ---- normalize bounding box into [0,1] (legends are margin chrome) ---- */
     double x0 = 1e300, x1 = -1e300, y0 = 1e300, y1 = -1e300;
     for (int i = 0; i < n; i++) {
@@ -1838,19 +1948,31 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                 g->x0 = r->l; g->x1 = r->l + r->w;
                 g->y0 = r->b; g->y1 = r->b + r->h;
             } else {
-                for (int k = 0; k < r->ann_n; k++) {
+                /* one rect per RUN of equal colour, not per cell: a
+                 * 2000-row bar in two blocks drew 2000 one-pixel paths and
+                 * made a 1 MB SVG of two colours. Same picture, since grid=
+                 * strokes its own separators. */
+                for (int k = 0; k < r->ann_n; ) {
+                    Col c = r->ann_col[r->ann_ord[k]];   /* inherited order */
+                    int e = k + 1;
+                    while (e < r->ann_n) {
+                        Col d = r->ann_col[r->ann_ord[e]];
+                        if (d.r != c.r || d.g != c.g || d.b != c.b) break;
+                        e++;
+                    }
                     g = gt_add(T, G_RECT, CR, CC, CR, CC);
                     g->sub = 1;
-                    g->col = r->ann_col[r->ann_ord[k]];   /* inherited order */
+                    g->col = c;
                     if (r->ann_horiz) {
                         double cw = r->w / r->ann_n;
-                        g->x0 = r->l + k * cw; g->x1 = g->x0 + cw;
+                        g->x0 = r->l + k * cw; g->x1 = r->l + e * cw;
                         g->y0 = r->b; g->y1 = r->b + r->h;
                     } else {
                         double chh = r->h / r->ann_n;
-                        g->y1 = r->b + r->h - k * chh; g->y0 = g->y1 - chh;
+                        g->y1 = r->b + r->h - k * chh; g->y0 = r->b + r->h - e * chh;
                         g->x0 = r->l; g->x1 = r->l + r->w;
                     }
+                    k = e;
                 }
             }
             /* in-situ value labels: one per contiguous run, spread vertically and

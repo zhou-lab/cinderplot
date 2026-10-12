@@ -95,7 +95,7 @@ cinderplot data.csv -x hp -y mpg -c cyl -f gear out.pdf      # shortcut flags
   one layer-level mapping there is; every other aesthetic goes in the single
   top-level `aes()`.
 
-## Five modes, chosen by which verbs appear
+## Six modes, chosen by which verbs appear
 
 Mixing them is an error. The distinction is the data model, not the appearance.
 
@@ -124,7 +124,28 @@ and ignored (the output path is a command-line argument here).
   at once — colour for one, shape for the other. Six levels maximum, as in
   ggplot2: past that the glyphs stop being tellable apart, so it errors rather
   than inventing a seventh. Needs a point layer. A value is a bare column name
-  or `factor(col[, levels=c(...)])`.
+  or `factor(col[, levels=c(...)])`; on `x`/`y` also
+  `reorder(col, by[, FUN=mean])` (base R: mean by default; `-by` or
+  `decreasing=TRUE` sorts largest first) or `fct_reorder(col, by[,
+  .fun=median][, .desc=TRUE])` (forcats: median by default), FUN one of mean,
+  median, sum, length, max, min. Under a freed facet axis
+  (`scales="free_x"`) each panel sorts its own levels by its own rows -- what
+  ggplot needs `tidytext::reorder_within()` for.
+- `scale_shape_manual(values=c(level=pch, ...))` picks the `aes(shape=)` glyph
+  per level by R pch code (16/19/20 circle, 15 square, 17 triangle, 18
+  diamond, 25 down-triangle, 3 plus; hollow codes draw filled).
+- **filled points: `fill=` and `colour=` as two aesthetics.** Elsewhere fill and
+  colour are one aesthetic (one slot; on `geom_boxplot` the key picks body vs
+  chrome), but `geom_point(shape=21..25)` -- filled circle, square, diamond,
+  triangle, down-triangle -- draws the body from `aes(fill=)` (discrete) and the
+  outline from `aes(colour=)` (discrete or continuous), `stroke=` wide (ggplot
+  units, default 0.5): `aes(x, y, fill=label, colour=gmeth) +
+  geom_point(shape=21, size=2, stroke=0.9) + scale_fill_manual(values=pal) +
+  scale_colour_parula()`. Two guides: a fill key and the colour legend or
+  colourbar, dropped separately by `guides(fill="none")` / `guides(colour=
+  "none")`; `scale_fill_manual()` keys the fill, `labs(fill=)` titles it.
+  Without a filled glyph the two keys still collide (an error naming
+  shape=21); a continuous fill= is not implemented.
 - **`aes(linetype=col)`** maps a discrete column to dash patterns on
   `geom_line()`, `geom_smooth()` and `geom_segment()`, in ggplot2's
   `linetype_pal()` order (solid, "22", "42", "44", "13", "1343", "73",
@@ -151,14 +172,24 @@ and ignored (the output path is a command-line argument here).
   ymax=hi) + geom_col() + geom_errorbar(width=0.4)`. `width=` is the cap in
   x-axis units (default 0.9 of the x resolution, as ggplot2). Both follow
   `coord_flip()`, log axes and facets; a bound that is not positive on a log
-  axis drops that row with a stderr note.
+  axis drops that row with a stderr note. The range may instead be the
+  layer's own `aes()` -- the one layer-level mapping beside `aes(y=)` --
+  so a scatter carries error bars both ways from one table:
+  `aes(x, y, colour=g) + geom_point() + geom_errorbar(aes(ymin=ylo, ymax=yhi))
+  + geom_errorbarh(aes(xmin=xlo, xmax=xhi))`. `geom_errorbar(aes(xmin=,
+  xmax=))` draws the horizontal bar too (ggplot >= 3.5 infers the
+  orientation); `height=`/`width=` sets its vertical cap (default 0.9 of the
+  y resolution). The layer ranges train the axes like ymin=/ymax= do.
 - **layer options**: `size=`, `alpha=`, `linetype="solid"|"dashed"|"dotted"`
   (a constant per layer — `geom_segment(data="median.tsv", linetype="dashed")`
   is the dashed-median idiom),
   `linewidth=` (`size=` is its pre-3.4 alias) on every stroke geom — line,
-  smooth, segment, hline/vline/abline, errorbar/linerange — in ggplot
-  linewidth units (0.5 is `geom_line()`'s default, 1 is `geom_smooth()`'s;
-  must be > 0),
+  smooth, segment, hline/vline/abline, errorbar/linerange, boxplot — in
+  ggplot linewidth units (0.5 is `geom_line()`'s default, 1 is
+  `geom_smooth()`'s; must be > 0). On `geom_boxplot()` it sets the outline and
+  whiskers and the median is drawn at linewidth x `fatten=` (ggplot's 2), so
+  `geom_boxplot(linewidth=0.25)` halves every box stroke for a small faceted
+  figure — `theme_*(base_line_size=)` thins only the chrome,
   `bins=` (histogram; ggplot2's default binning — right-closed bins whose
   edges sit on the (k+½)·width lattice — so counts match `ggplot_build()`),
   `bw=`/`adjust=` (density, R's `bw.nrd0` scaled by `adjust`),
@@ -262,8 +293,8 @@ for.
   (legacy, banding is an artefact), plus `gradient`/`gradient2` for your own
   endpoints,
   `scale_x_genome("seqinfo.tsv.gz")`, `ideogram("cytoband.tsv.gz")`.
-- **also**: `facet_wrap(~v[, levels=][, scales=][, ncol=][, nrow=])`,
-  `facet_grid(row ~ col[, scales=])`, `coord_flip()`, `guides(colour="none")`
+- **also**: `facet_wrap(~v[, levels=][, scales=][, space=][, ncol=][, nrow=])`,
+  `facet_grid(row ~ col[, scales=][, space=])`, `coord_flip()`, `guides(colour="none")`
   (per aesthetic: `guides(size="none")` keeps the colour key; `--no-legend`
   and `theme(legend.position="none")` drop them all), `labs()`/`xlab()`/`ylab()`/`ggtitle()` — `labs()` also
   takes `subtitle=` (under the title), `caption=` (bottom right), and
@@ -299,14 +330,23 @@ compare in different rows, and `levels=` cannot fix that because it controls
 order and not wrap width.
 
 `facet_wrap(scales=)` takes `fixed` (default), `free_x`, `free_y`, `free`,
-or `free_colour` — the last frees the COLOUR scale per facet (no ggplot2
+or `free_colour`, or a list of them -- `scales=c("free", "free_colour")`
+frees the axes AND the colour scale. `free_colour` frees the COLOUR scale per facet (no ggplot2
 equivalent; patchwork territory): each facet builds its own discrete palette
 from its own rows and gets its own legend block titled by the facet name,
 placed directly under its panel when the facets sit in one row (multi-row
-grids stack the blocks in the right margin). Needs a discrete colour/fill;
+grids stack the blocks in the right margin). A CONTINUOUS colour works too:
+each facet trains its own range and gets its own colourbar (so a 0.7-2 %
+panel is not flattened by a 73-87 % one; `limits=` on the scale still pins
+them all). For a discrete colour/fill:
 named `scale_*_manual(values=)` maps per level, positional lists and brewer
 sets apply per facet. The use: one figure, same points, three colour
-meanings. `guides(colour=guide_legend(ncol=N))` folds a long discrete legend
+meanings. A continuous colourbar (one, or one per facet under free_colour)
+takes `guides(colour=guide_colourbar(direction="horizontal", barwidth=6,
+barheight=0.5))`: flat with the labels underneath, the compact bar to put
+under a facet; barwidth=/barheight= are in lines (14.4 pt) or `unit()`, and
+size a vertical bar too (default 12 x 80 pt; horizontal 80 x 10).
+`guides(colour=guide_legend(ncol=N))` folds a long discrete legend
 over N columns, column-major; `nrow=N` caps the rows instead;
 `reverse=TRUE` flips the key order without touching the factor (the stacked
 `geom_col()` legend read top-down), and under
@@ -318,7 +358,17 @@ titles when they would duplicate the strips, and
 each block inside its own panel at those npc coordinates (default lower
 right) — no legend row at all, the manuscript ladder-panel look. The same
 theme() pair places a single unfaceted legend inside its panel; every other
-theme() key still errors (presets only). A
+theme() key still errors (presets only) except the legend key cell:
+`theme(legend.key.size=unit(10, "pt"))` (or `legend.key.height=`/
+`legend.key.width=`; units pt, mm, cm, in, lines) and
+`theme(legend.key.spacing.y=unit(0, "pt"))` for the gap between key rows
+(2.2 pt default). The default key is 17.3 pt -- ggplot2's 1.2 lines, which
+does NOT shrink with `base_size` (in ggplot either) -- so a `base_size=7`
+figure with a long legend wants `legend.key.size=unit(10, "pt")`.
+`theme(strip.text=element_text(size=8))` sets the facet strip text in points
+(`size=rel(1)` = base_size; ggplot's default is rel(0.8)), and the strip grows
+to fit; `strip.text.x` is the top strips, `strip.text.y` facet_grid's row
+strips. Only `size=` is implemented in element_text(). A
 freed axis is trained per panel; the axis you did not free stays shared. On a
 discrete axis a panel drops the categories it has no rows for and renumbers the
 rest, so column 3 means a different thing in each panel — that is ggplot2's
@@ -339,6 +389,18 @@ with ggplot2's facet_grid meaning: a freed x is shared down a COLUMN and a
 freed y across a ROW, so the axes stay on the edges. The shape is the two
 level counts, so `ncol=`/`nrow=` are refused; so are `levels=` (use the
 factor order) and `scales="free_colour"` (a facet_wrap extension).
+
+`space=` (`fixed` default, `free_x`, `free_y`, `free`) on either facet sizes
+the panels by their axis range, ggplot2's `space=`: with `scales="free_x",
+space="free_x"` a panel of 11 boxes is drawn wider than one of 4 and every box
+gets the same width. It changes nothing unless the matching axis is also freed
+(fixed ranges are equal). ggplot2's facet_wrap honours it only for one row
+(`free_x`) or one column (`free_y`); here a multi-row facet_wrap sizes each
+ROW's panels by their own ranges, so a 2x3 wrap can be 11:4, 11:4 and 12:12
+(panels in different rows then no longer line up in columns -- under free
+scales every panel has its own axes anyway). facet_grid keeps aligned columns,
+as in ggplot2. A multi-row `free_y` sizes rows by their tallest panel. Under `coord_flip()` `free_x` follows the horizontal
+axis.
 
 Crowded discrete tick labels **rotate automatically** (45°, then 90°) when the
 measured labels do not fit the panel. Override with `scale_x_discrete(angle=N)`
@@ -400,7 +462,9 @@ numeric band, or a ramp (or `limits=`) on a categorical one, is an error
 naming the mismatch.
 `title.side=left` (or `right`) puts a horizontal band's `title=` beside it at
 the row-name size, wheatmap's `label.side="l"`, so a stack of thin bars stays
-compact; the default sits it above. A side title sits in its band's own row:
+compact; the default sits it above. A long band drawn as vectors emits one
+rect per run of equal colour, not one per cell, so a 2000-row bar in two
+blocks is two shapes in the SVG. A side title sits in its band's own row:
 a `left_of` row annotation still hugs the matrix (the title shares no rows
 with it), and the canvas margin grows for a title that reaches past the edge.
 `labels=data` on a categorical band writes each run's level name beside it,
@@ -486,9 +550,14 @@ each names a categorical annotation on that heatmap (its `name=` or column;
 gap of `gap=` points (default 2) is drawn at every change of its level, across
 the heatmap and every band stacked with it — ComplexHeatmap's
 `column_split` + `column_gap`. The gap covers the edges of the cells beside
-it rather than moving them, so it suits many narrow columns. Order the
-columns by the group first (`cluster=none`); a level that falls in two runs
-gets two blocks and a warning.
+it rather than moving them, so it suits many narrow columns. **On a
+clustered axis** (`cluster=both`, or `cols` for `colsplit=` / `rows` for
+`rowsplit=`) each block is clustered on its own, in the annotation's level
+order — ComplexHeatmap's `column_split` with `cluster_column_slices = FALSE` —
+and a `dendrogram()` on that axis draws one tree per block on a common height
+scale. On an unclustered axis the input order is kept: order the columns by
+the group first, or a level that falls in two runs gets two blocks and a
+warning.
 
 `cluster=` takes `rows cols both none diagonal symmetric` (`off` = `none`). The
 last two are for a **confusion matrix**, where the axes share a vocabulary and
@@ -859,6 +928,42 @@ between the two groups — the readable layout for source-to-target flows;
 a name on both sides (a self-link) errors there. Directional arrows and
 circlize's scaling options are not implemented.
 
+### 6. Venn diagram — regions that list their items, its own mode
+
+```sh
+cinderplot 'venn("membership.tsv", item=item, set=set, n=n, colour=colour,
+                 sets=c("Array","Sequencing"), set_colours=c("#3465a8","#3a7d3a"),
+                 subtitle=c("EPICv2 · {k} cell types · {n} samples", "EM-seq · {k} cell types · {n} samples"),
+                 labels=c(Naive_CD8T="Naive CD8 T"))
+  + labs(caption="One dot per sample.") + theme_minimal(base_size=12)' venn.svg
+```
+
+Input is long: one row per (item, set) membership, with an optional count
+`n` and an optional item `colour` (defaults: columns named item, set, n,
+colour). Two translucent ellipses with set-coloured outlines and bold
+coloured titles; each region lists its items as a column in input order, and
+each item carries ONE DOT PER SAMPLE (n) in its colour (else the set's). In
+the overlap set A's dots sit left of the label and set B's right, with the
+set names as small captions under the runs. Without `n`, one swatch dot per
+membership. The ellipses are sized to their contents and the canvas follows
+(omit `--size`; a smaller `--size` scales the whole diagram down).
+`subtitle=` substitutes `{k}` (items in that set) and `{n}` (its samples);
+the default is "{k} items · {n} samples"; `subtitle="none"` (or an empty
+string per set, `c("", "")`) drops the line. `captions=FALSE` drops the set
+names under the overlap's dot runs. `shape=col` draws each (item, set) row's
+dots in its own glyph -- several rows of one item in one set make one run, in
+input order -- with a glyph key under the diagram; `scale_shape_manual(values=
+c(matched=16, "5modC only"=15, "5hmC only"=17))` picks glyphs by R pch (16
+circle, 15 square, 17 triangle, 18 diamond, 25 down-triangle, 3 plus; it maps
+`aes(shape=)` in grammar mode too), else ggplot's shape order. `labels=c(key="Label")` renames
+items, `sets=` fixes the set order, `theme_*(base_size=)` sets the text size,
+`labs(title=, caption=)` apply. Three sets work too: three equal circles on
+a triangle (the third set's title below), the radius growing until every one
+of the seven regions holds its item column; there an item's dots come as one
+run per member set in set order, each dot filled in the item colour and
+OUTLINED in that set's colour, so a run names its set without a caption.
+Four or more sets are refused.
+
 ## When unsure, try it
 
 Every unimplemented verb, aesthetic or option fails with a message that
@@ -888,7 +993,8 @@ statistical transformations beyond binning, density and loess.
 4. **`geom_histogram()`/`geom_bar()`/`geom_density()` compute y themselves** —
    do not map `y`, and do not combine them with other data geoms.
 5. **Factor level order is sorted, R-style.** Impose an order with `levels=`:
-   `facet_wrap(~panel, levels=c("b","a"))` or `aes(colour=factor(m, levels=c("B","A")))`.
+   `facet_wrap(~panel, levels=c("b","a"))` or `aes(colour=factor(m, levels=c("B","A")))`,
+   or order an axis by the data with `aes(reorder(label, value, FUN=median), value)`.
    Unlike R, `levels=` must name **every** value present — an unlisted value is
    an error, not a silent drop to NA that would delete rows from the figure.
 6. **A long default axis or legend title can squeeze the panel.** The default

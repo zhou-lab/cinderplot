@@ -787,7 +787,7 @@ SCALES = ["x / y log10 / log2", "breaks / labels / percent", "limits + expand", 
           "discrete x / y", "free facet scales", "discrete label angle"]
 POSITIONS = ["stack"]          # dodging is not implemented; do not list it
 MODES = ["scatter / grammar", "heatmap + clustering", "genomic tracks", "Newick trees",
-         "chord diagram"]
+         "chord diagram", "Venn diagram"]
 THEMES_CHIPS = ["gray", "bw", "minimal", "classic", "void", "linedraw",
                 "light", "dark", "few"]
 
@@ -1073,7 +1073,7 @@ def cinder_version():
                   (REPO / "include" / "cinderplot.h").read_text())
     return m.group(1) if m else ""
 
-AGENT_PROMPT = ("Use cinderplot to render figures from CSV/TSV instead of writing a ggplot2 or matplotlib script. Read https://zhou-lab.github.io/cinderplot/llms.txt first — it covers installation, the grammar, the five modes and the traps.")
+AGENT_PROMPT = ("Use cinderplot to render figures from CSV/TSV instead of writing a ggplot2 or matplotlib script. Read https://zhou-lab.github.io/cinderplot/llms.txt first — it covers installation, the grammar, the six modes and the traps.")
 
 def landing_html():
     def chips(items):

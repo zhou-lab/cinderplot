@@ -68,13 +68,20 @@ extern double cp_base_size;
 #define SZ_TRACK     (cp_base_size * 9.0 / 11.0)
 #define TICK_LEN     (HALF_LINE / 2)
 #define TXT_GAP      (0.8 * HALF_LINE / 2)
-#define KEY_SIZE     17.3
+/* Legend key cell: ggplot2's legend.key.size, unit(1.2, "lines") against
+ * grid's 12 pt font = 17.28 pt (17.3 here), which does NOT follow base_size (in ggplot
+ * either). theme(legend.key.size/.height/.width=, legend.key.spacing.y=)
+ * override them at runtime (main.c); KEY_GAP is the gap between key rows. */
+extern double cp_key_w, cp_key_h, cp_key_gap;
+#define KEY_W        cp_key_w
+#define KEY_H        cp_key_h
+#define KEY_GAP      cp_key_gap
 #define PT_RADIUS    2.15
 #define PANEL_SPACE  HALF_LINE
 #define STRIP_PAD    (0.8 * HALF_LINE)
 /* The figure font. A variable, not a constant: --font FAMILY overrides it
  * (main.c), and every cairo_select_font_face() site reads it, so one flag
- * reaches all five modes. Cairo substitutes silently when the family is
+ * reaches all six modes. Cairo substitutes silently when the family is
  * missing; main.c warns for that at startup (cp_font_resolves). */
 #define FONT_FAMILY_DEFAULT "Arial"
 extern const char *cp_font_family;
@@ -242,9 +249,11 @@ typedef struct {
     int stroke;                                /* G_RECT: stroke (lw) not fill */
     const char *str; double size, tx, ty, hj;  /* text, npc anchor */
     VAlign va; int rot90;
+    int bold;                                  /* G_TEXT: bold face */
     int text_box; Col box_fill, box_line;      /* G_TEXT: bg box (geom_label) */
     int n;                                     /* points / axis breaks */
     const double *px, *py; const Col *pcol; double radius;
+    const Col *pfill; double stroke_lw;        /* G_POINTS: filled glyph body + outline width */
     const double *pradius;                     /* G_POINTS: per-point radius (size aes); NULL = use `radius` */
     const int *pshape;                         /* G_POINTS: per-point glyph (shape aes); NULL = circles */
     int shape;                                 /* G_POINTS: one glyph for every point */
@@ -310,7 +319,14 @@ typedef struct {
                           * geom_boxplot() renders the two differently, as
                           * ggplot2 does: fill= colours the box body, colour=
                           * the outline. */
+    /* reorder(col, by, FUN=) / fct_reorder(col, by, .fun=): order the levels
+     * by a summary of the `by` column (x and y only). Under a freed facet axis
+     * each panel sorts its own levels by its own rows. */
+    char *reorder_by;    /* NULL = no reorder */
+    int reorder_fun;     /* RF_MEAN, RF_MEDIAN, ... */
+    int reorder_desc;    /* -by or .desc=TRUE: largest first */
 } AesEntry;
+enum { RF_MEAN, RF_MEDIAN, RF_SUM, RF_LENGTH, RF_MAX, RF_MIN };
 
 typedef enum { GEOM_POINT, GEOM_JITTER, GEOM_LINE, GEOM_COL, GEOM_HISTOGRAM, GEOM_BOXPLOT, GEOM_BAR,
                GEOM_SEGMENT, GEOM_RECT, GEOM_DENSITY, GEOM_SMOOTH, GEOM_TILE,
@@ -340,13 +356,20 @@ typedef struct {
      * side. `seed` keeps a figure reproducible across renders. */
     int no_outliers;            /* geom_boxplot(outlier.shape=NA): the points are
                                  * already drawn by a jitter layer over the box */
+    char *eb_lo, *eb_hi; /* geom_errorbar(aes(ymin=, ymax=)) / geom_errorbarh(
+                          * aes(xmin=, xmax=)): the layer's own range columns
+                          * (NULL = the top-level ymin=/ymax=) */
+    int eb_horiz;        /* a horizontal bar: xmin..xmax at y, caps vertical */
     double eb_width;     /* geom_errorbar(width=): cap width in x-axis units
                           * (transformed space; 0 = the 0.25 default) */
     double tile_lw;      /* geom_tile(linewidth=): border stroke width in
                           * ggplot linewidth units (0 = the 0.1 default) */
+    double box_fatten;   /* geom_boxplot(fatten=): median stroke = linewidth x
+                          * fatten (0 = ggplot's 2) */
     double line_lw;      /* linewidth= (size= alias) on the stroke geoms --
                           * line, smooth, segment, hline/vline/abline,
-                          * errorbar/linerange -- in ggplot linewidth units
+                          * errorbar/linerange, and boxplot (outline and
+                          * whiskers) -- in ggplot linewidth units
                           * (0 = the geom's default: 0.5, or 1 for smooth) */
     double txt_angle;    /* geom_text(angle=): degrees CCW; hjust= anchors in
                           * the rotated frame. Not on geom_label (the box does
@@ -356,6 +379,10 @@ typedef struct {
     double txt_vjust; int has_txt_vjust;   /* geom_text/label vjust=, ggplot units */
     double jitter_w, jitter_h;
     unsigned jitter_seed; int has_jitter_seed;
+    int pt_shape;               /* geom_point(shape=N): 0/16/19/20 solid circle,
+                                 * 21..25 filled glyph with an outline */
+    double pt_stroke;           /* geom_point(stroke=): outline width of a filled
+                                 * glyph, ggplot units (0 = 0.5) */
     int raster;                 /* geom_point(raster=TRUE): draw the layer into an
                                  * embedded image instead of per-point vector marks
                                  * (ggrastr's idea); axes and text stay vector */
@@ -578,6 +605,9 @@ typedef struct {
     AesEntry group;                 /* geom_line/geom_smooth series key: discrete,
                                      * no legend; crossed with a discrete colour */
     AesEntry chrom;                 /* genome scale: chromosome column */
+    AesEntry pfill;                 /* aes(fill=) BESIDE aes(colour=): the body of
+                                     * a filled point glyph (geom_point(shape=21..25)),
+                                     * colour= then strokes its outline */
     int coord_flip;                 /* coord_flip(): swap the x and y axes */
     /* chord mode: chord("links.csv") — a circlize-style chord diagram from a
      * (from, to, value) table; its own mode, like the tree */
@@ -588,6 +618,20 @@ typedef struct {
     int chord_bipartite;            /* bipartite=TRUE: from-group then to-group,
                                      * with a bigger gap between the groups */
     double chord_alpha;             /* ribbon alpha (0 = 0.6) */
+    /* venn mode: venn("membership.tsv", item=, set=[, n=][, colour=]) -- a
+     * two-set Venn whose regions list their items, each with one dot per
+     * sample (n), set A's dots left and set B's right in the overlap */
+    int venn_mode;
+    char *venn_item, *venn_set, *venn_n, *venn_colour;   /* column names (NULL = default) */
+    char **venn_sets; int n_venn_sets;                   /* sets=c(...): order */
+    Col venn_set_cols[4]; int n_venn_set_cols;           /* set_colours=c(...) */
+    char **venn_subtitles; int n_venn_subtitles;         /* subtitle=c(...) */
+    char **venn_labs, **venn_lab_names; int n_venn_labs; /* labels=c(item="Label") */
+    char *venn_shape;                                    /* shape= column: dot glyph per row */
+    int venn_no_captions;                                /* captions=FALSE */
+    /* scale_shape_manual(values=c(level=pch, ...)): R pch codes per level
+     * (names NULL = positional); read by venn() and aes(shape=) */
+    int shape_pch[32]; char *shape_pch_names[32]; int n_shape_pch;
     int polar;                      /* coord_polar(): radar chart — discrete-x
                                      * categories become spokes, y the radius;
                                      * geom_line()/geom_point() only */
@@ -622,6 +666,13 @@ typedef struct {
     int no_legend;                  /* guides(colour="none"|fill="none") or --no-legend:
                                      * drop the colour/fill guide */
     int no_legend_linetype;         /* guides(linetype="none") */
+    int cbar_horiz;                 /* guides(colour=guide_colourbar(direction="horizontal")) */
+    double cbar_w, cbar_h;          /* guide_colourbar(barwidth=, barheight=), pt; 0 = default */
+    int no_legend_fill, no_legend_colour;   /* guides(fill=/colour="none") separately:
+                                     * they differ only when aes(fill=) and colour=
+                                     * are two aesthetics (filled points) */
+    int manual_fill;                /* the scale_*_manual() was spelled fill: with two
+                                     * aesthetics it keys the fill, else the colour */
     int no_legend_size, no_legend_shape;   /* guides(size="none") / guides(shape="none"):
                                      * the size and shape guides are separate builders
                                      * in render.c and are dropped separately */
@@ -631,6 +682,9 @@ typedef struct {
     int free_colour;                              /* scales="free_colour": each facet builds
                                                    * its own colour scale + legend block */
     int facet_ncol, facet_nrow;                   /* facet_wrap(ncol=/nrow=); 0 = auto */
+    int space_x, space_y;                         /* space="free_x"/"free_y"/"free":
+                                                   * panel widths/heights follow the
+                                                   * axis range (ggplot2's space=) */
     /* facet_grid(rowvar ~ colvar): a true 2-D grid. Every (row, col)
      * combination gets a panel, the empty ones included -- that is what
      * separates it from facet_wrap, which lays out only the combinations the
@@ -668,6 +722,12 @@ typedef struct {
                                      * values ARE the colours; no legend */
     double base_line_size;          /* theme_*(base_line_size=): chrome line
                                      * width, 0 = unset (env var or 0.5) */
+    double strip_x_sz, strip_y_sz;  /* theme(strip.text[.x|.y]=element_text(size=)):
+                                     * pt if > 0, rel() of base_size if < 0,
+                                     * 0 = ggplot's rel(0.8) */
+    double key_w, key_h;            /* theme(legend.key.width/height/size=), pt;
+                                     * 0 = the 17.3 default */
+    double key_gap; int has_key_gap;   /* theme(legend.key.spacing.y=), pt */
     double base_size;               /* theme_*(base_size=): base font size in pt,
                                      * 0 = unset (--font-size or the 11.0 default);
                                      * a spec value overrides the CLI flag */
@@ -783,6 +843,8 @@ typedef struct {
     int (*merge)[2];               /* R convention: <0 leaf (1-based), >0 step */
     double *height;                /* ascending */
     int *order;                    /* 0-based leaf indices, display order */
+    char *hidden;                  /* per merge: 1 = not drawn (the joins between
+                                    * split blocks); NULL = every merge drawn */
 } HClust;
 HClust *hclust_ward(const double *x, int n, int p, char *err);
 
@@ -805,6 +867,8 @@ typedef struct {
 int render_heatmap(const PlotSpec *spec, const char *out,
                    double w_pt, double h_pt, char *err);
 /* chord.c: circlize-style chord diagram (chord() mode) */
+int render_venn(const PlotSpec *spec, const char *data, const char *out,
+                double w_pt, double h_pt, char *err);
 int render_chord(const PlotSpec *spec, const char *data, const char *out,
                  double w_pt, double h_pt, char *err);
 
