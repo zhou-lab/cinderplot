@@ -955,7 +955,21 @@ dots in its own glyph -- several rows of one item in one set make one run, in
 input order -- with a glyph key under the diagram; `scale_shape_manual(values=
 c(matched=16, "5modC only"=15, "5hmC only"=17))` picks glyphs by R pch (16
 circle, 15 square, 17 triangle, 18 diamond, 25 down-triangle, 3 plus; it maps
-`aes(shape=)` in grammar mode too), else ggplot's shape order. `labels=c(key="Label")` renames
+`aes(shape=)` in grammar mode too), else ggplot's shape order. Text size follows
+`base_size` and the ellipses fit their item columns, so `base_size=` alone
+does not make the labels read larger in a fixed-width panel; shrink the dots
+instead with `dot_size=` / `dot_step=` (multipliers on the default radius and
+spacing, e.g. 0.8 and 0.75), which narrows the diagram at the same font.
+Each ellipse is fitted to its own region (one height, two widths), so shorter
+labels on one side narrow that side. `ncol=N` wraps each one-set region's list
+into N columns and `max_rows=k` wraps any one-set region longer than k items
+(the overlap stays one column): a shorter, wider diagram. `guides(shape=
+"none")` hides the glyph key. `set_colours=` colours the titles, edges and
+fill together; `outline=` and `fill=` (one colour, or `c(...)` per set) set
+the edge and interior apart from it, and `fill_alpha=` the fill's opacity
+(default 0.07; 0 or `fill="none"` leaves the interior empty): black edges on
+a clear interior is `set_colours=c("black","black"), fill="none"`.
+`labels=c(key="Label")` renames
 items, `sets=` fixes the set order, `theme_*(base_size=)` sets the text size,
 `labs(title=, caption=)` apply. Three sets work too: three equal circles on
 a triangle (the third set's title below), the radius growing until every one

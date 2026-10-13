@@ -2459,6 +2459,25 @@ static int parse_term(P *p, PlotSpec *spec) {
                 char *v = *p->s == '"' ? string_lit(p) : colname(p);
                 if (!v) { free(key); return fail(p, "venn(): %s= expects a column name", key); }
                 *colslot = v;
+            } else if (!strcmp(key, "dot_size") || !strcmp(key, "dot_step")) {
+                /* multipliers on the default dot radius / spacing (which
+                 * follow base_size): smaller dots make the text read larger
+                 * against the diagram, which is fitted to its contents */
+                char *end;
+                double v = strtod(p->s, &end);
+                if (end == p->s || !(v > 0) || !isfinite(v)) { free(key);
+                    return fail(p, "dot_size=/dot_step= expect a multiplier > 0 (1 = default)%s", ""); }
+                p->s = end;
+                if (key[4] == 's' && key[5] == 'i') spec->venn_dot_size = v; else spec->venn_dot_step = v;
+            } else if (!strcmp(key, "ncol") || !strcmp(key, "max_rows")) {
+                /* wrap a one-set region's item list into columns: ncol= of
+                 * them, or as many as keep each under max_rows= rows */
+                char *end;
+                double v = strtod(p->s, &end);
+                if (end == p->s || v < 1 || v != (int)v) { free(key);
+                    return fail(p, "ncol=/max_rows= expect a positive whole number%s", ""); }
+                p->s = end;
+                if (key[0] == 'n') spec->venn_ncol = (int)v; else spec->venn_max_rows = (int)v;
             } else if (!strcmp(key, "captions")) {
                 int on = 1;
                 if (parse_bool(p, &on)) { free(key); return fail(p, "captions= expects TRUE or FALSE%s", ""); }
@@ -2497,6 +2516,41 @@ static int parse_term(P *p, PlotSpec *spec) {
                 char ***dst = key[1] == 'e' ? &spec->venn_sets : &spec->venn_subtitles;
                 int *nd = key[1] == 'e' ? &spec->n_venn_sets : &spec->n_venn_subtitles;
                 if (parse_levels(p, dst, nd)) { free(key); return -1; }
+            } else if (!strcmp(key, "outline") || !strcmp(key, "fill")) {
+                /* ggvenn's stroke_color= / fill_color=: the ellipse edge and
+                 * interior apart from set_colours= (which keeps the titles);
+                 * one colour for every set or c(...) per set; fill="none"
+                 * (or "transparent", NA) leaves the interior empty */
+                int fl = key[0] == 'f';
+                Col *dst = fl ? spec->venn_fill : spec->venn_outline;
+                int *nd = fl ? &spec->n_venn_fill : &spec->n_venn_outline;
+                if (p->s[0] == 'c' && p->s[1] == '(') {
+                    p->s += 2;
+                    char *nm[4];
+                    if (parse_colour_values(p, dst, nm, 4, nd,
+                                            fl ? "fill=c(...)" : "outline=c(...)")) {
+                        free(key); return -1;
+                    }
+                    for (int i = 0; i < *nd; i++) free(nm[i]);
+                } else if (fl && !strncmp(p->s, "NA", 2) && !isalnum((unsigned char)p->s[2])) {
+                    p->s += 2; spec->venn_no_fill = 1;
+                } else {
+                    char *v = string_lit(p);
+                    if (fl && v && (!strcmp(v, "none") || !strcmp(v, "transparent")))
+                        spec->venn_no_fill = 1;
+                    else if (!v || parse_color(v, &dst[0])) { free(key); free(v);
+                        return fail(p, "%s", fl ? "fill= expects a colour, c(...) per set, or \"none\""
+                                                : "outline= expects a colour or c(...) per set"); }
+                    else *nd = 1;
+                    free(v);
+                }
+            } else if (!strcmp(key, "fill_alpha")) {
+                char *end;
+                double v = strtod(p->s, &end);
+                if (end == p->s || !(v >= 0 && v <= 1)) { free(key);
+                    return fail(p, "fill_alpha= expects a number from 0 (transparent) to 1%s", ""); }
+                p->s = end;
+                spec->venn_fill_alpha = v; spec->venn_fill_alpha_set = 1;
             } else if (!strcmp(key, "set_colours") || !strcmp(key, "set_colors")) {
                 if (!(p->s[0] == 'c' && p->s[1] == '(')) { free(key);
                     return fail(p, "set_colours= expects c(\"#rrggbb\", ...)%s", ""); }
@@ -2517,7 +2571,7 @@ static int parse_term(P *p, PlotSpec *spec) {
             } else {
                 char msg[CP_ERRLEN];
                 snprintf(msg, sizeof msg, "venn() option `%s` not implemented; supported: "
-                         "item=, set=, n=, colour=, shape=, sets=, set_colours=, subtitle=, labels=, captions=", key);
+                         "item=, set=, n=, colour=, shape=, sets=, set_colours=, outline=, fill=, fill_alpha=, subtitle=, labels=, captions=, dot_size=, dot_step=, ncol=, max_rows=", key);
                 free(key);
                 return fail(p, "%s", msg);
             }

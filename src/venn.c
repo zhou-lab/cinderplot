@@ -110,13 +110,39 @@ static int box_in(double x, double y, double hw, double hh, int mask,
     return 1;
 }
 
+/* The set ellipses: every fill first, then every outline, so an opaque
+ * fill (fill_alpha=1) cannot hide the other set's edge in the lens. Fill
+ * and outline default to the set colour; fill_alpha= defaults to 0.07 (the
+ * translucent wash), 0 or fill="none" leaving the interior empty. */
+static void ellipses(GTable *T, const PlotSpec *spec, int nset, double **px,
+                     double **py, const Col *scol, double lw) {
+    double fa = spec->venn_fill_alpha_set ? spec->venn_fill_alpha : 0.07;
+    int nofill = spec->venn_no_fill || fa <= 0;
+    for (int pass = nofill; pass < 2; pass++)
+        for (int s = 0; s < nset; s++) {
+            Grob *g = gt_add(T, G_POLYGON, 0, 0, 0, 0);
+            g->n = ELL_N; g->px = px[s]; g->py = py[s];
+            if (pass == 0) {
+                g->col = spec->n_venn_fill
+                    ? spec->venn_fill[s % spec->n_venn_fill] : scol[s];
+                g->alpha = fa >= 1 ? 0 : fa;             /* 0 = opaque */
+            } else {
+                g->col = spec->n_venn_outline
+                    ? spec->venn_outline[s % spec->n_venn_outline] : scol[s];
+                g->poly_nofill = 1; g->stroke = 1; g->lw = lw;
+            }
+        }
+}
+
 static int venn3(const PlotSpec *spec, VItem *it, int nit, const char **setn,
                  const Col *scol, const int *cnt, const double *tot, int has_n,
                  const char *out, double w_pt, double h_pt, char *err) {
     cairo_surface_t *ms = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 8, 8);
     cairo_t *cr = cairo_create(ms);
     double FS = SZ_BASE;
-    double DR = 0.283 * FS, DXS = 0.683 * FS, ROW = 1.75 * FS, GAP = 0.6 * FS;
+    double DR = 0.283 * FS * (spec->venn_dot_size > 0 ? spec->venn_dot_size : 1);
+    double DXS = 0.683 * FS * (spec->venn_dot_step > 0 ? spec->venn_dot_step : 1);
+    double ROW = 1.75 * FS, GAP = 0.6 * FS;
     double RGAP = 0.8 * DXS, PAD = 0.5 * FS;
     double TSZ = 1.33 * FS, SSZ = 0.875 * FS, CSZ = 0.8 * FS;
     Col muted = {0.4, 0.4, 0.4};
@@ -192,7 +218,7 @@ static int venn3(const PlotSpec *spec, VItem *it, int nit, const char **setn,
     double ttl = spec->lab_title ? SZ_TITLE * 1.5 : 0;
     double offx = MARGIN - left, offy = MARGIN + ttl + th + PAD + R;
     double Wn = right - left + 2 * MARGIN;
-    double keyh3 = g_vn_nslev ? FS * 1.8 : 0;
+    double keyh3 = g_vn_nslev && !spec->no_legend_shape ? FS * 1.8 : 0;
     double Hn = offy + cy[2] + R + PAD + th + keyh3 + MARGIN + (spec->lab_caption ? CSZ * 1.8 : 0);
     if (w_pt <= 0 && h_pt <= 0) { w_pt = Wn; h_pt = Hn; }
     else if (w_pt <= 0) w_pt = Wn * h_pt / Hn;
@@ -219,16 +245,16 @@ static int venn3(const PlotSpec *spec, VItem *it, int nit, const char **setn,
     if (spec->lab_title)
         TEXT3(spec->lab_title, (left + right) / 2, -offy + MARGIN + SZ_TITLE * 0.6,
               SZ_TITLE, C_BLACK, 0.5, 0);
+    double *epx[3], *epy[3];
     for (int s = 0; s < 3; s++) {
         double *px = cp_xmalloc(ELL_N * sizeof(double)), *py = cp_xmalloc(ELL_N * sizeof(double));
         for (int i = 0; i < ELL_N; i++) {
             double u = 2 * M_PI * i / ELL_N;
             px[i] = NX3(cx[s] + R * cos(u)); py[i] = NY3(cy[s] + R * sin(u));
         }
-        g = gt_add(T, G_POLYGON, 0, 0, 0, 0);
-        g->n = ELL_N; g->px = px; g->py = py; g->col = scol[s]; g->alpha = 0.07;
-        g->stroke = 1; g->lw = 1.6 * sc;
+        epx[s] = px; epy[s] = py;
     }
+    ellipses(T, spec, 3, epx, epy, scol, 1.6 * sc);
     for (int s = 0; s < 3; s++) {                 /* A, B above; C below */
         double ty = s < 2 ? -R - PAD - th + TSZ * 0.6 : cy[2] + R + PAD + TSZ * 0.6;
         TEXT3(setn[s], cx[s], ty, TSZ, scol[s], 0.5, 1);
@@ -263,7 +289,7 @@ static int venn3(const PlotSpec *spec, VItem *it, int nit, const char **setn,
             }
         }
     }
-    if (g_vn_nslev) {                             /* the shape key, under C's title */
+    if (keyh3 > 0) {                              /* the shape key, under C's title */
         double kw[16], keyw = 0;
         for (int l = 0; l < g_vn_nslev; l++) {
             kw[l] = 2 * DR + 0.4 * FS + tw(cr, CSZ * 1.1, 0, g_vn_slev[l]);
@@ -450,8 +476,10 @@ int render_venn(const PlotSpec *spec, const char *data, const char *out,
     cairo_surface_t *ms = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 8, 8);
     cairo_t *cr = cairo_create(ms);
     double FS = SZ_BASE;
-    double DR = 0.283 * FS, DXS = 0.683 * FS;          /* dot radius, dot step */
-    double ROW = 1.75 * FS, ROWO = ROW * 1.15, GAP = 0.6 * FS, PAD = 0.75 * FS;
+    /* dot radius and step: dot_size=/dot_step= scale the defaults */
+    double DR = 0.283 * FS * (spec->venn_dot_size > 0 ? spec->venn_dot_size : 1);
+    double DXS = 0.683 * FS * (spec->venn_dot_step > 0 ? spec->venn_dot_step : 1);
+    double ROW = 1.75 * FS, ROWO = ROW * 1.15, GAP = 0.6 * FS, PAD = 0.5 * FS;
     double TSZ = 1.33 * FS, SSZ = 0.875 * FS, CSZ = 0.8 * FS;
     double lab[3] = {0, 0, 0}, dmax[3][2] = {{0, 0}, {0, 0}, {0, 0}};
     for (int g = 0; g < 3; g++)
@@ -464,29 +492,72 @@ int render_venn(const PlotSpec *spec, const char *data, const char *out,
                 if (nd > dmax[g][s]) dmax[g][s] = nd;
             }
         }
-    double wA = nreg[0] ? lab[0] + GAP + dmax[0][0] * DXS : 0;
-    double wB = nreg[2] ? lab[2] + GAP + dmax[2][1] * DXS : 0;
+    /* one-set regions (A only = 0, B only = 2) may wrap into columns:
+     * ncol= of them, or enough to keep each under max_rows= rows. Column k
+     * holds items k*rows .. ; each column is its own label + dots width. */
+    double CGAP = 1.2 * FS;
+    int nrw[3];
+    double colx[3][16], colw[3][16], blockw[3] = {0, 0, 0};
+    for (int g = 0; g < 3; g += 2) {
+        int c = spec->venn_ncol > 0 ? spec->venn_ncol : 1;
+        if (spec->venn_max_rows > 0 && nreg[g] > 0) {
+            int c2 = (nreg[g] + spec->venn_max_rows - 1) / spec->venn_max_rows;
+            if (c2 > c) c = c2;
+        }
+        if (c > nreg[g]) c = nreg[g] ? nreg[g] : 1;
+        if (c > 16) c = 16;
+        nrw[g] = nreg[g] ? (nreg[g] + c - 1) / c : 0;
+        for (int k = 0; k < c; k++) {
+            double lw = 0, dw = 0;
+            for (int j = k * nrw[g]; j < (k + 1) * nrw[g] && j < nreg[g]; j++) {
+                VItem *v = &it[reg[g][j]];
+                double w = tw(cr, FS, 0, v->label);
+                if (w > lw) lw = w;
+                int *gl; double nd = run_dots(v, g ? 1 : 0, cn != NULL, &gl); free(gl);
+                if (nd > dw) dw = nd;
+            }
+            colx[g][k] = blockw[g] + (k ? CGAP : 0);
+            colw[g][k] = lw;                            /* label width */
+            blockw[g] = colx[g][k] + lw + GAP + dw * DXS;
+        }
+    }
+    nrw[1] = nreg[1];
+    double wA = nreg[0] ? blockw[0] : 0;
+    double wB = nreg[2] ? blockw[2] : 0;
     double half = lab[1] / 2 + GAP;                     /* label half + gap */
     double hwO = nreg[1] ? half + fmax(dmax[1][0], dmax[1][1]) * DXS : 0;
-    double hA = nreg[0] ? (nreg[0] - 1) * ROW / 2 + 0.6 * FS : 0;
-    double hB = nreg[2] ? (nreg[2] - 1) * ROW / 2 + 0.6 * FS : 0;
+    double hA = nreg[0] ? (nrw[0] - 1) * ROW / 2 + 0.6 * FS : 0;
+    double hB = nreg[2] ? (nrw[2] - 1) * ROW / 2 + 0.6 * FS : 0;
     double hO = nreg[1] ? (nreg[1] - 1) * ROWO / 2 + 0.6 * FS
                           + (spec->venn_no_captions ? 0 : 0.6 * ROW) : 0;
 
-    /* ---- solve the ellipses: equal rx, ry, centres d apart ----
+    /* ---- solve the ellipses: one height ry, each its own width ----
      * A-only items sit left-aligned against A's boundary at their outermost
-     * row and must clear B's boundary at the centre row, which intrudes most;
-     * the same, mirrored, for B only; the overlap column must fit the lens at
-     * its outermost row. Fixed-point iteration on (rx, ry, d). */
+     * row and must clear B's boundary at the centre row, where it intrudes
+     * most: d >= wA + 2P - rxA fA + rxB. Mirrored for B only:
+     * d >= wB + 2P + rxA - rxB fB. The overlap column must fit the lens at
+     * its outermost row: (rxA + rxB) fO - d >= 2 hwO + 2P. Over a grid of
+     * (rxA, rxB) take the narrowest total width rxA + d + rxB, then refit ry
+     * to the new widths; a few rounds settle it. So each ellipse follows its
+     * own region -- shorter labels on one side narrow that side. */
     double hmax = fmax(fmax(hA, hB), hO);
-    double ry = fmax(hmax / 0.86, 3 * FS), rx = ry * 1.3, d = rx;
+    double ry = fmax(hmax / 0.86, 3 * FS), rxA = ry * 1.3, rxB = rxA, d = rxA;
     #define FY(h) sqrt(fmax(0.05, 1 - ((h) / ry) * ((h) / ry)))
-    for (int iter = 0; iter < 60; iter++) {
-        d = fmax(fmax(wA + 2 * PAD + rx * (1 - FY(hA)),
-                      wB + 2 * PAD + rx * (1 - FY(hB))), 0.35 * rx);
-        rx = (hwO + d / 2 + PAD) / FY(hO);
-        if (rx < 4 * FS) rx = 4 * FS;
-        ry = fmax(hmax / 0.86, 0.55 * rx);
+    double L = 2 * hwO + 2 * PAD;
+    for (int round = 0; round < 12; round++) {
+        double fA = FY(hA), fB = FY(hB), fO = FY(hO), best = 1e300;
+        double lo = 4 * FS, step = FS / 4, hi = lo + 400 * step;
+        for (double a = lo; a <= hi; a += step)
+            for (double b = lo; b <= hi; b += step) {
+                double dd = fmax(fmax(wA + 2 * PAD - a * fA + b, wB + 2 * PAD + a - b * fB),
+                                 0.25 * fmin(a, b));
+                if ((a + b) * fO - dd < L) continue;
+                double W = a + b + dd;
+                if (W < best) { best = W; rxA = a; rxB = b; d = dd; }
+            }
+        double nry = fmax(hmax / 0.86, 0.55 * fmax(rxA, rxB));
+        if (fabs(nry - ry) < 0.5) { ry = nry; break; }
+        ry = nry;
     }
 
     /* titles and subtitles */
@@ -498,23 +569,24 @@ int render_venn(const PlotSpec *spec, const char *data, const char *out,
     }
     double titleh = TSZ * 1.25 + (sub[0][0] || sub[1][0] ? SSZ * 1.6 : 0) + PAD;
     double topy = MARGIN + (spec->lab_title ? SZ_TITLE * 1.5 : 0) + titleh;
-    double xa = MARGIN + rx, xb = xa + d, cy = topy + ry;
-    double tx[2] = { xa - 0.2 * rx, xb + 0.2 * rx };
+    double xa = MARGIN + rxA, xb = xa + d, cy = topy + ry;
+    double tx[2] = { xa - 0.2 * rxA, xb + 0.2 * rxB };
     double wt[2];
     for (int s = 0; s < 2; s++)
         wt[s] = fmax(tw(cr, TSZ, 1, setn[s]), tw(cr, SSZ, 0, sub[s]));
     double shift = fmax(0, MARGIN - (tx[0] - wt[0] / 2));   /* keep titles on canvas */
     xa += shift; xb += shift; tx[0] += shift; tx[1] += shift;
-    double Wn = fmax(xb + rx, tx[1] + wt[1] / 2) + MARGIN;
+    double Wn = fmax(xb + rxB, tx[1] + wt[1] / 2) + MARGIN;
     /* shape key: one row of glyph + level under the ellipses */
     double keyw = 0, kw[16];
     for (int l = 0; l < nslev; l++) {
         kw[l] = 2 * DR + 0.4 * FS + tw(cr, CSZ * 1.1, 0, slev[l]);
         keyw += kw[l] + (l ? FS : 0);
     }
-    double keyh = nslev ? FS * 1.8 : 0;
+    int show_key = nslev && !spec->no_legend_shape;      /* guides(shape="none") */
+    double keyh = show_key ? FS * 1.8 : 0;
     double Hn = cy + ry + keyh + MARGIN + (spec->lab_caption ? CSZ * 1.8 : 0);
-    if (keyw + 2 * MARGIN > Wn) Wn = keyw + 2 * MARGIN;
+    if (show_key && keyw + 2 * MARGIN > Wn) Wn = keyw + 2 * MARGIN;
     cairo_destroy(cr); cairo_surface_destroy(ms);
 
     /* ---- canvas and the natural -> canvas map ---- */
@@ -544,17 +616,17 @@ int render_venn(const PlotSpec *spec, const char *data, const char *out,
         TEXT(spec->lab_title, Wn / 2, MARGIN + SZ_TITLE * 0.6, SZ_TITLE, C_BLACK, 0.5, 0);
 
     /* ellipses: translucent fill, set-coloured outline */
+    double *epx[2], *epy[2];
     for (int s = 0; s < 2; s++) {
         double *px = cp_xmalloc(ELL_N * sizeof(double)), *py = cp_xmalloc(ELL_N * sizeof(double));
-        double cx = s ? xb : xa;
+        double cx = s ? xb : xa, rxs = s ? rxB : rxA;
         for (int i = 0; i < ELL_N; i++) {
             double u = 2 * M_PI * i / ELL_N;
-            px[i] = NX(cx + rx * cos(u)); py[i] = NY(cy + ry * sin(u));
+            px[i] = NX(cx + rxs * cos(u)); py[i] = NY(cy + ry * sin(u));
         }
-        g = gt_add(T, G_POLYGON, 0, 0, 0, 0);
-        g->n = ELL_N; g->px = px; g->py = py; g->col = scol[s]; g->alpha = 0.07;
-        g->stroke = 1; g->lw = 1.6 * sc;
+        epx[s] = px; epy[s] = py;
     }
+    ellipses(T, spec, 2, epx, epy, scol, 1.6 * sc);
     for (int s = 0; s < 2; s++) {
         double ty0 = topy - titleh + TSZ * 0.6;
         TEXT(setn[s], tx[s], ty0, TSZ, scol[s], 0.5, 1);
@@ -578,23 +650,27 @@ int render_venn(const PlotSpec *spec, const char *data, const char *out,
         } } while (0)
 
     /* A only: left-aligned against A's boundary at the outermost row */
-    double xl = xa - rx * FY(hA) + PAD;
+    double xl = xa - rxA * FY(hA) + PAD;
     for (int j = 0; j < nreg[0]; j++) {
         VItem *v = &it[reg[0][j]];
-        double y = cy - (nreg[0] - 1) * ROW / 2 + j * ROW;
-        TEXT(v->label, xl, y, FS, C_BLACK, 0, 0);
-        DOTS(v, 0, xl + lab[0] + GAP + DR, DXS, y);
+        int k = j / nrw[0], rr = j % nrw[0];
+        double x0 = xl + colx[0][k];
+        double y = cy - (nrw[0] - 1) * ROW / 2 + rr * ROW;
+        TEXT(v->label, x0, y, FS, C_BLACK, 0, 0);
+        DOTS(v, 0, x0 + colw[0][k] + GAP + DR, DXS, y);
     }
     /* B only: left-aligned just clear of A's boundary at the centre */
-    double xr = fmax(xa + rx + PAD, xb + rx * FY(hB) - PAD - wB);
+    double xr = fmax(xa + rxA + PAD, xb + rxB * FY(hB) - PAD - wB);
     for (int j = 0; j < nreg[2]; j++) {
         VItem *v = &it[reg[2][j]];
-        double y = cy - (nreg[2] - 1) * ROW / 2 + j * ROW;
-        TEXT(v->label, xr, y, FS, C_BLACK, 0, 0);
-        DOTS(v, 1, xr + lab[2] + GAP + DR, DXS, y);
+        int k = j / nrw[2], rr = j % nrw[2];
+        double x0 = xr + colx[2][k];
+        double y = cy - (nrw[2] - 1) * ROW / 2 + rr * ROW;
+        TEXT(v->label, x0, y, FS, C_BLACK, 0, 0);
+        DOTS(v, 1, x0 + colw[2][k] + GAP + DR, DXS, y);
     }
     /* overlap: label centred, A's dots leftward, B's rightward */
-    double xm = (xa + xb) / 2;
+    double xm = ((xa + rxA * FY(hO)) + (xb - rxB * FY(hO))) / 2;   /* lens centre */
     double y0 = cy - (nreg[1] - 1) * ROWO / 2 - (spec->venn_no_captions ? 0 : 0.3 * ROW);
     for (int j = 0; j < nreg[1]; j++) {
         VItem *v = &it[reg[1][j]];
@@ -608,7 +684,7 @@ int render_venn(const PlotSpec *spec, const char *data, const char *out,
         TEXT(setn[0], xm - half, yc, CSZ, scol[0], 1, 0);
         TEXT(setn[1], xm + half, yc, CSZ, scol[1], 0, 0);
     }
-    if (nslev) {                                  /* the shape key */
+    if (show_key) {                               /* the shape key */
         double kx = Wn / 2 - keyw / 2, ky = cy + ry + keyh * 0.55;
         for (int l = 0; l < nslev; l++) {
             double *qx = cp_xmalloc(sizeof(double)), *qy = cp_xmalloc(sizeof(double));

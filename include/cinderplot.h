@@ -262,6 +262,8 @@ typedef struct {
     int snap;                                  /* G_LINE: snap an axis-aligned hairline to the
                                                 * pixel grid on raster surfaces (heatmap grid=) */
     double alpha;                              /* 0 = opaque (unset); else 0..1 fill/stroke alpha */
+    int poly_nofill;                           /* G_POLYGON: stroke the outline only */
+    int poly_fill_set; Col poly_fill;          /* G_POLYGON: fill colour, else `col` */
     char **labels;                             /* axis tick labels */
     const double *label_pos;                   /* optional label positions, else ticks */
     double label_angle;                        /* G_AXIS_X: degrees CCW, 0 = horizontal */
@@ -629,6 +631,11 @@ typedef struct {
     char **venn_labs, **venn_lab_names; int n_venn_labs; /* labels=c(item="Label") */
     char *venn_shape;                                    /* shape= column: dot glyph per row */
     int venn_no_captions;                                /* captions=FALSE */
+    double venn_dot_size, venn_dot_step;                 /* dot_size=/dot_step=: x the default */
+    int venn_ncol, venn_max_rows;                        /* ncol=/max_rows=: wrap one-set regions */
+    Col venn_outline[4]; int n_venn_outline;             /* outline=: edge colour(s), else set_colours */
+    Col venn_fill[4]; int n_venn_fill, venn_no_fill;     /* fill=: fill colour(s) | "none" */
+    double venn_fill_alpha; int venn_fill_alpha_set;     /* fill_alpha=: 0..1 (default 0.07) */
     /* scale_shape_manual(values=c(level=pch, ...)): R pch codes per level
      * (names NULL = positional); read by venn() and aes(shape=) */
     int shape_pch[32]; char *shape_pch_names[32]; int n_shape_pch;
