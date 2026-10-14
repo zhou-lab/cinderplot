@@ -1468,7 +1468,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
         } else {
             double lo, hi; const FillScale *fs;
             legend_scale(&ro[r->target], spec, dmin, dmax, &lo, &hi, &fs);
-            double barW = cp_colourbar_across_pt(cr, lo, hi);
+            double barW = cp_colourbar_across_pt_fs(cr, fs, lo, hi);
             across = (pk == PL_BENEATH || pk == PL_TOP_OF)
                    ? LEG_BAR + TICK_LEN + TXT_GAP + axH
                      + (title ? baseH + TXT_GAP : 0)                          /* height */
@@ -1790,6 +1790,32 @@ int render_heatmap(const PlotSpec *spec, const char *out,
      * would silently move it. */
     double xtitle_h = spec->lab_x && *spec->lab_x ? baseH + HALF_LINE / 2 : 0;
     double ytitle_w = spec->lab_y && *spec->lab_y ? baseH + HALF_LINE / 2 : 0;
+
+    /* Row names (or a legend) wider than a fixed --size left the body a
+     * negative width: the canvas transform went singular ("cairo: invalid
+     * matrix") and the stacked-panel warning fired with nonsense sizes.
+     * As for the interior gutters below, the body keeps a floor share of each
+     * axis, the margins give up the rest -- the labels then run off the edge
+     * -- and stderr says what to widen. */
+    {
+        const double BODY_FLOOR = 0.15;
+        double availw = w_pt - ytitle_w;
+        double availh = h_pt - titleh - titlegap - xtitle_h;
+        double needw = marL + marR, needh = marT + marB;
+        double capw = (1 - BODY_FLOOR) * availw, caph = (1 - BODY_FLOOR) * availh;
+        if (needw > capw || needh > caph) {
+            fprintf(stderr, "cinderplot: warning: the row/column names and legends "
+                    "around the heatmap want %.1fin of the %.1fin width and %.1fin "
+                    "of the %.1fin height; the labels will run off the edge. Give "
+                    "--size %.1fx%.1f or more, shorten the names, or drop them with "
+                    "rownames=none / colnames=none\n",
+                    needw / 72, w_pt / 72, needh / 72, h_pt / 72,
+                    fmax(w_pt, (needw + 72) + ytitle_w) / 72,
+                    fmax(h_pt, (needh + 72) + titleh + titlegap + xtitle_h) / 72);
+            if (needw > capw) { double f = capw / needw; marL *= f; marR *= f; }
+            if (needh > caph) { double f = caph / needh; marT *= f; marB *= f; }
+        }
+    }
 
     GTable *T = cp_xcalloc(1, sizeof(GTable));
     T->ncol = 3;

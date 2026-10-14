@@ -32,6 +32,19 @@ static int cp_legend_breaks(double lo, double hi, double *br) {
     return nf;
 }
 
+int cp_fill_user_breaks(const FillScale *fs, double lo, double hi, double *br, char **lab) {
+    if (!fs || fs->nbrk <= 0) return -1;
+    double eps = 1e-9 * (hi - lo);
+    int nf = 0;
+    for (int k = 0; k < fs->nbrk && nf < CP_LEG_MAXBR; k++) {
+        if (fs->brk[k] < lo - eps || fs->brk[k] > hi + eps) continue;  /* off the bar */
+        br[nf] = fs->brk[k];
+        lab[nf] = fs->nblab ? fs->blab[k] : NULL;
+        nf++;
+    }
+    return nf;
+}
+
 /* A vertical key's extent across the reading direction, in points: the
  * swatch, the gap, and the widest label. */
 double cp_key_across_pt(cairo_t *cr, char *const *labels, int nlev) {
@@ -45,17 +58,23 @@ double cp_key_across_pt(cairo_t *cr, char *const *labels, int nlev) {
 
 /* A vertical colourbar's extent across the bar, in points: the bar, its tick,
  * the gap, and the widest break label. */
-double cp_colourbar_across_pt(cairo_t *cr, double lo, double hi) {
-    double br[CP_LEG_MAXBR];
-    int nf = cp_legend_breaks(lo, hi, br);
+double cp_colourbar_across_pt_fs(cairo_t *cr, const FillScale *fs, double lo, double hi) {
+    double br[CP_LEG_MAXBR]; char *ul[CP_LEG_MAXBR];
+    int nu = cp_fill_user_breaks(fs, lo, hi, br, ul);
+    int nf = nu >= 0 ? nu : cp_legend_breaks(lo, hi, br);
     int dec = axis_decimals(br, nf);
     double wmax = 0;
     for (int k = 0; k < nf; k++) {
-        char b[32]; fmt_break(br[k], dec, b, sizeof b);
-        double tw = text_w(cr, SZ_AXIS_TEXT, b);
+        char b[32]; const char *s = nu >= 0 && ul[k] ? ul[k] : b;
+        if (s == b) fmt_break(br[k], dec, b, sizeof b);
+        double tw = text_w(cr, SZ_AXIS_TEXT, s);
         if (tw > wmax) wmax = tw;
     }
     return LEG_BAR + TICK_LEN + TXT_GAP + wmax;
+}
+
+double cp_colourbar_across_pt(cairo_t *cr, double lo, double hi) {
+    return cp_colourbar_across_pt_fs(cr, NULL, lo, hi);
 }
 
 /* The key: swatches stacked downward from `top`, their left edge at `sx`,
@@ -121,13 +140,14 @@ void cp_colourbar_draw(GTable *T, int r, int c, const FillScale *fs,
         else { g->y0 = by0; g->y1 = by0 + barT;
                g->x0 = bx0 + barL * k / NSTEP; g->x1 = bx0 + barL * (k + 1) / NSTEP; }
     }
-    double br[CP_LEG_MAXBR];
-    int nf = cp_legend_breaks(lo, hi, br);
+    double br[CP_LEG_MAXBR]; char *ul[CP_LEG_MAXBR];
+    int nu = cp_fill_user_breaks(fs, lo, hi, br, ul);
+    int nf = nu >= 0 ? nu : cp_legend_breaks(lo, hi, br);
     int dec = axis_decimals(br, nf);
     for (int k = 0; k < nf; k++) {
         double frac = hi > lo ? (br[k] - lo) / (hi - lo) : 0.5;
-        char *lab = cp_xmalloc(32);
-        fmt_break(br[k], dec, lab, 32);
+        char *lab = nu >= 0 && ul[k] ? ul[k] : cp_xmalloc(32);
+        if (!(nu >= 0 && ul[k])) fmt_break(br[k], dec, lab, 32);
         g = gt_add(T, G_LINE, r, c, r, c);
         g->col = C_TICK; g->lw = lw_pt(0.5);
         if (vert) {

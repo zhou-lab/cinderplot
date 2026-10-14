@@ -95,7 +95,7 @@ cinderplot data.csv -x hp -y mpg -c cyl -f gear out.pdf      # shortcut flags
   one layer-level mapping there is; every other aesthetic goes in the single
   top-level `aes()`.
 
-## Six modes, chosen by which verbs appear
+## Seven modes, chosen by which verbs appear
 
 Mixing them is an error. The distinction is the data model, not the appearance.
 
@@ -183,6 +183,10 @@ and ignored (the output path is a command-line argument here).
 - **layer options**: `size=`, `alpha=`, `linetype="solid"|"dashed"|"dotted"`
   (a constant per layer — `geom_segment(data="median.tsv", linetype="dashed")`
   is the dashed-median idiom),
+  `arrow=arrow(length=unit(4, "pt"), angle=30, ends="last", type="closed")`
+  on `geom_segment()` (main data or `data=`) and `geom_line()` — grid's
+  arrow() with ggplot's defaults (0.25 in, 30 degrees, "last", "open";
+  ends "first"/"both"),
   `linewidth=` (`size=` is its pre-3.4 alias) on every stroke geom — line,
   smooth, segment, hline/vline/abline, errorbar/linerange, boxplot — in
   ggplot linewidth units (0.5 is `geom_line()`'s default, 1 is
@@ -269,7 +273,12 @@ for.
   `scale_*_continuous(labels=percent,
   labels=c("..."), limits=, breaks=c(...))` — `labels=c(...)` is explicit tick
   text paired 1:1 with `breaks=c(...)` (mismatched lengths error), so a
-  category label row can BE a numeric axis. `xlim()` `ylim()`
+  category label row can BE a numeric axis. The continuous fill/colour
+  scales (gradient, viridis, parula, distiller, ...) take the same
+  `breaks=c(...)` / `labels=c(...)` for their colourbar, in every mode:
+  `scale_fill_gradient(limits=c(0,5), breaks=c(0,5), labels=c("0",">=5"))`
+  marks a capped scale. `labels=` needs `breaks=` of the same length.
+  `xlim()` `ylim()`
   `scale_*_manual(values=c(...))`
   `scale_(fill|colour)_distiller(palette="YlOrBr"[, direction=][, limits=])` —
   any named ColorBrewer sequential/diverging ramp (YlOrBr, YlGnBu, Blues,
@@ -320,8 +329,13 @@ for.
   column (default: the last). Needs a discrete x; a category with no row
   warns and draws in the missing-value grey; repeat the verb to stack
   several bands. Each band takes its own colours with `values=` or
-  `palette=`, exactly as in heatmap mode (below). Placements (`left_of()`
-  etc.) are heatmap-mode and error here.
+  `palette=`, exactly as in heatmap mode (below). `axis="y"` keys the band
+  on a discrete y instead: the file's first column names the y categories and
+  the band sits beside the panels, between the y labels and the cells
+  (`side="right"` puts it right of the last panel column); it needs a shared
+  y (no free_y) and no coord_flip(). `show.legend=FALSE` drops a band's key,
+  e.g. when the band repeats the axis labels and the main legend needs the
+  room. Placements (`left_of()` etc.) are heatmap-mode and error here.
 
 `ncol=`/`nrow=` fix the grid shape; give both and a grid too small for the
 panels is an error. Worth reaching for whenever the panels cross two factors —
@@ -368,7 +382,10 @@ figure with a long legend wants `legend.key.size=unit(10, "pt")`.
 `theme(strip.text=element_text(size=8))` sets the facet strip text in points
 (`size=rel(1)` = base_size; ggplot's default is rel(0.8)), and the strip grows
 to fit; `strip.text.x` is the top strips, `strip.text.y` facet_grid's row
-strips. Only `size=` is implemented in element_text(). A
+strips. `theme(legend.text=element_text(size=10))` (or `rel(r)`) sets the
+legend label text the same way: the discrete keys, the colourbar and size
+legend breaks, and venn()'s glyph key. Heatmap/track legend() blocks keep
+their own size. Only `size=` is implemented in element_text(). A
 freed axis is trained per panel; the axis you did not free stays shared. On a
 discrete axis a panel drops the categories it has no rows for and renumbers the
 rest, so column 3 means a different thing in each panel — that is ggplot2's
@@ -436,7 +453,11 @@ the placement; a bare `annotation(..., height=0.03)` is an error saying so.
 The first placed object must be a `heatmap()`.
 `rownames=` takes `left|right|none` and `colnames=` takes `top|bottom|none`
 (`off`/`hide` also read as `none`); **both default to none**, so a heatmap with
-no `colnames=` renders that axis unlabelled. Clustering is hclust ward.D2,
+no `colnames=` renders that axis unlabelled. Long names under a fixed
+`--size` that cannot hold them still render. The heatmap body keeps 15% of the
+axis and the names run off the edge. A stderr warning gives the width they
+want and a `--size` that fits, so give that size, shorten the names, or set
+`rownames=none`. Clustering is hclust ward.D2,
 matching R. `annotation()` takes `column=` to pick
 which column colours the bar (default: the last). Its rows are matched to the
 matrix by the first (name) column when that column is text and every name is
@@ -540,7 +561,9 @@ form of the same verb boxes a `matrix()` track row — see mode 3.)
 
 `scale_fill_*(limits=c(lo,hi))` pins the fill domain, so several figures (a
 multi-page grid, say) share one ramp; out-of-range values squish to the ends
-and the colourbar shows the pinned range.
+and the colourbar shows the pinned range. A track-mode `matrix()` (mode 3)
+honours it too: its 0..1 beta domain becomes the limits, so
+`scale_fill_parula(limits=c(0,0.4))` spreads a 5hmC track over the ramp.
 `scale_fill_*(na.value="white")` (ggplot2's argument, on the continuous fill
 scales and distiller) paints missing cells that colour instead of grey.
 
@@ -969,6 +992,7 @@ fill together; `outline=` and `fill=` (one colour, or `c(...)` per set) set
 the edge and interior apart from it, and `fill_alpha=` the fill's opacity
 (default 0.07; 0 or `fill="none"` leaves the interior empty): black edges on
 a clear interior is `set_colours=c("black","black"), fill="none"`.
+`theme(legend.text=element_text(size=13))` enlarges the glyph key's labels.
 `labels=c(key="Label")` renames
 items, `sets=` fixes the set order, `theme_*(base_size=)` sets the text size,
 `labs(title=, caption=)` apply. Three sets work too: three equal circles on
@@ -977,6 +1001,30 @@ of the seven regions holds its item column; there an item's dots come as one
 run per member set in set order, each dot filled in the item colour and
 OUTLINED in that set's colour, so a run names its set without a caption.
 Four or more sets are refused.
+
+### 7. UpSet plot — intersection bars over a membership matrix, its own mode
+
+```
+cinderplot 'patterns.tsv + upset(intersection=pattern, set=set, n=n, fill=direction)
+  + scale_fill_manual(values=c(hypo="#2C7FB8", hyper="#D95F0E"))' -o u.svg --size 6x4
+```
+
+UpSetR / ComplexHeatmap's UpSet: one column per intersection, its size as a
+bar on top, its member sets as dark dots in a set-by-intersection matrix
+below (non-members light grey, every other row shaded), joined by a vertical
+line. Input is long: one row per (intersection, member set), with the size
+`n` repeated on each of an intersection's rows (two different sizes for one
+intersection are an error). Defaults are columns named intersection, set, n.
+`fill=` names a column with one level per intersection that colours its bar,
+via `scale_fill_manual(values=)` (named or positional) or the hue wheel, with
+its own legend. Without it the bars are dark grey. Columns keep the file's
+order (`order="input"`, the default: a file already ranked) or sort largest
+first (`order="n"`); `max=N` keeps the first N. Rows follow `sets=c(...)`,
+else first appearance. `set_size=TRUE` adds UpSetR's set-size bars left of
+the set names, summed over every intersection in the file. A `--size`
+stretches the columns and gives the bar panel about 40% of the height,
+shrinking the rows first. `labs(title=, caption=, y=, fill=)` and
+`theme_*(base_size=)` apply.
 
 ## When unsure, try it
 

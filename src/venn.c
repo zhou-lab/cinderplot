@@ -145,6 +145,7 @@ static int venn3(const PlotSpec *spec, VItem *it, int nit, const char **setn,
     double ROW = 1.75 * FS, GAP = 0.6 * FS;
     double RGAP = 0.8 * DXS, PAD = 0.5 * FS;
     double TSZ = 1.33 * FS, SSZ = 0.875 * FS, CSZ = 0.8 * FS;
+    double KSZ = cp_legend_text_sz ? SZ_LEGEND_TEXT : CSZ * 1.1;   /* key labels; theme(legend.text=) */
     Col muted = {0.4, 0.4, 0.4};
 
     /* region contents: mask 1..7 */
@@ -218,7 +219,7 @@ static int venn3(const PlotSpec *spec, VItem *it, int nit, const char **setn,
     double ttl = spec->lab_title ? SZ_TITLE * 1.5 : 0;
     double offx = MARGIN - left, offy = MARGIN + ttl + th + PAD + R;
     double Wn = right - left + 2 * MARGIN;
-    double keyh3 = g_vn_nslev && !spec->no_legend_shape ? FS * 1.8 : 0;
+    double keyh3 = g_vn_nslev && !spec->no_legend_shape ? 1.8 * fmax(FS, KSZ) : 0;
     double Hn = offy + cy[2] + R + PAD + th + keyh3 + MARGIN + (spec->lab_caption ? CSZ * 1.8 : 0);
     if (w_pt <= 0 && h_pt <= 0) { w_pt = Wn; h_pt = Hn; }
     else if (w_pt <= 0) w_pt = Wn * h_pt / Hn;
@@ -292,7 +293,7 @@ static int venn3(const PlotSpec *spec, VItem *it, int nit, const char **setn,
     if (keyh3 > 0) {                              /* the shape key, under C's title */
         double kw[16], keyw = 0;
         for (int l = 0; l < g_vn_nslev; l++) {
-            kw[l] = 2 * DR + 0.4 * FS + tw(cr, CSZ * 1.1, 0, g_vn_slev[l]);
+            kw[l] = 2 * DR + 0.4 * FS + tw(cr, KSZ, 0, g_vn_slev[l]);
             keyw += kw[l] + (l ? FS : 0);
         }
         double kx = (left + right) / 2 - keyw / 2, ky = cy[2] + R + PAD + th + keyh3 * 0.55;
@@ -303,7 +304,7 @@ static int venn3(const PlotSpec *spec, VItem *it, int nit, const char **setn,
             g = gt_add(T, G_POINTS, 0, 0, 0, 0);
             g->n = 1; g->px = qx; g->py = qy; g->pcol = qc;
             g->radius = DR * sc; g->shape = g_vn_glyph[l];
-            TEXT3(g_vn_slev[l], kx + 2 * DR + 0.4 * FS, ky, CSZ * 1.1, muted, 0, 0);
+            TEXT3(g_vn_slev[l], kx + 2 * DR + 0.4 * FS, ky, KSZ, muted, 0, 0);
             kx += kw[l] + FS;
         }
     }
@@ -481,6 +482,7 @@ int render_venn(const PlotSpec *spec, const char *data, const char *out,
     double DXS = 0.683 * FS * (spec->venn_dot_step > 0 ? spec->venn_dot_step : 1);
     double ROW = 1.75 * FS, ROWO = ROW * 1.15, GAP = 0.6 * FS, PAD = 0.5 * FS;
     double TSZ = 1.33 * FS, SSZ = 0.875 * FS, CSZ = 0.8 * FS;
+    double KSZ = cp_legend_text_sz ? SZ_LEGEND_TEXT : CSZ * 1.1;   /* key labels; theme(legend.text=) */
     double lab[3] = {0, 0, 0}, dmax[3][2] = {{0, 0}, {0, 0}, {0, 0}};
     for (int g = 0; g < 3; g++)
         for (int j = 0; j < nreg[g]; j++) {
@@ -580,11 +582,11 @@ int render_venn(const PlotSpec *spec, const char *data, const char *out,
     /* shape key: one row of glyph + level under the ellipses */
     double keyw = 0, kw[16];
     for (int l = 0; l < nslev; l++) {
-        kw[l] = 2 * DR + 0.4 * FS + tw(cr, CSZ * 1.1, 0, slev[l]);
+        kw[l] = 2 * DR + 0.4 * FS + tw(cr, KSZ, 0, slev[l]);
         keyw += kw[l] + (l ? FS : 0);
     }
     int show_key = nslev && !spec->no_legend_shape;      /* guides(shape="none") */
-    double keyh = show_key ? FS * 1.8 : 0;
+    double keyh = show_key ? 1.8 * fmax(FS, KSZ) : 0;
     double Hn = cy + ry + keyh + MARGIN + (spec->lab_caption ? CSZ * 1.8 : 0);
     if (show_key && keyw + 2 * MARGIN > Wn) Wn = keyw + 2 * MARGIN;
     cairo_destroy(cr); cairo_surface_destroy(ms);
@@ -693,7 +695,7 @@ int render_venn(const PlotSpec *spec, const char *data, const char *out,
             g = gt_add(T, G_POINTS, 0, 0, 0, 0);
             g->n = 1; g->px = qx; g->py = qy; g->pcol = qc;
             g->radius = DR * sc; g->shape = g_vn_glyph[l];
-            TEXT(slev[l], kx + 2 * DR + 0.4 * FS, ky, CSZ * 1.1, muted, 0, 0);
+            TEXT(slev[l], kx + 2 * DR + 0.4 * FS, ky, KSZ, muted, 0, 0);
             kx += kw[l] + FS;
         }
     }

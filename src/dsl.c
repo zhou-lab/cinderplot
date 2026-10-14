@@ -887,7 +887,9 @@ static int hm_opt_ok(HMType t, const char *key) {
         || !strcmp(key, "limits") || !strcmp(key, "label.angle")
         || !strcmp(key, "label_angle") || !strcmp(key, "label.colour")
         || !strcmp(key, "label.color") || !strcmp(key, "label_colour")
-        || !strcmp(key, "title.side") || !strcmp(key, "title_side"))
+        || !strcmp(key, "title.side") || !strcmp(key, "title_side")
+        || !strcmp(key, "axis") || !strcmp(key, "side")
+        || !strcmp(key, "show.legend") || !strcmp(key, "show_legend"))
         return t == HM_ANNOTATION;
     if (!strcmp(key, "cluster") || !strcmp(key, "rownames") || !strcmp(key, "colnames")
         || !strcmp(key, "aspect") || !strcmp(key, "discrete")
@@ -906,7 +908,7 @@ static const char *hm_opt_menu(HMType t) {
                             "rowsplit=, gap=, placements";
     case HM_ANNOTATION: return "name=, data=, title=, title.side=, column=, values=, "
                                "palette=, limits=, labels=, label.angle=, label.colour=, box=, grid=, "
-                               "placements";
+                               "placements; under a grammar plot axis=, side=, show.legend=";
     case HM_LEGEND: return "name=, title=, missing=, ncol=, nrow=, placements (e.g. right_of(\"m\"))";
     default: return "name=, placements (e.g. left_of(\"m\"))";
     }
@@ -1024,6 +1026,25 @@ static int parse_hm_args(P *p, HMObj *o, int want_data) {
                     return fail(p, "gap= expects a positive width in points", "");
                 p->s = end;
                 o->gap = v;
+            } else if (!strcmp(key, "axis")) {
+                /* grammar mode: key the band on the x categories (under the
+                 * panel, the default) or the y categories (beside it) */
+                char *v = word(p);
+                if (v && !strcmp(v, "y")) o->gr_axis_y = 1;
+                else if (v && !strcmp(v, "x")) o->gr_axis_y = 0;
+                else return fail(p, "annotation(axis=) takes \"x\" or \"y\"%s", "");
+                o->gr_axis_given = 1;
+            } else if (!strcmp(key, "show.legend") || !strcmp(key, "show_legend")) {
+                int on = 1;
+                if (parse_bool(p, &on)) return fail(p, "show.legend= expects TRUE or FALSE%s", "");
+                o->gr_no_legend = !on;
+            } else if (!strcmp(key, "side")) {
+                char *v = word(p);
+                if (v && !strcmp(v, "left")) o->gr_side = 1;
+                else if (v && !strcmp(v, "right")) o->gr_side = 2;
+                else if (v && !strcmp(v, "bottom")) o->gr_side = 3;
+                else return fail(p, "annotation(side=) takes left or right (axis=\"y\"), "
+                                 "or bottom (axis=\"x\")%s", "");
             } else if (!strcmp(key, "title.side") || !strcmp(key, "title_side")) {
                 char *v = word(p);
                 if (v && !strcmp(v, "left")) o->title_side = SIDE_LEFT;
@@ -1220,6 +1241,57 @@ done:
 
 /* parse a gradient/viridis/jet/bwr scale body into `fs`; `k` is the suffix
  * after scale_(fill|colour)_ , `fn` the prefix for error messages */
+/* scale_*(breaks=c(0, 5), labels=c("0", ">=5")) on a continuous fill or
+ * colour: the colourbar's ticks and their text (ggplot2's arguments). One
+ * label per break; labels= alone has no ticks to name, so it needs breaks=. */
+static int parse_fill_breaks_labels(P *p, const char *key, FillScale *fs) {
+    if (!(p->s[0] == 'c' && p->s[1] == '(')) {
+        /* a single value: breaks=5, labels=">=5" */
+        if (!strcmp(key, "breaks")) {
+            char *end; double v = strtod(p->s, &end);
+            if (end == p->s || !isfinite(v)) return fail(p, "breaks= expects c(numbers)%s", "");
+            p->s = end; fs->brk[0] = v; fs->nbrk = 1; return 0;
+        }
+        char *v = string_lit(p);
+        if (!v) return fail(p, "labels= expects c(\"text\", ...)%s", "");
+        fs->blab[0] = v; fs->nblab = 1; return 0;
+    }
+    p->s += 2;
+    int *n = key[0] == 'b' ? &fs->nbrk : &fs->nblab;
+    *n = 0;
+    for (;;) {
+        skip_ws(p);
+        if (*p->s == ')') { p->s++; break; }
+        if (*n >= 16) return fail(p, "%s= holds at most 16 values", key);
+        if (key[0] == 'b') {
+            char *end; double v = strtod(p->s, &end);
+            if (end == p->s || !isfinite(v)) return fail(p, "breaks= expects c(numbers)%s", "");
+            p->s = end; fs->brk[(*n)++] = v;
+        } else {
+            char *v = string_lit(p);
+            if (!v) return fail(p, "labels= expects c(\"text\", ...)%s", "");
+            fs->blab[(*n)++] = v;
+        }
+        skip_ws(p);
+        if (*p->s == ',') { p->s++; continue; }
+        if (*p->s == ')') { p->s++; break; }
+        return fail(p, "expected , or ) in %s=c(...)", key);
+    }
+    return 0;
+}
+
+static int check_fill_breaks_labels(P *p, const FillScale *fs) {
+    if (fs->nblab && !fs->nbrk)
+        return fail(p, "labels= names the colourbar ticks; give breaks=c(...) with it%s", "");
+    if (fs->nblab && fs->nblab != fs->nbrk) {
+        char msg[CP_ERRLEN];
+        snprintf(msg, sizeof msg, "breaks= and labels= differ in length (%d vs %d)",
+                 fs->nbrk, fs->nblab);
+        return fail(p, "%s", msg);
+    }
+    return 0;
+}
+
 static int parse_grad_scale(P *p, FillScale *fs, const char *k, const char *fn) {
     if (!strcmp(k, "viridis")) fs->kind = FILL_VIRIDIS;
     else if (!strcmp(k, "jet")) fs->kind = FILL_JET;
@@ -1274,6 +1346,8 @@ static int parse_grad_scale(P *p, FillScale *fs, const char *k, const char *fn) 
         } else if (!strcmp(key, "limits")) {         /* c(lo, hi) — domain + squish */
             if (parse_lim_pair(p, "limits=", &fs->lim_lo, &fs->lim_hi)) return -1;
             fs->has_limits = 1;
+        } else if (!strcmp(key, "breaks") || !strcmp(key, "labels")) {
+            if (parse_fill_breaks_labels(p, key, fs)) return -1;
         } else if (!strcmp(key, "na.value")) {
             /* ggplot2's na.value: what a missing cell is painted. "white"
              * turns NA spacer columns into true gaps. */
@@ -1298,7 +1372,7 @@ static int parse_grad_scale(P *p, FillScale *fs, const char *k, const char *fn) 
         if (*p->s == ',') { p->s++; skip_ws(p); }
     }
     p->s++;
-    return 0;
+    return check_fill_breaks_labels(p, fs);
 }
 
 /* scale_(fill|colour)_manual(values=c(...)) — explicit discrete palette.
@@ -1343,8 +1417,10 @@ static int parse_distiller(P *p, FillScale *fs) {
             if (!v || parse_color(v, &fs->na))
                 return fail(p, "na.value= expects a quoted colour", "");
             fs->has_na = 1;
+        } else if (!strcmp(key, "breaks") || !strcmp(key, "labels")) {
+            if (parse_fill_breaks_labels(p, key, fs)) return -1;
         } else return fail(p, "scale_*_distiller option `%s` not implemented "
-                           "(palette=, direction=, limits=, na.value=)", key);
+                           "(palette=, direction=, limits=, breaks=, labels=, na.value=)", key);
         skip_ws(p);
         if (*p->s == ',') { p->s++; skip_ws(p); }
     }
@@ -1364,6 +1440,7 @@ static int parse_distiller(P *p, FillScale *fs) {
         }
     fs->nstops = nst;
     fs->kind = FILL_BREWER;
+    if (check_fill_breaks_labels(p, fs)) return -1;
     return expect(p, ')');
 }
 
@@ -1777,6 +1854,63 @@ static int parse_term(P *p, PlotSpec *spec) {
                     }
                     p->s = end;
                     l->line_lw = v;
+                } else if ((gt == GEOM_SEGMENT || gt == GEOM_LINE) && !strcmp(key, "arrow")) {
+                    /* grid's arrow(angle = 30, length = unit(0.25, "inches"),
+                     * ends = "last", type = "open"), with ggplot's defaults */
+                    skip_ws(p);
+                    char *f = ident(p);
+                    if (!f || strcmp(f, "arrow") || expect(p, '(')) { free(f);
+                        return fail(p, "%s(arrow=) expects arrow(length=unit(4, \"pt\"), "
+                                    "angle=30, ends=\"last\", type=\"open\")", name); }
+                    free(f);
+                    l->arrow_ends = 1; l->arrow_len = 18; l->arrow_angle = 30;
+                    l->arrow_closed = 0;
+                    skip_ws(p);
+                    while (*p->s != ')') {
+                        char *k = ident(p);
+                        if (!k || expect(p, '=')) { free(k);
+                            return fail(p, "arrow() takes key=value arguments%s", ""); }
+                        skip_ws(p);
+                        if (!strcmp(k, "length")) {
+                            if (parse_unit_pt(p, "arrow(length", &l->arrow_len)) { free(k); return -1; }
+                            if (!(l->arrow_len > 0)) { free(k);
+                                return fail(p, "arrow(length=) must be > 0%s", ""); }
+                        } else if (!strcmp(k, "angle")) {
+                            char *end;
+                            double v = strtod(p->s, &end);
+                            if (end == p->s || !(v > 0 && v < 90)) { free(k);
+                                return fail(p, "arrow(angle=) expects degrees between 0 and 90%s", ""); }
+                            p->s = end; l->arrow_angle = v;
+                        } else if (!strcmp(k, "ends") || !strcmp(k, "type")) {
+                            char *v = string_lit(p);
+                            int ok = 1;
+                            if (!v) ok = 0;
+                            else if (k[0] == 'e') {
+                                if (!strcmp(v, "last")) l->arrow_ends = 1;
+                                else if (!strcmp(v, "first")) l->arrow_ends = 2;
+                                else if (!strcmp(v, "both")) l->arrow_ends = 3;
+                                else ok = 0;
+                            } else {
+                                if (!strcmp(v, "open")) l->arrow_closed = 0;
+                                else if (!strcmp(v, "closed")) l->arrow_closed = 1;
+                                else ok = 0;
+                            }
+                            free(v);
+                            if (!ok) { int r = fail(p, "%s", k[0] == 'e'
+                                ? "arrow(ends=) expects \"last\", \"first\" or \"both\""
+                                : "arrow(type=) expects \"open\" or \"closed\""); free(k); return r; }
+                        } else {
+                            char msg[CP_ERRLEN];
+                            snprintf(msg, sizeof msg, "arrow(%s=) is not implemented; "
+                                     "length=, angle=, ends=, type= are", k);
+                            free(k);
+                            return fail(p, "%s", msg);
+                        }
+                        free(k);
+                        skip_ws(p);
+                        if (*p->s == ',') { p->s++; skip_ws(p); }
+                    }
+                    p->s++;
                 } else if (gt == GEOM_BOXPLOT && !strcmp(key, "fatten")) {
                     /* ggplot's median emphasis: the median line is drawn at
                      * linewidth x fatten (default 2) */
@@ -2581,6 +2715,60 @@ static int parse_term(P *p, PlotSpec *spec) {
         }
         return expect(p, ')');
     }
+    if (!strcmp(name, "upset")) {
+        /* upset("patterns.tsv", intersection=, set=, n=[, fill=][, sets=c()]
+         * [, order="input"|"n"][, max=N][, set_size=TRUE]) -- its own mode:
+         * one row per (intersection, member set), n repeated on each row. */
+        spec->upset_mode = 1;
+        skip_ws(p);
+        if (*p->s == '"') {
+            spec->data_path = string_lit(p);
+            skip_ws(p);
+            if (*p->s == ',') { p->s++; skip_ws(p); }
+        }
+        while (*p->s != ')') {
+            char *key = ident(p);
+            if (!key || expect(p, '=')) return fail(p, "bad upset() argument", "");
+            skip_ws(p);
+            char **colslot = !strcmp(key, "intersection") ? &spec->up_inter
+                           : !strcmp(key, "set") ? &spec->up_set
+                           : !strcmp(key, "n") ? &spec->up_n
+                           : !strcmp(key, "fill") ? &spec->up_fill
+                           : NULL;
+            if (colslot) {
+                char *v = *p->s == '"' ? string_lit(p) : colname(p);
+                if (!v) { free(key); return fail(p, "upset(): %s= expects a column name", key); }
+                *colslot = v;
+            } else if (!strcmp(key, "sets")) {
+                if (parse_levels(p, &spec->up_sets, &spec->n_up_sets)) { free(key); return -1; }
+            } else if (!strcmp(key, "order")) {
+                char *v = *p->s == '"' ? string_lit(p) : ident(p);
+                if (!v || (strcmp(v, "input") && strcmp(v, "n"))) { free(key); free(v);
+                    return fail(p, "upset(order=) expects \"input\" (file order) or \"n\" (largest first)%s", ""); }
+                spec->up_order_n = v[0] == 'n';
+                free(v);
+            } else if (!strcmp(key, "max")) {
+                char *end; double v = strtod(p->s, &end);
+                if (end == p->s || v < 1 || v != (int)v) { free(key);
+                    return fail(p, "upset(max=) expects a positive whole number%s", ""); }
+                p->s = end; spec->up_max = (int)v;
+            } else if (!strcmp(key, "set_size")) {
+                int on = 0;
+                if (parse_bool(p, &on)) { free(key); return fail(p, "set_size= expects TRUE or FALSE%s", ""); }
+                spec->up_set_size = on;
+            } else {
+                char msg[CP_ERRLEN];
+                snprintf(msg, sizeof msg, "upset() option `%s` not implemented; supported: "
+                         "intersection=, set=, n=, fill=, sets=, order=, max=, set_size=", key);
+                free(key);
+                return fail(p, "%s", msg);
+            }
+            free(key);
+            skip_ws(p);
+            if (*p->s == ',') { p->s++; skip_ws(p); }
+        }
+        return expect(p, ')');
+    }
     if (!strcmp(name, "chord")) {
         /* chord("links.csv"[, from=][, to=][, value=][, gap=][, alpha=]) —
          * a circlize-style chord diagram; its own mode, like the tree.
@@ -3012,7 +3200,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                 spec->leg_ix = x2; spec->leg_iy = y2;
                 spec->legend_inside = 1;
             } else if (!strcmp(key, "strip.text") || !strcmp(key, "strip.text.x")
-                       || !strcmp(key, "strip.text.y")) {
+                       || !strcmp(key, "strip.text.y") || !strcmp(key, "legend.text")) {
                 /* element_text(size=N) in pt, or size=rel(r) of base_size;
                  * ggplot's default is rel(0.8). .x is the top strips, .y
                  * facet_grid's row strips. */
@@ -3053,8 +3241,11 @@ static int parse_term(P *p, PlotSpec *spec) {
                 }
                 p->s++;
                 if (v == 0) return fail(p, "theme(%s=element_text()) needs size=", key);
-                if (strcmp(key, "strip.text.y")) spec->strip_x_sz = v;
-                if (strcmp(key, "strip.text.x")) spec->strip_y_sz = v;
+                if (!strcmp(key, "legend.text")) spec->legend_text_sz = v;
+                else {
+                    if (strcmp(key, "strip.text.y")) spec->strip_x_sz = v;
+                    if (strcmp(key, "strip.text.x")) spec->strip_y_sz = v;
+                }
             } else if (!strcmp(key, "legend.key.size") || !strcmp(key, "legend.key.height")
                        || !strcmp(key, "legend.key.width")
                        || !strcmp(key, "legend.key.spacing.y")
@@ -3075,7 +3266,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                                "the rest — supported here: legend.position, "
                                "legend.position.inside, legend.key.size, "
                                "legend.key.height, legend.key.width, "
-                               "legend.key.spacing.y, strip.text[.x|.y]", key);
+                               "legend.key.spacing.y, legend.text, strip.text[.x|.y]", key);
             skip_ws(p);
             if (*p->s == ',') { p->s++; skip_ws(p); }
         }
@@ -3354,7 +3545,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                    "classic/...(), theme(legend.position=), guides(); heatmap(), annotation(), "
                    "legend(), dendrogram(), highlight(); region()/regions(), coverage(), interval(), "
                    "genes(), arcs(), matrix(), signal(), cytoband(), ideogram(); geom_tree/tiplab/nodelab/"
-                   "tippoint/nodepoint(); chord(); venn()", name);
+                   "tippoint/nodepoint(); chord(); venn(); upset()", name);
 }
 
 int dsl_parse(const char *src, PlotSpec *spec, char *err) {
@@ -3420,7 +3611,8 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
     }
     /* labs(fill=) titles that same aesthetic, so honour it when labs(colour=)
      * was not given. */
-    if (!is_hm && !is_trk && spec->lab_fill && !spec->lab_colour && !spec->pfill.col)
+    if (!is_hm && !is_trk && !spec->upset_mode && spec->lab_fill && !spec->lab_colour
+        && !spec->pfill.col)                     /* upset(): labs(fill=) titles its own key */
         spec->lab_colour = spec->lab_fill;
 
     /* ---- the range geoms and the ymin alias ----
@@ -3487,6 +3679,25 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
             || spec->legend_inside || spec->n_manual_labs || spec->has_manual)
             return fail(&p, "venn() takes no scales or guides; colours come from "
                         "set_colours= and the colour= column", "");
+        return 0;
+    }
+    if (spec->upset_mode) {
+        if (spec->venn_mode || spec->chord_mode || any_grammar || spec->nhobjs || spec->ntracks
+            || any_tree || spec->polar || spec->nannos || spec->coord_flip)
+            return fail(&p, "upset() is its own mode and cannot be mixed with "
+                        "aes()/geom_*, facet_wrap(), coord_*(), heatmap(), venn(), chord(), "
+                        "tracks, trees or annotate()", "");
+        if (spec->lab_colour || spec->lab_shape || spec->lab_size || spec->lab_linetype
+            || spec->lab_subtitle)
+            return fail(&p, "upset() takes labs(title=, caption=, y=, fill=); the other "
+                        "labels have nothing to name", "");
+        if (spec->has_xlim || spec->has_ylim || spec->log_x || spec->log_y
+            || spec->has_colour_scale || spec->has_fill)
+            return fail(&p, "upset() takes no continuous scales; bar colours come from "
+                        "fill= and scale_fill_manual(values=)", "");
+        if (spec->has_manual && !spec->up_fill)
+            return fail(&p, "scale_fill_manual() colours the bars by upset(fill=); give "
+                        "fill= the column to colour by", "");
         return 0;
     }
     if (spec->chord_mode) {
@@ -3615,6 +3826,12 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
              * convention); under a grammar panel every band is a full-width
              * strip, so normalise before render.c looks */
             ((HMObj *)o)->place.kind = PL_FULL;
+            if (!o->gr_axis_y && (o->gr_side == 1 || o->gr_side == 2))
+                return fail(&p, "annotation(side=left/right) belongs to a y band; add "
+                            "axis=\"y\" (an x band always draws beneath the panel)", "");
+            if (o->gr_axis_y && o->gr_side == 3)
+                return fail(&p, "annotation(axis=\"y\") draws beside the panel: "
+                            "side=\"left\" (default) or \"right\"", "");
             if (!o->data)
                 return fail(&p, "annotation() needs a data file: "
                             "annotation(\"meta.tsv\"[, column=\"...\"])", "");
@@ -3629,6 +3846,11 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
          * heatmap.c beside the data, and still errors rather than ignoring. */
         if (spec->hobjs[0].type != HM_HEATMAP)
             return fail(&p, "the first placed object must be a heatmap()", "");
+        for (int i = 0; i < spec->nhobjs; i++)
+            if (spec->hobjs[i].gr_axis_given || spec->hobjs[i].gr_side || spec->hobjs[i].gr_no_legend)
+                return fail(&p, "annotation(axis=, side=, show.legend=) belong to a band on a grammar "
+                            "plot's x or y; beside a heatmap() use placements "
+                            "(left_of(), beneath(), ...)", "");
         for (int i = 0; i < spec->nhobjs; i++)
             if (spec->hobjs[i].type == HM_LEGEND
                 && (spec->hobjs[i].missing || spec->hobjs[i].missing_off))

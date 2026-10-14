@@ -409,6 +409,29 @@ static void cp_point_path(cairo_t *cr, int shape, double cx, double cy, double r
     }
 }
 
+/* grid's arrow(): a head of `arrow_len` pt whose sides open `arrow_angle`
+ * degrees off the shaft, at (x1,y1) pointing away from (x0,y0). An open head
+ * is two strokes; a closed one is filled and stroked in the line colour. */
+static void arrow_head(cairo_t *cr, const Grob *g, double x0, double y0,
+                       double x1, double y1) {
+    double dx = x1 - x0, dy = y1 - y0, d = hypot(dx, dy);
+    if (!(d > 0)) return;
+    dx /= d; dy /= d;
+    double a = g->arrow_angle * M_PI / 180, L = g->arrow_len;
+    double ca = cos(a), sa = sin(a);
+    double ax = x1 - L * (dx * ca - dy * sa), ay = y1 - L * (dy * ca + dx * sa);
+    double bx = x1 - L * (dx * ca + dy * sa), by = y1 - L * (dy * ca - dx * sa);
+    cairo_save(cr);
+    cairo_set_dash(cr, NULL, 0, 0);
+    cairo_set_line_join(cr, CAIRO_LINE_JOIN_MITER);
+    cairo_move_to(cr, ax, ay);
+    cairo_line_to(cr, x1, y1);
+    cairo_line_to(cr, bx, by);
+    if (g->arrow_closed) { cairo_close_path(cr); cairo_fill_preserve(cr); }
+    cairo_stroke(cr);
+    cairo_restore(cr);
+}
+
 void gt_render(GTable *t, cairo_t *cr) {
     for (int gi = 0; gi < t->ngrobs; gi++) {
         Grob *g = &t->grobs[gi];
@@ -509,6 +532,13 @@ void gt_render(GTable *t, cairo_t *cr) {
                 else cairo_line_to(cr, DX(g->px[i]), DY(g->py[i]));
             }
             cairo_stroke(cr);
+            if (g->arrow && g->n >= 2) {
+                int m = g->n - 1;
+                if (g->arrow & 1) arrow_head(cr, g, DX(g->px[m - 1]), DY(g->py[m - 1]),
+                                             DX(g->px[m]), DY(g->py[m]));
+                if (g->arrow & 2) arrow_head(cr, g, DX(g->px[1]), DY(g->py[1]),
+                                             DX(g->px[0]), DY(g->py[0]));
+            }
             break;
         case G_LINE: {
             set_col_a(cr, g->col, g->alpha);
@@ -541,6 +571,8 @@ void gt_render(GTable *t, cairo_t *cr) {
             cairo_move_to(cr, lx0, ly0);
             cairo_line_to(cr, lx1, ly1);
             cairo_stroke(cr);
+            if (g->arrow & 1) arrow_head(cr, g, lx0, ly0, lx1, ly1);
+            if (g->arrow & 2) arrow_head(cr, g, lx1, ly1, lx0, ly0);
             cairo_set_dash(cr, NULL, 0, 0);
             break;
         }
@@ -765,7 +797,7 @@ void gt_render(GTable *t, cairo_t *cr) {
         case G_AXIS_Y: {
             /* ticks + right-aligned labels anchored to the RIGHT edge */
             cairo_set_font_size(cr, SZ_AXIS_TEXT);
-            double right = rx + rw;
+            double right = rx + rw - g->axis_pad;   /* a y annotation band sits in the pad */
             if (!g->hide_ticks) {
                 set_col(cr, g->axis_styled ? g->tick_col : C_TICK);
                 cairo_set_line_width(cr, lw_pt(0.5) * cp_line_scale);

@@ -13,6 +13,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* a matrix() track's fill domain: betas, so 0..1, unless scale_fill_*(limits=)
+ * pins it (a 5hmC track lives in 0..0.4) -- out-of-range values squish, as in
+ * heatmap mode. Cells, colourbar size and colourbar ticks all read these. */
+#define TRK_FLO (spec->has_fill && spec->fill.has_limits ? spec->fill.lim_lo : 0.0)
+#define TRK_FHI (spec->has_fill && spec->fill.has_limits ? spec->fill.lim_hi : 1.0)
+
 static const Col C_TGRID = {0.898, 0.898, 0.898};   /* faint track gridline */
 static const Col C_COV   = {0.271, 0.459, 0.706};   /* steelblue coverage */
 static const Col C_IVAL  = {0.35, 0.35, 0.35};      /* grey interval box */
@@ -1452,7 +1458,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
     /* ---- legend(): measured now so the right margin can hold it. A discrete
      * matrix gets the key (one swatch per level, renamed by labels=, plus the
      * background swatch when the track has one to explain); a continuous one
-     * the colourbar over the track's fixed 0..1 domain. Drawn after the
+     * the colourbar over the track's 0..1 domain (or scale_fill_*(limits=)). Drawn after the
      * tracks, centred on the matrix band, below. ---- */
     /* the legend title shares the single track label size, not the grammar
      * SZ_BASE — track mode renders every label at one size (see sz_samp above) */
@@ -1481,7 +1487,8 @@ int render_tracks(const PlotSpec *spec, const char *out,
             leg_across = cp_key_across_pt(cr, klab, nk);
             leg_h = nk * LEG_GRID + (nk - 1) * LEG_GAP;
         } else {
-            leg_across = cp_colourbar_across_pt(cr, 0, 1);
+            FillScale lfs = spec->has_fill ? spec->fill : (FillScale){0};
+            leg_across = cp_colourbar_across_pt_fs(cr, &lfs, TRK_FLO, TRK_FHI);
             leg_h = LEG_LEN;
         }
         if (leg_title) {
@@ -2002,7 +2009,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
             /* discrete=TRUE: a cell holds its level index and paints the
              * level's colour, the same table the key draws from */
             const Col *dpal = spec->tobjs[i].discrete ? pal[i] : NULL;
-#define CELL_COL(v) (dpal ? dpal[(int)(v)] : fill_map_value(&fs, (v), 0, 1))
+#define CELL_COL(v) (dpal ? dpal[(int)(v)] : fill_map_value(&fs, (v), TRK_FLO, TRK_FHI))
             /* bands sized in FIXED points (constant gaps at any figure size). */
             double cell_pt = (spec->tobjs[i].height > 0 ? spec->tobjs[i].height : 1) * per_h;
             double axtop_pt = font_h(cr, SZ_TRACK) + TICK_LEN + TXT_GAP;   /* kb axis */
@@ -2320,7 +2327,7 @@ gx_no_fan:
         } else {
             FillScale fs = spec->has_fill ? spec->fill : (FillScale){0};
             if (!spec->has_fill) fs.kind = FILL_PARULA;
-            cp_colourbar_draw(T, R, C, &fs, 0, 1, 1, 1, sx,
+            cp_colourbar_draw(T, R, C, &fs, TRK_FLO, TRK_FHI, 1, 1, sx,
                               top - titleSpace - LEG_LEN / ch_pt, cw_pt, ch_pt);
         }
         if (leg_title) {

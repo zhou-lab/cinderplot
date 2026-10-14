@@ -15,6 +15,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* geom_segment/geom_line(arrow=arrow()): carry the layer's head onto a grob */
+#define SET_ARROW(g_, L_) do { if ((L_)->arrow_ends) {                      \
+        (g_)->arrow = (L_)->arrow_ends; (g_)->arrow_len = (L_)->arrow_len;     \
+        (g_)->arrow_angle = (L_)->arrow_angle;                                 \
+        (g_)->arrow_closed = (L_)->arrow_closed; } } while (0)
+
 static const Col C_BAR = {0.349, 0.349, 0.349};   /* grey35, ggplot bar fill */
 
 static double text_w(cairo_t *cr, double size, const char *s) {
@@ -72,7 +78,7 @@ static GTable *build_legend(cairo_t *cr, const Theme *th, const char *title, con
         lw[c] = 0;
         for (int di = c * rows; di < (c + 1) * rows && di < f->nlev; di++) {
             int i = reverse ? f->nlev - 1 - di : di;
-            double w = text_w(cr, SZ_AXIS_TEXT, f->levels[i]);
+            double w = text_w(cr, SZ_LEGEND_TEXT, f->levels[i]);
             if (w > lw[c]) lw[c] = w;
         }
         total += KEY_W + TXT_GAP + lw[c] + (c < ncol - 1 ? HALF_LINE : 0);
@@ -133,7 +139,7 @@ static GTable *build_legend(cairo_t *cr, const Theme *th, const char *title, con
             g->tx = 0.5; g->ty = 0.5; g->hj = 0.5; g->va = V_INKCENTER;
         }
         g = gt_add(t, G_TEXT, r, kc + 2, r, kc + 2);
-        g->str = f->levels[i]; g->size = SZ_AXIS_TEXT; g->col = th->title;
+        g->str = f->levels[i]; g->size = SZ_LEGEND_TEXT; g->col = th->title;
         g->tx = 0; g->ty = 0.5; g->hj = 0; g->va = V_INKCENTER;
     }
     return t;
@@ -149,14 +155,19 @@ static GTable *build_colorbar_legend(cairo_t *cr, const Theme *th, const char *t
     if (g_cbar_horiz) return build_colorbar_horiz(cr, th, title, fs, lo, hi);
     const double BARW = g_cbar_w > 0 ? g_cbar_w : 12;     /* colorbar pt dimensions */
     const double BARH = g_cbar_h > 0 ? g_cbar_h : 80;
-    double br[16];
-    int nb = extended_breaks(lo, hi, 5, br, 16), nf = 0;
-    for (int i = 0; i < nb; i++) if (br[i] >= lo && br[i] <= hi) br[nf++] = br[i];
+    double br[16]; char *ul[16];
+    int nu = cp_fill_user_breaks(fs, lo, hi, br, ul), nf = 0;
+    if (nu >= 0) nf = nu;               /* scale_fill_*(breaks=, labels=) */
+    else {
+        int nb = extended_breaks(lo, hi, 5, br, 16);
+        for (int i = 0; i < nb; i++) if (br[i] >= lo && br[i] <= hi) br[nf++] = br[i];
+    }
     int dec = axis_decimals(br, nf);
     double labw = 0;
     for (int i = 0; i < nf; i++) {
-        char b[32]; fmt_break(br[i], dec, b, sizeof b);
-        double w = text_w(cr, SZ_AXIS_TEXT, b);
+        char b[32]; const char *s = nu >= 0 && ul[i] ? ul[i] : b;
+        if (s == b) fmt_break(br[i], dec, b, sizeof b);
+        double w = text_w(cr, SZ_LEGEND_TEXT, s);
         if (w > labw) labw = w;
     }
     double barcol = BARW + TICK_LEN + TXT_GAP + labw;
@@ -187,12 +198,13 @@ static GTable *build_colorbar_legend(cairo_t *cr, const Theme *th, const char *t
     }
     for (int i = 0; i < nf; i++) {           /* ticks + labels */
         double frac = hi > lo ? (br[i] - lo) / (hi - lo) : 0.5;
-        char *lab = cp_xmalloc(32); fmt_break(br[i], dec, lab, 32);
+        char *lab = nu >= 0 && ul[i] ? ul[i] : cp_xmalloc(32);
+        if (!(nu >= 0 && ul[i])) fmt_break(br[i], dec, lab, 32);
         g = gt_add(t, G_LINE, 2, 0, 2, 0);
         g->col = th->tick; g->lw = lw_pt(0.5);
         g->x0 = barw_npc; g->x1 = barw_npc + TICK_LEN / w; g->y0 = g->y1 = frac;
         g = gt_add(t, G_TEXT, 2, 0, 2, 0);
-        g->str = lab; g->size = SZ_AXIS_TEXT; g->col = th->title;
+        g->str = lab; g->size = SZ_LEGEND_TEXT; g->col = th->title;
         g->tx = (BARW + TICK_LEN + TXT_GAP) / w; g->ty = frac; g->hj = 0; g->va = V_INKCENTER;
     }
     return t;
@@ -205,14 +217,19 @@ static GTable *build_colorbar_horiz(cairo_t *cr, const Theme *th, const char *ti
                                     const FillScale *fs, double lo, double hi) {
     const double BARL = g_cbar_w > 0 ? g_cbar_w : 80;     /* length (x) */
     const double BART = g_cbar_h > 0 ? g_cbar_h : 10;     /* thickness (y) */
-    double br[16];
-    int nb = extended_breaks(lo, hi, 4, br, 16), nf = 0;
-    for (int i = 0; i < nb; i++) if (br[i] >= lo && br[i] <= hi) br[nf++] = br[i];
+    double br[16]; char *ul[16];
+    int nu = cp_fill_user_breaks(fs, lo, hi, br, ul), nf = 0;
+    if (nu >= 0) nf = nu;
+    else {
+        int nb = extended_breaks(lo, hi, 4, br, 16);
+        for (int i = 0; i < nb; i++) if (br[i] >= lo && br[i] <= hi) br[nf++] = br[i];
+    }
     int dec = axis_decimals(br, nf);
     double over = 0;                          /* labels overhang the bar ends */
     for (int i = 0; i < nf; i++) {
-        char b[32]; fmt_break(br[i], dec, b, sizeof b);
-        double hw = text_w(cr, SZ_AXIS_TEXT, b) / 2;
+        char b[32]; const char *s = nu >= 0 && ul[i] ? ul[i] : b;
+        if (s == b) fmt_break(br[i], dec, b, sizeof b);
+        double hw = text_w(cr, SZ_LEGEND_TEXT, s) / 2;
         if (hw > over) over = hw;
     }
     double titlew = title ? text_w(cr, SZ_BASE, title) : 0;
@@ -224,7 +241,7 @@ static GTable *build_colorbar_horiz(cairo_t *cr, const Theme *th, const char *ti
     t->rowh[0] = upt(title ? font_h(cr, SZ_BASE) : 0);
     t->rowh[1] = upt(title ? HALF_LINE / 2 : 0);
     t->rowh[2] = upt(BART);
-    t->rowh[3] = upt(TICK_LEN + TXT_GAP + font_h(cr, SZ_AXIS_TEXT));
+    t->rowh[3] = upt(TICK_LEN + TXT_GAP + font_h(cr, SZ_LEGEND_TEXT));
     Grob *g;
     if (title) {
         g = gt_add(t, G_TEXT, 0, 0, 0, 0);
@@ -239,16 +256,17 @@ static GTable *build_colorbar_horiz(cairo_t *cr, const Theme *th, const char *ti
         g->x0 = (x0 + BARL * k / NSTEP) / w; g->x1 = (x0 + BARL * (k + 1) / NSTEP) / w;
         g->y0 = 0; g->y1 = 1;
     }
-    double rowh3 = TICK_LEN + TXT_GAP + font_h(cr, SZ_AXIS_TEXT);
+    double rowh3 = TICK_LEN + TXT_GAP + font_h(cr, SZ_LEGEND_TEXT);
     for (int i = 0; i < nf; i++) {
         double frac = hi > lo ? (br[i] - lo) / (hi - lo) : 0.5;
         double xn = (x0 + BARL * frac) / w;
-        char *lab = cp_xmalloc(32); fmt_break(br[i], dec, lab, 32);
+        char *lab = nu >= 0 && ul[i] ? ul[i] : cp_xmalloc(32);
+        if (!(nu >= 0 && ul[i])) fmt_break(br[i], dec, lab, 32);
         g = gt_add(t, G_LINE, 3, 0, 3, 0);
         g->col = th->tick; g->lw = lw_pt(0.5);
         g->x0 = g->x1 = xn; g->y0 = 1; g->y1 = 1 - TICK_LEN / rowh3;
         g = gt_add(t, G_TEXT, 3, 0, 3, 0);
-        g->str = lab; g->size = SZ_AXIS_TEXT; g->col = th->title;
+        g->str = lab; g->size = SZ_LEGEND_TEXT; g->col = th->title;
         g->tx = xn; g->ty = 1 - (TICK_LEN + TXT_GAP) / rowh3; g->hj = 0.5; g->va = V_TOP;
     }
     return t;
@@ -280,7 +298,7 @@ static GTable *build_size_legend(cairo_t *cr, const Theme *th, const char *title
     double label_w = 0;
     for (int i = 0; i < nb; i++) {
         labs[i] = cp_xmalloc(32); fmt_break(br[i], dec, labs[i], 32);
-        double w = text_w(cr, SZ_AXIS_TEXT, labs[i]);
+        double w = text_w(cr, SZ_LEGEND_TEXT, labs[i]);
         if (w > label_w) label_w = w;
     }
     double title_w = title ? text_w(cr, SZ_BASE, title) : 0;
@@ -314,7 +332,7 @@ static GTable *build_size_legend(cairo_t *cr, const Theme *th, const char *title
         g->n = 1; g->px = &half; g->py = &half;
         g->pcol = black; g->radius = radii[i];
         g = gt_add(t, G_TEXT, r, 2, r, 2);
-        g->str = labs[i]; g->size = SZ_AXIS_TEXT; g->col = th->title;
+        g->str = labs[i]; g->size = SZ_LEGEND_TEXT; g->col = th->title;
         g->tx = 0; g->ty = 0.5; g->hj = 0; g->va = V_INKCENTER;
     }
     return t;
@@ -3058,29 +3076,52 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
      * polluting its legend. Each band carries its own palette and legend.
      * File shape: first column = x category names (text), column= picks the
      * value column (default: the last). ---- */
-    struct GrAnn { Factor *f; Col *apal; int *catlev; const char *title; };
+    /* axis="y" puts the band beside the panels instead, keyed by the y
+     * categories: in the y-axis column (side="left", between the tick labels
+     * and the panel) or right of the last panel column (side="right"). */
+    struct GrAnn { Factor *f; Col *apal; int *catlev; const char *title; int ax_y, right, nolegend; };
     struct GrAnn anns[MAX_HMOBJS]; int nann = 0;
     const double ANN_STRIP = 9.0, ANN_GAP = 2.0, ANN_PAD = 3.0;   /* pt */
+    int nann_x = 0, nann_yl = 0, nann_yr = 0;
     if (spec->nhobjs) {
-        if (!disc_x || flip || genome_x) {
-            snprintf(err, CP_ERRLEN, "annotation() under a grammar panel keys "
-                     "on x categories, so it needs a discrete x%s",
-                     flip ? " and no coord_flip()" : "");
-            return -1;
+        for (int i = 0; i < spec->nhobjs; i++) {
+            const HMObj *o = &spec->hobjs[i];
+            if (o->gr_axis_y) {
+                if (!disc_y || flip) {
+                    snprintf(err, CP_ERRLEN, "annotation(axis=\"y\") keys on y "
+                             "categories, so it needs a discrete y%s",
+                             flip ? " and no coord_flip()" : "");
+                    return -1;
+                }
+                if (spec->free_y) {
+                    snprintf(err, CP_ERRLEN, "annotation(axis=\"y\") needs a shared y; "
+                             "under scales=\"free_y\" each panel's rows differ");
+                    return -1;
+                }
+            } else if (!disc_x || flip || genome_x) {
+                snprintf(err, CP_ERRLEN, "annotation() under a grammar panel keys "
+                         "on x categories, so it needs a discrete x%s (or axis=\"y\" "
+                         "for a band keyed on a discrete y)",
+                         flip ? " and no coord_flip()" : "");
+                return -1;
+            }
         }
         for (int i = 0; i < spec->nhobjs; i++) {
             const HMObj *o = &spec->hobjs[i];
+            const Factor *kf = o->gr_axis_y ? yf : xf;     /* the axis it keys on */
             DataFrame *ad = df_read_csv(o->data, err);
             if (!ad) return -1;
             if (ad->ncol < 2) {
                 snprintf(err, CP_ERRLEN, "annotation(%s): needs a key column "
-                         "(x category names) and a value column", o->data);
+                         "(%s category names) and a value column", o->data,
+                         o->gr_axis_y ? "y" : "x");
                 return -1;
             }
             const Column *key = &ad->cols[0];
             if (key->type != COL_STR) {
                 snprintf(err, CP_ERRLEN, "annotation(%s): the first column must "
-                         "be text naming the x categories", o->data);
+                         "be text naming the %s categories", o->data,
+                         o->gr_axis_y ? "y" : "x");
                 return -1;
             }
             const Column *val;
@@ -3099,12 +3140,12 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 return -1;
             }
             Factor *af = factor_make(ad, val);
-            int *catlev = cp_xmalloc(xf->nlev * sizeof(int));
+            int *catlev = cp_xmalloc(kf->nlev * sizeof(int));
             int miss = 0;
-            for (int l = 0; l < xf->nlev; l++) {
+            for (int l = 0; l < kf->nlev; l++) {
                 catlev[l] = -1;
                 for (int r2 = 0; r2 < ad->nrow; r2++)
-                    if (!strcmp(key->str[r2], xf->levels[l])) {
+                    if (!strcmp(key->str[r2], kf->levels[l])) {
                         catlev[l] = af->idx[r2];
                         break;
                     }
@@ -3112,16 +3153,24 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             }
             if (miss)
                 fprintf(stderr, "cinderplot: warning: annotation(%s): %d of %d "
-                        "x categories have no row; drawn in the missing-value "
-                        "grey\n", o->data, miss, xf->nlev);
+                        "%s categories have no row; drawn in the missing-value "
+                        "grey\n", o->data, miss, kf->nlev, o->gr_axis_y ? "y" : "x");
             Col *apal = cp_xmalloc(af->nlev * sizeof(Col));
             if (annotation_palette(o, af, apal, err)) return -1;
             anns[nann].f = af; anns[nann].apal = apal; anns[nann].catlev = catlev;
             anns[nann].title = o->column ? o->column : val->name;
+            anns[nann].ax_y = o->gr_axis_y;
+            anns[nann].nolegend = o->gr_no_legend;
+            anns[nann].right = o->gr_axis_y && o->gr_side == 2;
+            if (!o->gr_axis_y) nann_x++;
+            else if (anns[nann].right) nann_yr++;
+            else nann_yl++;
             nann++;
         }
     }
-    double band_h = nann ? ANN_PAD + nann * ANN_STRIP + (nann - 1) * ANN_GAP : 0;
+#define ANN_SPAN(n_) ((n_) ? ANN_PAD + (n_) * ANN_STRIP + ((n_) - 1) * ANN_GAP : 0)
+    double band_h = ANN_SPAN(nann_x);               /* x bands: a row under each panel */
+    double band_wl = ANN_SPAN(nann_yl), band_wr = ANN_SPAN(nann_yr);
 
     /* ---- facet_wrap(scales="free_colour"): each facet owns its colour
      * scale. One figure, several colour meanings — the same cells coloured
@@ -3436,7 +3485,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         guides[nguide++] = lg;
     }
     for (int a = 0; a < nann; a++)               /* annotation band keys */
-        if (!spec->no_legend) {
+        if (!spec->no_legend && !anns[a].nolegend) {
             GTable *lg = build_legend(cr, th, anns[a].title, anns[a].f,
                                       anns[a].apal, 0, 0, 1, 0, NULL, 1, 0, NULL, err);
             if (!lg) return -1;
@@ -3475,7 +3524,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     T->colw[0] = upt(MARGIN);
     T->colw[1] = upt(baseh);
     T->colw[2] = upt(HALF_LINE / 2);
-    T->colw[3] = upt(ylab_w + TXT_GAP + TICK_LEN);
+    T->colw[3] = upt(ylab_w + TXT_GAP + TICK_LEN + band_wl);
     /* Under free scales the gap between panels has to hold an axis, not just
      * whitespace: every panel carries its own ticks and labels. Each gap is
      * sized by the widest label of the panels immediately to its right. */
@@ -3502,7 +3551,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         }
     }
     if (grid) T->colw[rstrip_c] = upt(striph_side);
-    T->colw[T->ncol - 3] = upt(leg ? 2 * HALF_LINE : 0);
+    T->colw[T->ncol - 3] = upt((leg ? 2 * HALF_LINE : 0) + band_wr);
     T->colw[T->ncol - 2] = upt(leg ? gt_fixed_w(leg) : 0);
     T->colw[T->ncol - 1] = upt(MARGIN);
 
@@ -4256,6 +4305,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         g->col = spec->layers[li].has_color ? spec->layers[li].color
                                : F->lev ? pal[grp] : C_BLACK;
                         g->lw = LAYER_LW(&spec->layers[li], 0.5); g->clip = 1;
+                        SET_ARROW(g, &spec->layers[li]);
                     }
                     goto layer_done;
                 }
@@ -4285,6 +4335,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     g->col = spec->layers[li].has_color ? spec->layers[li].color
                            : cf ? pal[SER_COL(grp)] : C_BLACK;
                     g->lw = LAYER_LW(&spec->layers[li], 0.5); g->clip = 1;
+                    SET_ARROW(g, &spec->layers[li]);
                     if (ltf) g->dash = LT_DASH[SER_LT(grp)];
                 }
             } else if (gt == GEOM_ERRORBAR || gt == GEOM_LINERANGE) {
@@ -4423,6 +4474,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     }
                     g = gt_add(T, G_LINE, R, C, R, C);
                     g->col = scol; g->lw = LAYER_LW(L, 0.6); g->clip = 1;
+                    SET_ARROW(g, L);
                     /* through the log transform like geom_rect(data=); a
                      * 10..100 segment used to land off a log10 panel */
                     g->x0 = NPCX(genome_x ? off + c_x->num[r2]
@@ -4455,6 +4507,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     g->col = spec->layers[li].has_color ? spec->layers[li].color
                            : cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BLACK;
                     g->lw = LAYER_LW(&spec->layers[li], 0.5); g->clip = 1;
+                    SET_ARROW(g, &spec->layers[li]);
                     g->x0 = NPCX(TXR(r));
                     g->x1 = NPCX(xec ? (genome_x ? GX(r, xec->num[r])
                                       : cp_logt(spec->log_x, xec->num[r]))
@@ -4957,13 +5010,43 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             g->labels = flip ? S->xlabs : S->ylabs;
             g->axis_styled = 1; g->tick_col = th->tick; g->hide_ticks = !th->tick_on;
             g->text_col = th->axis_text; g->hide_text = !th->axis_text_on;
+            if (pc == 0) g->axis_pad = band_wl;
+        }
+        /* annotation(axis="y") bands beside the panel row: one chip per y
+         * category (height 0.9, as the x chips), the first band nearest the
+         * panel. Left bands sit in the y-axis column's pad, right bands in
+         * the column after the last panel. */
+        int yband_l = pc == 0 && nann_yl, yband_r = (pc == ncolp - 1 || p == npan - 1) && nann_yr;
+        if (yband_l || yband_r) {
+            int ia_l = 0, ia_r = 0;
+            for (int a = 0; a < nann; a++) {
+                if (!anns[a].ax_y) continue;
+                int right = anns[a].right;
+                if (right ? !yband_r : !yband_l) { if (right) ia_r++; else ia_l++; continue; }
+                int k = right ? ia_r++ : ia_l++;
+                int col = right ? T->ncol - 3 : 3;
+                double cw = right ? (leg ? 2 * HALF_LINE : 0) + band_wr
+                                  : ylab_w + TXT_GAP + TICK_LEN + band_wl;
+                double xa = right ? ANN_PAD + k * (ANN_STRIP + ANN_GAP)
+                                  : cw - ANN_PAD - k * (ANN_STRIP + ANN_GAP) - ANN_STRIP;
+                for (int l = 0; l < yf->nlev; l++) {
+                    double yi = l + 1;
+                    int lev = anns[a].catlev[l];
+                    g = gt_add(T, G_RECT, R, col, R, col);
+                    g->sub = 1;
+                    g->col = lev >= 0 ? anns[a].apal[lev] : C_NA;
+                    g->x0 = xa / cw; g->x1 = (xa + ANN_STRIP) / cw;
+                    g->y0 = NPCY(yi - 0.45); g->y1 = NPCY(yi + 0.45);
+                }
+            }
         }
         /* annotation() bands under this panel: one strip per call, stacked
          * top-to-bottom, each cell a category-wide chip (bar width 0.9, so
          * chips align under stacked geom_col bars). x positions go through
          * the panel's own scale, so bands stay aligned under free_x too. */
-        for (int a = 0; a < nann; a++) {
-            double ytop = 1 - (ANN_PAD + a * (ANN_STRIP + ANN_GAP)) / band_h;
+        for (int a = 0, ax = 0; a < nann; a++) {
+            if (anns[a].ax_y) continue;
+            double ytop = 1 - (ANN_PAD + ax++ * (ANN_STRIP + ANN_GAP)) / band_h;
             double ybot = ytop - ANN_STRIP / band_h;
             for (int l = 0; l < xf->nlev; l++) {
                 int slot = spec->free_x ? S->xmap[l] : l;

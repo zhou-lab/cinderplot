@@ -76,6 +76,11 @@ extern double cp_key_w, cp_key_h, cp_key_gap;
 #define KEY_W        cp_key_w
 #define KEY_H        cp_key_h
 #define KEY_GAP      cp_key_gap
+/* Legend label text: theme(legend.text=element_text(size=)) -- pt if > 0,
+ * rel() of base_size if < 0, 0 = ggplot's rel(0.8) (the axis-text size). */
+extern double cp_legend_text_sz;
+#define SZ_LEGEND_TEXT (cp_legend_text_sz > 0 ? cp_legend_text_sz \
+                        : cp_legend_text_sz < 0 ? -cp_legend_text_sz * cp_base_size : SZ_AXIS_TEXT)
 #define PT_RADIUS    2.15
 #define PANEL_SPACE  HALF_LINE
 #define STRIP_PAD    (0.8 * HALF_LINE)
@@ -184,6 +189,8 @@ typedef struct {
 #define BREWER_MAX_STOPS 12
     Col stops[BREWER_MAX_STOPS]; int nstops;
     Col na; int has_na;      /* na.value=: the missing-cell colour (default grey) */
+    double brk[16]; int nbrk;          /* breaks=c(...): colourbar ticks (data space) */
+    char *blab[16]; int nblab;         /* labels=c(...): their text, one per break */
 } FillScale;
 Col fill_map(const FillScale *fs, double t01);   /* t in [0,1] */
 /* named ColorBrewer palette -> its max-class stops (from RColorBrewer).
@@ -262,7 +269,11 @@ typedef struct {
     int snap;                                  /* G_LINE: snap an axis-aligned hairline to the
                                                 * pixel grid on raster surfaces (heatmap grid=) */
     double alpha;                              /* 0 = opaque (unset); else 0..1 fill/stroke alpha */
+    double axis_pad;                           /* G_AXIS_Y: pt between the ticks and the cell's right edge */
     int poly_nofill;                           /* G_POLYGON: stroke the outline only */
+    int arrow; double arrow_len, arrow_angle;  /* G_LINE/G_POLYLINE: heads (1 last, 2 first,
+                                                * 3 both), length pt, half-angle deg */
+    int arrow_closed;                          /* filled head (grid's type="closed") */
     int poly_fill_set; Col poly_fill;          /* G_POLYGON: fill colour, else `col` */
     char **labels;                             /* axis tick labels */
     const double *label_pos;                   /* optional label positions, else ticks */
@@ -366,6 +377,9 @@ typedef struct {
                           * (transformed space; 0 = the 0.25 default) */
     double tile_lw;      /* geom_tile(linewidth=): border stroke width in
                           * ggplot linewidth units (0 = the 0.1 default) */
+    int arrow_ends;      /* geom_segment/geom_line(arrow=arrow()): 0 none,
+                          * 1 last, 2 first, 3 both */
+    double arrow_len, arrow_angle; int arrow_closed;   /* pt, degrees, type */
     double box_fatten;   /* geom_boxplot(fatten=): median stroke = linewidth x
                           * fatten (0 = ggplot's 2) */
     double line_lw;      /* linewidth= (size= alias) on the stroke geoms --
@@ -431,6 +445,11 @@ typedef struct {
      * of its level, across the heatmap and every band stacked with it --
      * ComplexHeatmap's column_split + column_gap, wheatmap's WRect overlay */
     char *colsplit, *rowsplit; double gap;
+    int gr_axis_given;
+    int gr_no_legend;              /* grammar annotation(show.legend=FALSE) */
+    int gr_axis_y, gr_side;        /* grammar annotation(axis="y"[, side="right"]): a band
+                                    * keyed by the discrete y, left (1) or right (2) of
+                                    * the panels; gr_side 0 = the default for the axis */
     Side title_side;               /* annotation: where title= sits -- SIDE_NONE =
                                     * above (the default), or SIDE_LEFT/RIGHT of a
                                     * horizontal band, wheatmap's label.side */
@@ -624,6 +643,13 @@ typedef struct {
      * two-set Venn whose regions list their items, each with one dot per
      * sample (n), set A's dots left and set B's right in the overlap */
     int venn_mode;
+    /* upset mode: upset("patterns.tsv", intersection=, set=, n=[, fill=]
+     * [, sets=c()][, order="input"|"n"][, max=][, set_size=]) -- UpSetR's
+     * intersection-size bars over a set-membership dot matrix */
+    int upset_mode;
+    char *up_inter, *up_set, *up_n, *up_fill;           /* column names (NULL = default) */
+    char **up_sets; int n_up_sets;                      /* sets=c(...): row order */
+    int up_order_n, up_max, up_set_size;                /* order="n", max=N, set_size=TRUE */
     char *venn_item, *venn_set, *venn_n, *venn_colour;   /* column names (NULL = default) */
     char **venn_sets; int n_venn_sets;                   /* sets=c(...): order */
     Col venn_set_cols[4]; int n_venn_set_cols;           /* set_colours=c(...) */
@@ -732,6 +758,7 @@ typedef struct {
     double strip_x_sz, strip_y_sz;  /* theme(strip.text[.x|.y]=element_text(size=)):
                                      * pt if > 0, rel() of base_size if < 0,
                                      * 0 = ggplot's rel(0.8) */
+    double legend_text_sz;          /* theme(legend.text=element_text(size=)), same coding */
     double key_w, key_h;            /* theme(legend.key.width/height/size=), pt;
                                      * 0 = the 17.3 default */
     double key_gap; int has_key_gap;   /* theme(legend.key.spacing.y=), pt */
@@ -812,6 +839,11 @@ int render_tracks(const PlotSpec *spec, const char *out,
 /* extent across the reading direction (pt) of a vertical key / colourbar */
 double cp_key_across_pt(cairo_t *cr, char *const *labels, int nlev);
 double cp_colourbar_across_pt(cairo_t *cr, double lo, double hi);
+double cp_colourbar_across_pt_fs(cairo_t *cr, const FillScale *fs, double lo, double hi);
+/* scale_fill_*(breaks=, labels=): the user's ticks inside [lo, hi] into br
+ * (CP_LEG_MAXBR slots) and their labels into lab (NULL = format the number);
+ * -1 when the scale sets no breaks, so the caller keeps its own */
+int cp_fill_user_breaks(const FillScale *fs, double lo, double hi, double *br, char **lab);
 /* Emit a key (swatches down from `top`, left edge `sx`) or a colourbar
  * (lower-left corner at bx0,by0; `vert` stands it up; `dir` +1 puts the
  * labels right/above, -1 left/below) as grobs in cell (r, c), whose size in
@@ -876,6 +908,9 @@ int render_heatmap(const PlotSpec *spec, const char *out,
 /* chord.c: circlize-style chord diagram (chord() mode) */
 int render_venn(const PlotSpec *spec, const char *data, const char *out,
                 double w_pt, double h_pt, char *err);
+/* upset.c: UpSet plot (upset() mode) */
+int render_upset(const PlotSpec *spec, const char *data, const char *out,
+                 double w_pt, double h_pt, char *err);
 int render_chord(const PlotSpec *spec, const char *data, const char *out,
                  double w_pt, double h_pt, char *err);
 
