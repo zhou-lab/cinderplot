@@ -2044,6 +2044,22 @@ int render_tracks(const PlotSpec *spec, const char *out,
                  * track renders blank. bar= overrides in bp. */
                 double span = x1 - x0;
                 double minw = span > 0 ? (0.75 / fmax(win_pt, 1.0)) * span : 1;
+                /* raster: the same cells, painted into one image a few
+                 * pixels per point wide (transparent where there is no
+                 * cell, so the background rect still shows through). 1000
+                 * samples x 500 CpGs is 500k vector rects otherwise -- tens
+                 * of MB of SVG for a picture the eye reads as an image. */
+                int rmode = spec->tobjs[i].raster;
+                int ras = rmode == 1 || (rmode == 0 && (long)nr * nc > RASTER_MIN_CELLS);
+                int iw = 0, istr = 0;
+                unsigned char *ibuf = NULL;
+                if (ras) {
+                    iw = (int)ceil(fmax(win_pt, 1.0) * 300.0 / 72.0);   /* ~300 dpi */
+                    if (iw > 16000) iw = 16000;
+                    istr = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, iw);
+                    ibuf = cp_xmalloc((size_t)nr * istr);
+                    memset(ibuf, 0, (size_t)nr * istr);               /* transparent */
+                }
                 for (int c = 0; c < nc; c++) {
                     double pb, pe;
                     if (spec->tobjs[i].bar_bp > 0) {
@@ -2059,6 +2075,20 @@ int render_tracks(const PlotSpec *spec, const char *out,
                     }
                     double cx0 = NPCX(pb), cx1 = NPCX(pe);
                     if (cx1 <= 0 || cx0 >= 1) continue;          /* outside the window */
+                    if (ras) {
+                        int p0 = (int)floor(fmax(cx0, 0) * iw);
+                        int p1 = (int)ceil(fmin(cx1, 1) * iw);
+                        if (p1 <= p0) p1 = p0 + 1;
+                        if (p1 > iw) p1 = iw;
+                        for (int rr = 0; rr < nr; rr++) {
+                            double v = m->mv[(size_t)m->roword[rr] * nc + c];
+                            if (isnan(v)) continue;
+                            uint32_t px = col_argb(CELL_COL(v));
+                            uint32_t *row = (uint32_t *)(ibuf + (size_t)rr * istr);
+                            for (int q = p0; q < p1; q++) row[q] = px;
+                        }
+                        continue;
+                    }
                     for (int rr = 0; rr < nr; rr++) {
                         double v = m->mv[(size_t)m->roword[rr] * nc + c];
                         if (isnan(v)) continue;                  /* background shows through */
@@ -2069,6 +2099,11 @@ int render_tracks(const PlotSpec *spec, const char *out,
                         g->y1 = hmtop - (double)rr / nr * bgspan;
                         g->y0 = hmtop - (double)(rr + 1) / nr * bgspan;
                     }
+                }
+                if (ras) {
+                    g = gt_add(T, G_IMAGE, R, CC, R, CC);
+                    g->img = ibuf; g->img_w = iw; g->img_h = nr; g->clip = 1;
+                    g->x0 = 0; g->x1 = 1; g->y0 = lblband; g->y1 = hmtop;
                 }
             } else {
             int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, nc);
@@ -2222,6 +2257,38 @@ gx_no_fan:
                 g->x0 = 0; g->x1 = 1; g->y0 = g->y1 = SIG_Y(lo);
                 for (int oi = d->nser - 1; oi >= 0; oi--) {   /* draworder[0] lands on top */
                     int si = d->draworder[oi];
+                    if (t->bars) {
+                        /* one bar per row from the strip's low end to its
+                         * value; a CpG is far under a pixel, so a bar is
+                         * widened to a hairline unless bar= gives the bp */
+                        double span = x1 - x0;
+                        double minw = span > 0 ? (0.75 / fmax(win_pt, 1.0)) * span : 1;
+                        for (int r = 0; r < d->n; r++) {
+                            if (d->strip[r] != k || d->series[r] != si) continue;
+                            if (strcmp(d->chrom[r], chrom) || d->end[r] <= (double)rstart
+                                || d->beg[r] >= (double)rend) continue;
+                            double v = d->val[r];
+                            if (isnan(v)) continue;
+                            if (v < lo) v = lo;
+                            if (v > hi) v = hi;
+                            double pb, pe;
+                            if (t->bar_bp > 0) {
+                                pb = (d->beg[r] + d->end[r]) * 0.5 - t->bar_bp / 2;
+                                pe = pb + t->bar_bp;
+                            } else {
+                                pb = d->beg[r]; pe = d->end[r];
+                                if (pe - pb < minw) {
+                                    double mid = (pb + pe) / 2;
+                                    pb = mid - minw / 2; pe = mid + minw / 2;
+                                }
+                            }
+                            g = gt_add(T, G_RECT, R, CC, R, CC);
+                            g->col = d->sercol[si]; g->sub = 1; g->clip = 1;
+                            g->x0 = NPCX(pb); g->x1 = NPCX(pe);
+                            g->y0 = SIG_Y(lo); g->y1 = SIG_Y(v);
+                        }
+                        continue;
+                    }
                     int np = 0;
                     for (int r = 0; r < d->n; r++) {
                         if (d->strip[r] != k || d->series[r] != si) continue;

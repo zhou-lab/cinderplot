@@ -544,9 +544,11 @@ static int trk_opt_ok(TrackType t, const char *key) {
         || !strcmp(key, "rowbar") || !strcmp(key, "rowmeta"))
         return t == TRK_MATRIX || t == TRK_SIGNAL;
     if (!strcmp(key, "cluster") || !strcmp(key, "rownames") || !strcmp(key, "colnames")
-        || !strcmp(key, "x") || !strcmp(key, "bar") || !strcmp(key, "background")
-        || !strcmp(key, "discrete"))
+        || !strcmp(key, "x") || !strcmp(key, "background")
+        || !strcmp(key, "discrete") || !strcmp(key, "raster"))
         return t == TRK_MATRIX;
+    if (!strcmp(key, "bar")) return t == TRK_MATRIX || t == TRK_SIGNAL;
+    if (!strcmp(key, "style")) return t == TRK_SIGNAL;
     if (!strcmp(key, "transcripts")) return t == TRK_GENES;
     if (!strcmp(key, "labels")) return t == TRK_INTERVAL;
     if (!strcmp(key, "smooth") || !strcmp(key, "points") || !strcmp(key, "ylim")
@@ -561,8 +563,8 @@ static const char *trk_opt_menu(TrackType t) {
     case TRK_ARCS: return "name=, height=, data=, color=";
     case TRK_GENES: return "name=, height=, data=, color=, transcripts=";
     case TRK_MATRIX: return "name=, height=, data=, cluster=, rownames=, colnames=, "
-                            "x=, bar=, background=, rowgroup=, rowmeta=, rowcolour=, rowbar=, discrete=";
-    case TRK_SIGNAL: return "name=, height=, data=, rowgroup=, rowmeta=, rowcolour=, rowbar=, smooth=, "
+                            "x=, bar=, background=, rowgroup=, rowmeta=, rowcolour=, rowbar=, discrete=, raster=";
+    case TRK_SIGNAL: return "name=, height=, data=, rowgroup=, rowmeta=, rowcolour=, rowbar=, style=, bar=, smooth=, "
                             "points=, colour=c(...), ylim=c(lo, hi), linewidth=, gap=";
     default: return "name=, height=, data=";
     }
@@ -637,6 +639,12 @@ static int parse_trk_args(P *p, TrackObj *o) {
                     return fail(p, "gap= expects the blank space between strips in "
                                 "points, >= 0 (default 2)", "");
                 o->gap_pt = gp;
+            } else if (!strcmp(key, "style")) {
+                char *v = word(p);
+                if (!v) return fail(p, "style= expects \"line\" or \"bars\"", "");
+                if (!strcmp(v, "bars") || !strcmp(v, "bar")) o->bars = 1;
+                else if (!strcmp(v, "line") || !strcmp(v, "lines")) o->bars = 0;
+                else return fail(p, "style=\"%s\" invalid; use \"line\" or \"bars\"", v);
             } else if (!strcmp(key, "smooth")) {
                 /* the loess span, as geom_smooth(span=); 0 draws the raw
                  * polyline through the points in position order */
@@ -801,6 +809,14 @@ static int parse_trk_args(P *p, TrackObj *o) {
                 else if (!strcmp(v, "FALSE") || !strcmp(v, "false") || !strcmp(v, "F")
                          || !strcmp(v, "off") || !strcmp(v, "0")) o->discrete = 0;
                 else return fail(p, "discrete=%s invalid; use TRUE or FALSE", v);
+            } else if (!strcmp(key, "raster")) {
+                char *v = word(p);
+                if (!v) return fail(p, "raster= expects TRUE or FALSE", "");
+                if (!strcmp(v, "TRUE") || !strcmp(v, "true") || !strcmp(v, "T")
+                    || !strcmp(v, "on") || !strcmp(v, "1")) o->raster = 1;
+                else if (!strcmp(v, "FALSE") || !strcmp(v, "false") || !strcmp(v, "F")
+                         || !strcmp(v, "off") || !strcmp(v, "0")) o->raster = 2;
+                else return fail(p, "raster=%s invalid; use TRUE or FALSE", v);
             } else if (!strcmp(key, "transcripts")) {
                 char *v = word(p);
                 if (!v) return fail(p, "transcripts= expects all or canonical", "");
@@ -850,6 +866,12 @@ done:
                     "(a `group colour` table) or, for metadata bands, "
                     "rowmeta=\"samples.tsv\" (a `column value colour` table); without "
                     "one there is nothing to colour", "");
+    if (o->type == TRK_SIGNAL && o->bars && (o->smooth > 0 || o->points))
+        return fail(p, "signal(style=\"bars\") draws each value as a bar; smooth= and "
+                    "points= belong to style=\"line\"", "");
+    if (o->type == TRK_SIGNAL && o->bar_bp > 0 && !o->bars)
+        return fail(p, "signal(bar=) is the bar width of style=\"bars\"; add "
+                    "style=\"bars\" or drop bar=", "");
     if (o->type == TRK_SIGNAL && o->has_color && o->nser_col > 0)
         return fail(p, "signal(): colour=\"one colour\" and colour=c(...) contradict; "
                     "give one or the other", "");

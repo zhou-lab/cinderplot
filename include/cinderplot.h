@@ -597,6 +597,11 @@ typedef struct {
                           * white between them reads as two lanes. */
     double smooth;       /* loess span in (0, 1]; 0 = the raw polyline */
     int points;          /* 1 = the raw points behind the lines (small, faint) */
+    /* signal(style="bars"): each row is a vertical bar at its own coordinate,
+     * rising from the strip's low end to its value -- the focal-methylation
+     * view (one bar per CpG, height = beta). bar= sets the width in bp,
+     * else the row's span widened to a hairline (matrix(x=genomic)'s rule). */
+    int bars;
     double ylim_lo, ylim_hi; int has_ylim;   /* pin every strip's value range;
                                               * else each strip's own min..max */
     Col *ser_col; char **ser_name; int nser_col;   /* colour=c("series"="#..", ...);
@@ -609,8 +614,17 @@ typedef struct {
      * The same switch heatmap(discrete=TRUE) is; the levels come from the
      * same routine (cp_numeric_levels). */
     int discrete;
+    /* matrix(x=genomic, raster=): paint the cells into ONE embedded image
+     * instead of a vector rect each (heatmap mode's RASTER_MIN_CELLS rule).
+     * 0 = auto (raster above RASTER_MIN_CELLS cells), 1 = TRUE, 2 = FALSE. */
+    int raster;
 } TrackObj;
 #define MAX_TRACKS 12
+/* Heatmap bodies (and x=genomic matrix tracks) with more than this many
+ * cells are drawn as ONE embedded image (nearest-scaled) instead of N vector
+ * rectangles, so the PDF/SVG and draw time stay flat for large matrices.
+ * Below it, stay vector -- keeps small plots byte-identical. */
+#define RASTER_MIN_CELLS 2000
 /* colour=c(...) on a track, and scale_*_manual(values=): the list cap */
 #define MAX_MANUAL_COLS 64
 

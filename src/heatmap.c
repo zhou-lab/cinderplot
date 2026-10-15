@@ -23,11 +23,6 @@
 
 #define MIN_RATIO 0.02
 
-/* Heatmap bodies with more than this many cells are drawn as ONE embedded
- * image (a pixel per cell, nearest-scaled) instead of N vector rectangles,
- * so the PDF and draw time stay flat for large matrices. Below it, stay
- * vector — keeps small heatmaps byte-identical. */
-#define RASTER_MIN_CELLS 2000
 #define RASTER_MAX_CELLS 25000000L      /* ~100 MB ARGB buffer ceiling */
 
 /* colour -> cairo ARGB32 pixel (native-endian 0xAARRGGBB, opaque) */

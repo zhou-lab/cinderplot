@@ -695,8 +695,8 @@ rest are per-verb, and an option the verb does not take is refused (the error
 lists the ones it does): `coverage()` adds `color= max=`, `interval()`
 `color= labels=`, `genes()` `color= transcripts=`, `arcs()` `color=`,
 `cytoband()` nothing further, `matrix()` `cluster= rownames= colnames= x= bar=
-background= rowgroup= rowmeta= rowcolour= rowbar= discrete=`, and `signal()`
-`rowgroup= rowmeta= rowcolour= rowbar= smooth= points= colour=c(...)
+background= rowgroup= rowmeta= rowcolour= rowbar= discrete= raster=`, and `signal()`
+`rowgroup= rowmeta= rowcolour= rowbar= style= bar= smooth= points= colour=c(...)
 ylim=c(lo, hi) linewidth= gap=`. Inputs are BED/bedGraph/BEDPE/BED12/matrix TSV, plain or gzipped, and
 tabix-indexed when a `.tbi` sits beside the file.
 
@@ -722,7 +722,11 @@ there are no columns to lead to or label. A CpG is 2 bp in a window tens of kb
 wide, far under a pixel, so a cell is widened to stay visible — `bar=N` sets
 the width in bp explicitly. `background=` colours the stretches with no probe
 (default the missing-value grey); an NA cell draws nothing, so the background
-shows through.
+shows through. Above 2,000 cells (the heatmap's raster threshold) the cells
+are painted into one embedded image per panel, ~300 dpi across the window,
+while text and axes stay vector: 42 samples × 2,911 CpGs went from a 26 MB
+SVG to 0.4 MB. `raster=FALSE` keeps every cell a vector rect; `raster=TRUE`
+rasterizes a small matrix too.
 
 **`matrix(discrete=TRUE)` reads the cell values as category codes** — a 0/1
 call matrix is indistinguishable from betas without being told — and is
@@ -874,6 +878,22 @@ the strips share it equally; `linewidth=` (or `size=`) is in ggplot units,
 default 0.5. Under `regions()` each window draws the rows inside it, and the
 strip order and ranges come from the whole file so a strip means the same row
 in every window. A faint baseline marks each strip's low end. `gap=PT` is the fixed blank between strips (default 2 pt), so adjacent lanes read as two lanes rather than one trace crossing a baseline; `gap=0` removes it.
+
+**`signal(style="bars")` is the focal-methylation view** — one vertical bar
+per row at its own coordinate, rising from the strip's low end to its value
+(a bar per CpG, height = beta), one strip per sample, under a `genes()` lane
+and inside `regions()`. It reads the same long table. A bar takes its series'
+colour, so a focal CpG is its own `series` (`focal` vs `other`) coloured with
+`colour=c(focal="#E8341C", other="#2F6FE4")`. A CpG is far under a pixel, so
+a bar is widened to a hairline; `bar=N` sets the width in bp. `ylim=c(0, 1)`
+pins the bar scale; a value outside it is clipped to the strip. `smooth=` and
+`points=` belong to the default `style="line"` and are refused with bars.
+
+```sh
+cinderplot 'region("chr11:118885846-118886346") + genes("genes.bed", height=1)
+  + signal("betas_long.tsv", style="bars", rowgroup=" | ", ylim=c(0, 1), height=8,
+           colour=c(focal="#E8341C", other="#2F6FE4"))' focal.svg
+```
 
 ```sh
 cinderplot 'regions("windows.bed") + genes("genes.bed.gz", height=0.8)
