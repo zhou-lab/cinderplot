@@ -251,9 +251,30 @@ and ignored (the output path is a command-line argument here).
   categories become labelled spokes, y the radius, each colour series a
   CLOSED polyline, with dashed rings at the y breaks (pin them with
   `scale_y_continuous(breaks=c(0.5, 1))` + `ylim(0,1)`). geom_line()/
-  geom_point() only; bars under polar (pie/rose) error — general polar
-  coordinates are on the roadmap. `colour=` implies the series grouping,
-  as in ggplot2; `aes(group=)` partitions further without a legend.
+  geom_point(); bars under polar (pie/rose) error. `colour=` implies the
+  series grouping, as in ggplot2; `aes(group=)` partitions further without
+  a legend.
+- **`geom_tile()` + `coord_polar()` is a dartboard** (a circos-style ring
+  plot): the discrete x levels become spokes, the discrete y levels rings
+  (first level innermost), one annulus sector per row, filled by the
+  `fill=` scale — discrete, continuous, or `scale_fill_identity()` with a
+  hex column, which is how rings on different scales share one figure (one
+  ring conserved/lost, one a beta, one a purity). `aes(group=col)` gathers
+  the spokes into wedges in that column's level order; a spoke in two groups
+  is an error. `coord_polar(gap=6)` leaves 6 degrees between wedges (with
+  no group=, one gap at `start=`), and the gap centred on `start=` carries
+  the ring names. `inner.radius=0.3` leaves an empty hub, coord_radial's
+  spelling; `direction=-1` runs counter-clockwise. Spoke names are drawn
+  horizontally up to 24 spokes and radially past that; wedge names sit
+  outside them; `theme_void()` drops the spoke names. A layer `colour=`
+  outlines each tile. Tiles only: no other layer, no facets.
+
+```sh
+printf 'sp,ring,v,grp\nA,inner,0.2,g1\nA,outer,0.9,g1\nB,inner,0.5,g1\nB,outer,0.4,g1\nC,inner,0.7,g2\nC,outer,0.1,g2\n' > dart.csv
+cinderplot 'dart.csv + aes(x=factor(sp), y=factor(ring), fill=v, group=grp)
+  + geom_tile(colour="white") + coord_polar(gap=8, inner.radius=0.3)
+  + scale_fill_viridis()' -o dart.svg --size 5x4
+```
 - `annotate("text", x=, y=, label=[, colour=][, size=][, hjust=][, vjust=])`
   places one literal mark, ggplot2's verb — also `"segment"` (x/y/xend/yend)
   and `"rect"` (xmin/xmax/ymin/ymax; colour= sets the fill, default grey85),

@@ -1610,7 +1610,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                      "say so", spec->group.col, spec->group.col);
             return -1;
         }
-        if (!hasline) {
+        int polar_tiles = spec->polar && hastile;   /* group= makes the wedges */
+        if (!hasline && !polar_tiles) {
             snprintf(err, CP_ERRLEN, "aes(group=) needs a geom_line() or "
                      "geom_smooth() layer to partition into series; points, "
                      "segments and text are drawn per row and need no grouping");
@@ -1618,7 +1619,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         }
         /* the stat geoms group by colour= only; a group= they ignore would
          * be a silent no-op, and on geom_density() a wrong answer */
-        const char *ungrouped = hasdens ? "geom_density()" : hasbox ? "geom_boxplot()"
+        const char *ungrouped = polar_tiles ? NULL
+                              : hasdens ? "geom_density()" : hasbox ? "geom_boxplot()"
                               : hasbar ? "geom_bar()" : hascol ? "geom_col()"
                               : nhist ? "geom_histogram()" : hastile ? "geom_tile()" : NULL;
         if (ungrouped) {
@@ -1810,18 +1812,40 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                      : spec->nannos ? "annotate()" : "annotation()");
             return -1;
         }
-        for (int li = 0; li < spec->nlayers; li++)
-            if (spec->layers[li].type != GEOM_LINE
-                && spec->layers[li].type != GEOM_POINT) {
-                snprintf(err, CP_ERRLEN, "coord_polar() supports geom_line() "
-                         "(drawn closed) and geom_point(); general polar "
-                         "coordinates (pie/rose bars) are not implemented");
+        if (hastile) {
+            /* the dartboard: x the angle, y the ring, both discrete */
+            for (int li = 0; li < spec->nlayers; li++)
+                if (spec->layers[li].type != GEOM_TILE) {
+                    snprintf(err, CP_ERRLEN, "coord_polar() with geom_tile() draws "
+                             "a ring plot of tiles alone; drop the other layers");
+                    return -1;
+                }
+            if (!disc_y) {
+                snprintf(err, CP_ERRLEN, "coord_polar() + geom_tile() needs a "
+                         "discrete y whose levels become the rings, inner to "
+                         "outer (wrap it as aes(y=factor(...)))");
                 return -1;
             }
+        } else {
+            for (int li = 0; li < spec->nlayers; li++)
+                if (spec->layers[li].type != GEOM_LINE
+                    && spec->layers[li].type != GEOM_POINT) {
+                    snprintf(err, CP_ERRLEN, "coord_polar() supports geom_line() "
+                             "(drawn closed), geom_point(), and geom_tile() "
+                             "(rings); pie/rose bars are not implemented");
+                    return -1;
+                }
+            if (spec->polar_dir == -1 || spec->polar_gap > 0 || spec->polar_inner > 0) {
+                snprintf(err, CP_ERRLEN, "coord_polar(direction=, gap=, "
+                         "inner.radius=) apply to geom_tile() rings, not the "
+                         "radar chart");
+                return -1;
+            }
+        }
         /* the radar drawing colours by the discrete series only; a
          * continuous colour, shape or size built its legend and was then
          * ignored on the marks */
-        if (cont_col || shf || szc) {
+        if ((cont_col && !hastile) || shf || szc) {
             snprintf(err, CP_ERRLEN, "coord_polar(): %s mappings are not "
                      "implemented (only geom_line()/geom_point() with a "
                      "discrete colour)", cont_col ? "continuous colour="
@@ -3591,7 +3615,11 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     T->colw[0] = upt(MARGIN);
     T->colw[1] = upt(baseh);
     T->colw[2] = upt(HALF_LINE / 2);
-    T->colw[3] = upt(ylab_w + TXT_GAP + TICK_LEN + band_wl);
+    /* the dartboard draws no Cartesian axes: reserve none (the radar keeps
+     * its historical layout) */
+    int polar_tiles = spec->polar && hastile;
+    T->colw[1] = upt(polar_tiles ? 0 : baseh);
+    T->colw[3] = upt(polar_tiles ? 0 : ylab_w + TXT_GAP + TICK_LEN + band_wl);
     /* Under free scales the gap between panels has to hold an axis, not just
      * whitespace: every panel carries its own ticks and labels. Each gap is
      * sized by the widest label of the panels immediately to its right. */
@@ -3785,9 +3813,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     }
     int r_axis = 4 * nrowp + 2;
     int r_last = r_axis + 3 + (fc_leg_h > 0 ? 1 : 0);   /* caption/margin row */
-    T->rowh[r_axis]     = upt(TICK_LEN + TXT_GAP + blab_h);
+    T->rowh[r_axis]     = upt(polar_tiles ? 0 : TICK_LEN + TXT_GAP + blab_h);
     T->rowh[r_axis + 1] = upt(HALF_LINE / 2);
-    T->rowh[r_axis + 2] = upt(baseh);
+    T->rowh[r_axis + 2] = upt(polar_tiles ? 0 : baseh);
     if (fc_leg_h > 0) T->rowh[r_axis + 3] = upt(fc_leg_h);
     T->rowh[r_last] = upt(spec->lab_caption ? fmax(MARGIN, font_h(cr, SZ_AXIS_TEXT)) : MARGIN);
 
@@ -3949,7 +3977,143 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
          * CLOSED polyline. The radius lives in points and divides per axis,
          * so the circle stays a circle whatever the panel's aspect (the
          * circular tree's trick). */
-        if (spec->polar) {
+        if (spec->polar && hastile) {
+            /* ---- the dartboard: one annulus sector per (x, y) tile ----
+             * Spokes are the x levels, clockwise from start= (direction=-1
+             * turns it round); an aes(group=) column gathers them into
+             * wedges with gap= degrees between, and its levels set the
+             * wedge order. Rings are the y levels, inner to outer, from
+             * inner.radius= of the way out. With a gap, the first one is
+             * centred on start= and carries the ring names. */
+            const double TAU = 2 * M_PI;
+            int k = xf->nlev, nring = yf->nlev;
+            int *sg = cp_xmalloc(k * sizeof(int));
+            for (int l = 0; l < k; l++) sg[l] = -1;
+            for (int r = 0; gf && r < df->nrow; r++) {
+                if (!use[r]) continue;
+                int l = xf->idx[r], gi = gf->idx[r];
+                if (sg[l] >= 0 && sg[l] != gi) {
+                    snprintf(err, CP_ERRLEN, "coord_polar() + geom_tile(): spoke `%s` "
+                             "falls in two groups (`%s` and `%s`); group= must be "
+                             "constant per x level", xf->levels[l],
+                             gf->levels[sg[l]], gf->levels[gi]);
+                    return -1;
+                }
+                sg[l] = gi;
+            }
+            int ngrp = gf ? gf->nlev : 1;
+            int *ord = cp_xmalloc(k * sizeof(int)), no = 0;
+            for (int gi = 0; gi < ngrp; gi++)          /* wedge order, then x order */
+                for (int l = 0; l < k; l++)
+                    if ((gf ? sg[l] : 0) == gi) ord[no++] = l;
+            for (int l = 0; l < k; l++)                 /* levels with no used row */
+                if (gf && sg[l] < 0) ord[no++] = l;
+            int nwedge = 0;
+            for (int i = 0; i < no; i++)
+                if (i == 0 || (gf && sg[ord[i]] != sg[ord[i - 1]])) nwedge++;
+            double gap = spec->polar_gap * M_PI / 180;
+            int ngap = gap > 0 ? (gf ? nwedge : 1) : 0;
+            double step = (TAU - ngap * gap) / k;
+            double *a0 = cp_xmalloc(k * sizeof(double));    /* spoke start, by level */
+            double cur = gap / 2;
+            for (int i = 0; i < no; i++) {
+                if (i > 0 && gf && sg[ord[i]] != sg[ord[i - 1]]) cur += gap;
+                a0[ord[i]] = cur;
+                cur += step;
+            }
+#define PANG(a) (spec->polar_start + spec->polar_dir * (a))
+            /* label room: spoke names (radial past 24 spokes) and wedge names */
+            int show_x = th->axis_text_on;
+            double xls = SZ_AXIS_TEXT * (k > 24 ? 0.7 : 1), maxw = 0, gw = 0;
+            for (int l = 0; show_x && l < k; l++) {
+                double w = text_w(cr, xls, xf->levels[l]);
+                if (w > maxw) maxw = w;
+            }
+            for (int gi = 0; gf && gi < gf->nlev; gi++) {
+                double w = text_w(cr, SZ_AXIS_TEXT, gf->levels[gi]);
+                if (w > gw) gw = w;
+            }
+            double room = (show_x ? (k > 24 ? maxw + 4 : labh * 1.6) : 0)
+                        + (gf ? gw + labh : 0) + 4;
+            double half = fmin(panelw_pt, panelh_pt) / 2;
+            double rmax = half - room;
+            if (rmax < half * 0.3) rmax = half * 0.3;
+            double rin = spec->polar_inner * rmax, cx = 0.5, cy = 0.5;
+            for (int li = 0; li < spec->nlayers; li++) {
+                const Layer *L = &spec->layers[li];
+                for (int r = 0; r < df->nrow; r++) {
+                    if (!use[r]) continue;
+                    int l = xf->idx[r], j = yf->idx[r];
+                    double r0 = rin + (rmax - rin) * j / nring;
+                    double r1 = rin + (rmax - rin) * (j + 1) / nring;
+                    double s0 = a0[l], s1 = a0[l] + step;
+                    int na = 2 + (int)ceil((s1 - s0) / (TAU / 360));
+                    double *px = cp_xmalloc(2 * na * sizeof(double));
+                    double *py = cp_xmalloc(2 * na * sizeof(double));
+                    for (int q = 0; q < na; q++) {           /* outer arc, then inner back */
+                        double a = PANG(s0 + (s1 - s0) * q / (na - 1));
+                        px[q] = cx + r1 * sin(a) / panelw_pt;
+                        py[q] = cy + r1 * cos(a) / panelh_pt;
+                        a = PANG(s1 - (s1 - s0) * q / (na - 1));
+                        px[na + q] = cx + r0 * sin(a) / panelw_pt;
+                        py[na + q] = cy + r0 * cos(a) / panelh_pt;
+                    }
+                    g = gt_add(T, G_POLYGON, R, C, R, C);
+                    g->n = 2 * na; g->px = px; g->py = py; g->clip = 1;
+                    g->col = cf ? pal[cf->idx[r]]
+                           : cont_col ? (isnan(colc->num[r]) ? C_NA : CCOL(r)) : C_BAR;
+                    g->alpha = L->alpha;
+                    if (L->has_color) {                      /* colour= is the border */
+                        g->poly_fill_set = 1; g->poly_fill = g->col;
+                        g->col = L->color; g->stroke = 1;
+                        g->lw = lw_pt(L->tile_lw > 0 ? L->tile_lw : 0.1);
+                    }
+                }
+            }
+            /* spoke names: horizontal for a few, radial past 24 */
+            for (int l = 0; show_x && l < k; l++) {
+                double a = PANG(a0[l] + step / 2), sa = sin(a), ca = cos(a);
+                g = gt_add(T, G_TEXT, R, C, R, C);
+                g->str = xf->levels[l]; g->size = xls; g->col = th->axis_text;
+                g->va = V_INKCENTER;
+                if (k > 24) {
+                    double rr = rmax + 3;
+                    g->tx = cx + rr * sa / panelw_pt; g->ty = cy + rr * ca / panelh_pt;
+                    double deg = 90 - a * 180 / M_PI;        /* CCW from +x */
+                    if (sa >= 0) { g->rot = deg; g->hj = 0; }
+                    else { g->rot = deg + 180; g->hj = 1; }
+                } else {
+                    double rr = rmax * 1.04 + labh * 0.55;
+                    g->tx = cx + rr * sa / panelw_pt; g->ty = cy + rr * ca / panelh_pt;
+                    g->hj = (1 - sa) / 2;
+                }
+            }
+            /* wedge names, outside the spoke names */
+            for (int gi = 0; gf && gi < gf->nlev; gi++) {
+                double lo = 1e9, hi = -1e9;
+                for (int l = 0; l < k; l++)
+                    if (sg[l] == gi) { lo = fmin(lo, a0[l]); hi = fmax(hi, a0[l] + step); }
+                if (lo > hi) continue;
+                double a = PANG((lo + hi) / 2), sa = sin(a), ca = cos(a);
+                double rr = rmax + (show_x ? (k > 24 ? maxw + 6 : labh * 1.6) : 4) + labh * 0.5;
+                g = gt_add(T, G_TEXT, R, C, R, C);
+                g->str = gf->levels[gi]; g->size = SZ_AXIS_TEXT; g->col = th->axis_text;
+                g->tx = cx + rr * sa / panelw_pt; g->ty = cy + rr * ca / panelh_pt;
+                g->hj = (1 - sa) / 2; g->va = V_INKCENTER;
+            }
+            /* ring names, in the gap centred on start= */
+            for (int j = 0; ngap && j < nring; j++) {
+                double rr = rin + (rmax - rin) * (j + 0.5) / nring;
+                double a = PANG(0);
+                g = gt_add(T, G_TEXT, R, C, R, C);
+                g->str = yf->levels[j]; g->size = SZ_AXIS_TEXT * 0.75;
+                g->col = th->axis_text;
+                g->tx = cx + rr * sin(a) / panelw_pt; g->ty = cy + rr * cos(a) / panelh_pt;
+                g->hj = 0.5; g->va = V_INKCENTER;
+            }
+#undef PANG
+            free(sg); free(ord); free(a0);
+        } else if (spec->polar) {
             int k = xf->nlev;
             double rmax = fmin(panelw_pt, panelh_pt) / 2 - 2.6 * labh;
             if (rmax < 30) rmax = fmin(panelw_pt, panelh_pt) / 2 * 0.72;

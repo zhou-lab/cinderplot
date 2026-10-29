@@ -2904,23 +2904,38 @@ static int parse_term(P *p, PlotSpec *spec) {
         return expect(p, ')');
     }
     if (!strcmp(name, "coord_polar")) {
-        /* radar ("spider") charts: the supported subset is a discrete x
-         * whose categories become spokes, y as radius, geom_line() series
-         * drawn CLOSED, dashed rings at the y breaks. General polar (pie /
-         * rose bars) is on the roadmap. */
+        /* radar ("spider") charts: a discrete x whose categories become
+         * spokes, y as radius, geom_line() series drawn CLOSED, dashed rings
+         * at the y breaks. With geom_tile() over a discrete x and y, the
+         * dartboard: annulus sectors, x as the angle, y as the ring. */
         spec->polar = 1;
+        spec->polar_dir = 1;
         skip_ws(p);
         while (*p->s != ')') {
             char *key = ident(p);
             if (!key || expect(p, '=')) return fail(p, "bad coord_polar() argument", "");
-            if (strcmp(key, "start"))
-                return fail(p, "coord_polar option `%s` not implemented (start=)", key);
+            int k_start = !strcmp(key, "start"), k_dir = !strcmp(key, "direction"),
+                k_gap = !strcmp(key, "gap"), k_in = !strcmp(key, "inner.radius");
+            if (!k_start && !k_dir && !k_gap && !k_in)
+                return fail(p, "coord_polar option `%s` not implemented; supported: "
+                            "start= (radians), direction= (1 or -1), gap= (degrees "
+                            "between group wedges), inner.radius= (0..0.9)", key);
             skip_ws(p);
             char *end;
             double v = strtod(p->s, &end);
-            if (end == p->s) return fail(p, "start= expects radians", "");
+            if (end == p->s) return fail(p, "%s= expects a number", key);
             p->s = end;
-            spec->polar_start = v;
+            if (k_start) spec->polar_start = v;
+            else if (k_dir) {
+                if (v != 1 && v != -1) return fail(p, "direction= is 1 (clockwise) or -1", "");
+                spec->polar_dir = (int)v;
+            } else if (k_gap) {
+                if (!(v >= 0 && v < 90)) return fail(p, "gap= expects degrees in [0, 90)", "");
+                spec->polar_gap = v;
+            } else {
+                if (!(v >= 0 && v <= 0.9)) return fail(p, "inner.radius= expects 0..0.9", "");
+                spec->polar_inner = v;
+            }
             skip_ws(p);
             if (*p->s == ',') { p->s++; skip_ws(p); }
         }

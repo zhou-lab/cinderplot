@@ -688,6 +688,12 @@ typedef struct {
                                      * categories become spokes, y the radius;
                                      * geom_line()/geom_point() only */
     double polar_start;             /* start angle, radians CW from 12 o'clock */
+    /* coord_polar() with geom_tile(): the dartboard. direction= is 1 (clockwise,
+     * ggplot2's default) or -1; gap= is degrees left empty between the wedges
+     * an aes(group=) column makes; inner.radius= (coord_radial's spelling) is
+     * the empty hub as a fraction of the outer radius. */
+    int polar_dir;
+    double polar_gap, polar_inner;
     char *genome_seqinfo;           /* scale_x_genome: seqinfo TSV path */
     char *ideogram_path;            /* ideogram(): cytoband TSV path */
     Layer layers[MAX_LAYERS];
