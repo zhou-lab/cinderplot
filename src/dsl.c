@@ -1990,10 +1990,18 @@ static int parse_term(P *p, PlotSpec *spec) {
                     l->box_fatten = v;
                 } else if (!strcmp(key, "color") || !strcmp(key, "colour") || !strcmp(key, "fill")) {
                     char *v = string_lit(p);
-                    if (!v || parse_color(v, &l->color))
+                    Col cv;
+                    if (!v || parse_color(v, &cv))
                         return fail(p, "bad colour for `%s`", key);
-                    l->has_color = 1;
-                    l->color_is_fill = key[0] == 'f';
+                    int is_f = key[0] == 'f';
+                    if (is_f) { l->fill_c = cv; l->has_fill_c = 1; }
+                    /* on a point, fill= and colour= are the body and the
+                     * outline of a filled glyph: a fill= never overwrites a
+                     * colour= given before it (elsewhere the last one wins) */
+                    int pt = gt == GEOM_POINT || gt == GEOM_JITTER;
+                    if (!(pt && is_f && l->has_color && !l->color_is_fill)) {
+                        l->color = cv; l->has_color = 1; l->color_is_fill = is_f;
+                    }
                 } else if ((se || gt == GEOM_TILE) && !strcmp(key, "data")) {
                     l->data = string_lit(p);
                     if (!l->data) return fail(p, "data= expects a quoted path", "");
@@ -2616,7 +2624,16 @@ static int parse_term(P *p, PlotSpec *spec) {
     if (!strcmp(name, "scale_fill_manual") || !strcmp(name, "scale_colour_manual")
         || !strcmp(name, "scale_color_manual")) {
         spec->manual_fill = name[6] == 'f';
-        return parse_manual_scale(p, spec, name);
+        int rc = parse_manual_scale(p, spec, name);
+        if (!rc) {                                /* keep a copy per aesthetic */
+            Col *dc = spec->manual_fill ? spec->fman_cols : spec->cman_cols;
+            char **dn = spec->manual_fill ? spec->fman_names : spec->cman_names;
+            memcpy(dc, spec->manual_cols, sizeof spec->manual_cols);
+            memcpy(dn, spec->manual_names, sizeof spec->manual_names);
+            if (spec->manual_fill) { spec->n_fman = spec->n_manual; spec->has_fman = 1; }
+            else { spec->n_cman = spec->n_manual; spec->has_cman = 1; }
+        }
+        return rc;
     }
     if (!strcmp(name, "scale_fill_distiller") || !strcmp(name, "scale_colour_distiller")
         || !strcmp(name, "scale_color_distiller")) {
@@ -3701,6 +3718,12 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
      * silent no-op: the spec parsed, the run succeeded, and the default ramp
      * came out. Alias it onto the colour scale instead. scale_colour_*() still
      * wins if both are given. */
+    if (spec->pfill.col && spec->has_cman && spec->has_fman) {
+        /* colour= reads the shared arrays: give it its own scale back */
+        memcpy(spec->manual_cols, spec->cman_cols, sizeof spec->manual_cols);
+        memcpy(spec->manual_names, spec->cman_names, sizeof spec->manual_names);
+        spec->n_manual = spec->n_cman; spec->has_manual = 1; spec->manual_fill = 0;
+    }
     {
         int lay_fill = 0;
         for (int i = 0; i < spec->nlayers; i++)

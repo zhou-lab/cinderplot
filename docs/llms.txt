@@ -170,7 +170,13 @@ and ignored (the output path is a command-line argument here).
   colourbar, dropped separately by `guides(fill="none")` / `guides(colour=
   "none")`; `scale_fill_manual()` keys the fill, `labs(fill=)` titles it.
   Without a filled glyph the two keys still collide (an error naming
-  shape=21); a continuous fill= is not implemented.
+  shape=21); a continuous fill= is not implemented. `scale_colour_manual()`
+  and `scale_fill_manual()` given together each key their own aesthetic. A
+  `geom_point(data="other.tsv", shape=21)` layer fills its glyphs from that
+  file's fill= column through the same scale, so two point layers can carry
+  two legends. On a point, `colour=` and `fill=` constants are the outline
+  and the body: `geom_point(shape=21, colour="black", fill="white")` is a
+  white dot ringed in black, whatever order they are given in.
 - **`aes(linetype=col)`** maps a discrete column to dash patterns on
   `geom_line()`, `geom_smooth()` and `geom_segment()`, in ggplot2's
   `linetype_pal()` order (solid, "22", "42", "44", "13", "1343", "73",

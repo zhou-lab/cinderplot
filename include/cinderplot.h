@@ -412,6 +412,9 @@ typedef struct {
      * new_scale_fill() calls came before the layer, i.e. which PlotSpec.fsegs
      * entry scales it. */
     char *fill_col; int fill_factor, fill_seg;
+    /* geom_point(fill="white"): the body of a filled glyph (shape 21-25),
+     * kept apart from colour=, which is then its outline */
+    Col fill_c; int has_fill_c;
 } Layer;
 #define MAX_LAYERS 8
 
@@ -773,6 +776,12 @@ typedef struct {
      * levels grey with no warning. */
     Col manual_cols[MAX_MANUAL_COLS]; char *manual_names[MAX_MANUAL_COLS];   /* names NULL = positional */
     int n_manual, has_manual;
+    /* the same, kept per aesthetic: with colour= AND a filled-point fill=
+     * both mapped, scale_colour_manual() and scale_fill_manual() each key
+     * their own scale (the shared arrays above hold whichever came last) */
+    Col cman_cols[MAX_MANUAL_COLS], fman_cols[MAX_MANUAL_COLS];
+    char *cman_names[MAX_MANUAL_COLS], *fman_names[MAX_MANUAL_COLS];
+    int n_cman, has_cman, n_fman, has_fman;
     /* scale_*_manual(labels=c("0"="Unmethylated", ...)): what the KEY prints
      * for a level, keyed by the level as written in the data (values= still
      * keys colours by that); names NULL = positional, one per level. Read by

@@ -1135,13 +1135,14 @@ typedef struct {
     int *lev;                /* discrete colour: the level in cf, else NULL */
     int *pan;                /* facet panel, or NULL = drawn in every panel */
     const Column *lab;       /* geom_text/geom_label: the label column there */
+    int *flev;               /* filled points: the level in the fill= factor */
 } LayerFrame;
 
 static int layer_frame_build(LayerFrame *lf, DataFrame *d2, const Layer *L,
                              const char *gname, const PlotSpec *spec,
                              const Factor *ff, const Factor *xf, int disc_x,
                              int disc_y, const Factor *cf, int cont_col,
-                             char *err) {
+                             const Factor *pff, char *err) {
     memset(lf, 0, sizeof *lf);
     lf->n = d2->nrow;
     const char *ycol = L->ycol ? L->ycol : spec->y.col;
@@ -1230,6 +1231,30 @@ static int layer_frame_build(LayerFrame *lf, DataFrame *d2, const Layer *L,
                              c->str[r], spec->colour.col, spec->colour.col);
                     return -1;
                 }
+            }
+        }
+    }
+    /* a filled glyph's body: the fill= column of this file, through the
+     * main data's fill scale (so its key stays true for both layers) */
+    if (pff && L->pt_shape >= 21 && !L->has_fill_c) {
+        const Column *c = df_col(d2, spec->pfill.col);
+        if (!c) {
+            snprintf(err, CP_ERRLEN, "%s(data=%s): fill column `%s` not in this "
+                     "file", gname, L->data, spec->pfill.col);
+            return -1;
+        }
+        lf->flev = cp_xmalloc((size_t)(lf->n ? lf->n : 1) * sizeof(int));
+        for (int r = 0; r < lf->n; r++) {
+            char lb[256];
+            cell_label(c, r, lb, sizeof lb);
+            lf->flev[r] = -1;
+            for (int k = 0; k < pff->nlev; k++)
+                if (!strcmp(lb, pff->levels[k])) { lf->flev[r] = k; break; }
+            if (lf->flev[r] < 0) {
+                snprintf(err, CP_ERRLEN, "%s(data=%s): fill value \"%s\" is not a "
+                         "level of the main data's `%s`", gname, L->data, lb,
+                         spec->pfill.col);
+                return -1;
             }
         }
     }
@@ -1568,15 +1593,15 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             && factor_relevel(pff, df->nrow, spec->pfill.levels, spec->pfill.nlevels,
                               "fill", err)) return -1;
         fpal = cp_xmalloc((pff->nlev ? pff->nlev : 1) * sizeof(Col));
-        if (spec->has_manual && spec->manual_fill) {
-            int named = spec->n_manual > 0 && spec->manual_names[0] != NULL;
+        if (spec->has_fman) {                    /* scale_fill_manual(), its own copy */
+            int named = spec->n_fman > 0 && spec->fman_names[0] != NULL;
             for (int i = 0; i < pff->nlev; i++) {
                 Col c = C_NA;
                 if (named) {
-                    for (int k = 0; k < spec->n_manual; k++)
-                        if (spec->manual_names[k] && !strcmp(spec->manual_names[k], pff->levels[i]))
-                            { c = spec->manual_cols[k]; break; }
-                } else if (i < spec->n_manual) c = spec->manual_cols[i];
+                    for (int k = 0; k < spec->n_fman; k++)
+                        if (spec->fman_names[k] && !strcmp(spec->fman_names[k], pff->levels[i]))
+                            { c = spec->fman_cols[k]; break; }
+                } else if (i < spec->n_fman) c = spec->fman_cols[i];
                 fpal[i] = c;
             }
         } else hue_palette(pff->nlev, fpal);
@@ -2106,7 +2131,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         if (!layer_df[li] && !(layer_df[li] = df_read_csv(L->data, err)))
             return -1;
         if (layer_frame_build(&layer_fr[li], layer_df[li], L, gname,
-                              spec, ff, xf, disc_x, disc_y, cf, cont_col, err))
+                              spec, ff, xf, disc_x, disc_y, cf, cont_col, pff, err))
             return -1;
         has_fr[li] = 1;
         layer_pan[li] = layer_fr[li].pan;     /* share the one panel index */
@@ -4571,6 +4596,12 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     double *lpx = cp_xmalloc((m ? m : 1) * sizeof(double));
                     double *lpy = cp_xmalloc((m ? m : 1) * sizeof(double));
                     Col *lpc = cp_xmalloc((m ? m : 1) * sizeof(Col));
+                    /* shape 21-25: body from fill= (this file's column or a
+                     * layer fill= constant), outline from colour=, as on the
+                     * main data */
+                    int lfilled = JL->pt_shape >= 21;
+                    Col *lpf = lfilled && (F->flev || JL->has_fill_c)
+                             ? cp_xmalloc((m ? m : 1) * sizeof(Col)) : NULL;
                     m = 0;
                     for (int r = 0; r < F->n; r++) {
                         if (F->pan && F->pan[r] != p) continue;
@@ -4588,7 +4619,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                             ly += ((double)((h >> 16) & 0xFFFF) / 65535.0 * 2 - 1) * jh;
                         }
                         lpx[m] = NPCX(lx); lpy[m] = NPCY(ly);
-                        lpc[m] = JL->has_color ? JL->color
+                        if (lpf) lpf[m] = JL->has_fill_c ? JL->fill_c : fpal[F->flev[r]];
+                        lpc[m] = JL->has_color && !(lfilled && JL->color_is_fill) ? JL->color
                                : F->lev ? pal[F->lev[r]]
                                : F->cc ? (isnan(F->cc->num[r]) ? C_NA
                                           : fill_map_value(&cscale, F->cc->num[r],
@@ -4598,6 +4630,14 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     }
                     g = gt_add(T, G_POINTS, R, C, R, C);
                     g->n = m; g->px = lpx; g->py = lpy; g->pcol = lpc;
+                    if (lfilled) {
+                        static const int lglyph21[5] = { 0, 2, 3, 1, 4 };  /* 21..25 */
+                        g->shape = lglyph21[JL->pt_shape - 21];
+                        g->pfill = lpf;
+                        g->stroke_lw = JL->pt_stroke < 0 ? 0
+                                     : (JL->pt_stroke > 0 ? JL->pt_stroke : 0.5) * 96 / 25.4 / 2 * 0.75;
+                        if (!lpf && g->stroke_lw <= 0) g->stroke_lw = 0.5;
+                    }
                     g->raster = JL->raster;
                     g->radius = JL->point_size > 0
                               ? PT_RADIUS * JL->point_size / 1.5 : PT_RADIUS;
@@ -4616,7 +4656,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                  * colour= constant, else black), stroke= wide; no fill source
                  * leaves it hollow, ggplot's fill = NA */
                 int filled = JL->pt_shape >= 21;
-                int fill_const = JL->has_color && JL->color_is_fill;
+                int fill_const = JL->has_fill_c;
                 Col *pfil = filled && (pff || fill_const)
                           ? cp_xmalloc((np ? np : 1) * sizeof(Col)) : NULL;
                 np = 0;
@@ -4641,7 +4681,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     if (filled) {
                         pcol[np] = JL->has_color && !JL->color_is_fill ? JL->color
                                  : cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BLACK;
-                        if (pfil) pfil[np] = fill_const ? JL->color : fpal[pff->idx[r]];
+                        if (pfil) pfil[np] = fill_const ? JL->fill_c : fpal[pff->idx[r]];
                     } else
                     pcol[np] = spec->layers[li].has_color ? spec->layers[li].color
                              : cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BLACK;
