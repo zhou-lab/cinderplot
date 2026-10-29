@@ -21,6 +21,17 @@
         (g_)->arrow_angle = (L_)->arrow_angle;                                 \
         (g_)->arrow_closed = (L_)->arrow_closed; } } while (0)
 
+
+/* A missing column names the columns the file does have: a typo (`hpx`) or
+ * the wrong file is then one look away, not a second run with head(). */
+static void col_missing(char *err, const DataFrame *df, const char *name) {
+    int o = snprintf(err, CP_ERRLEN, "column `%s` not found; the data has: ", name);
+    int n = df->header ? df->nheader : df->ncol;
+    for (int j = 0; j < n && o > 0 && o < CP_ERRLEN - 1; j++)
+        o += snprintf(err + o, CP_ERRLEN - o, "%s%s", j ? ", " : "",
+                      df->header ? df->header[j] : df->cols[j].name);
+}
+
 static const Col C_BAR = {0.349, 0.349, 0.349};   /* grey35, ggplot bar fill */
 
 static double text_w(cairo_t *cr, double size, const char *s) {
@@ -524,6 +535,48 @@ static void repel_labels(RLabel *L, int n, const double *px, const double *py, i
         }
         if (moved < 0.05) break;
     }
+}
+
+/* The force solver can stall with two boxes still overlapping (two points a
+ * label-height apart pull their labels into the same jam). Settle it the way
+ * ggrepel does: walk the labels in order, and move one that still overlaps an
+ * earlier kept label to the nearest free spot on rings round its anchor; if no
+ * spot is free, drop it (drop[i] = 1). Returns the number dropped. */
+static int repel_overlap(const RLabel *a, const RLabel *b) {
+    return fabs(a->cx - b->cx) < a->hw + b->hw && fabs(a->cy - b->cy) < a->hh + b->hh;
+}
+static int repel_settle(RLabel *L, int n, char *drop, double pw, double ph,
+                        const double *px, const double *py, int np) {
+    int nd = 0;
+    for (int i = 0; i < n; i++) {
+        int hit = 0;
+        for (int j = 0; j < i && !hit; j++) hit = !drop[j] && repel_overlap(&L[i], &L[j]);
+        if (!hit) continue;
+        int placed = 0;
+        /* first pass keeps the box off every data point too; the second
+         * settles for clearing the other labels */
+        for (int strict = 1; strict >= 0 && !placed; strict--)
+        for (int ring = 1; ring <= 8 && !placed; ring++) {
+            double rad = ring * (2 * L[i].hh + 1);
+            for (int k = 0; k < 16 && !placed; k++) {
+                RLabel c = L[i];
+                double th = k * (2 * M_PI / 16) + M_PI / 2;   /* above first */
+                c.cx = L[i].ax + rad * cos(th) * (L[i].hw / L[i].hh > 1 ? 1.5 : 1);
+                c.cy = L[i].ay + rad * sin(th);
+                if (c.cx < c.hw || c.cx > pw - c.hw || c.cy < c.hh || c.cy > ph - c.hh)
+                    continue;
+                int clash = 0;
+                for (int j = 0; j < n && !clash; j++)
+                    if (j != i && !drop[j])
+                        clash = repel_overlap(&c, &L[j]);
+                for (int k2 = 0; k2 < np && strict && !clash; k2++)
+                    clash = fabs(c.cx - px[k2]) < c.hw + 1.5 && fabs(c.cy - py[k2]) < c.hh + 1.5;
+                if (!clash) { L[i] = c; placed = 1; }
+            }
+        }
+        if (!placed) { drop[i] = 1; nd++; }
+    }
+    return nd;
 }
 
 /* genome coordinate scale: chromosomes concatenated in seqinfo order */
@@ -1205,7 +1258,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
 
     /* ---- resolve columns ---- */
     const Column *xc = df_col(df, spec->x.col);
-    if (!xc) { snprintf(err, CP_ERRLEN, "column `%s` not found", spec->x.col); return -1; }
+    if (!xc) { col_missing(err, df, spec->x.col); return -1; }
     /* discrete x when the column is a string or wrapped in factor() */
     int disc_x = (xc->type == COL_STR) || spec->x.is_factor;
     Factor *xf = disc_x ? factor_make(df, xc) : NULL;
@@ -1250,7 +1303,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     int disc_y = 0;
     if (spec->y.col) {
         yc = df_col(df, spec->y.col);
-        if (!yc) { snprintf(err, CP_ERRLEN, "column `%s` not found", spec->y.col); return -1; }
+        if (!yc) { col_missing(err, df, spec->y.col); return -1; }
         /* A categorical y is meaningful for a tile grid (region x sample), and
          * for nothing else here: every other geom either computes y itself
          * (histogram, density, bar) or draws a magnitude from an origin, where
@@ -1305,7 +1358,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     if (text_main) {
         labc = df_col(df, spec->label.col);
         if (!labc) {
-            snprintf(err, CP_ERRLEN, "column `%s` not found", spec->label.col);
+            col_missing(err, df, spec->label.col);
             return -1;
         }
     }
@@ -1331,16 +1384,16 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     const Column *xec = NULL, *yec = NULL;
     if (spec->xend.col) {
         xec = df_col(df, spec->xend.col);
-        if (!xec && main_ends) { snprintf(err, CP_ERRLEN, "column `%s` not found", spec->xend.col); return -1; }
+        if (!xec && main_ends) { col_missing(err, df, spec->xend.col); return -1; }
     }
     if (spec->yend.col) {
         yec = df_col(df, spec->yend.col);
-        if (!yec && main_ends) { snprintf(err, CP_ERRLEN, "column `%s` not found", spec->yend.col); return -1; }
+        if (!yec && main_ends) { col_missing(err, df, spec->yend.col); return -1; }
     }
     const Column *yminc = NULL;
     if (spec->ymin.col) {
         yminc = df_col(df, spec->ymin.col);
-        if (!yminc) { snprintf(err, CP_ERRLEN, "column `%s` not found", spec->ymin.col); return -1; }
+        if (!yminc) { col_missing(err, df, spec->ymin.col); return -1; }
         if (yminc->type != COL_NUM) {
             snprintf(err, CP_ERRLEN, "ymin column `%s` must be numeric", spec->ymin.col);
             return -1;
@@ -1428,7 +1481,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     if (spec->colour.col) {
         if (nhist) bars_const_fill = 1;
         const Column *cc = df_col(df, spec->colour.col);
-        if (!cc) { snprintf(err, CP_ERRLEN, "column `%s` not found", spec->colour.col); return -1; }
+        if (!cc) { col_missing(err, df, spec->colour.col); return -1; }
         if (!spec->colour.is_factor && cc->type == COL_NUM) {
             cont_col = 1; colc = cc;    /* continuous colour aesthetic */
             if (!spec->has_colour_scale) {     /* ggplot default: blue gradient */
@@ -1462,7 +1515,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     int col_manual = spec->has_manual && !(spec->pfill.col && spec->manual_fill);
     if (spec->pfill.col) {
         const Column *pc = df_col(df, spec->pfill.col);
-        if (!pc) { snprintf(err, CP_ERRLEN, "column `%s` not found", spec->pfill.col); return -1; }
+        if (!pc) { col_missing(err, df, spec->pfill.col); return -1; }
         if (pc->type == COL_NUM && !spec->pfill.is_factor) {
             snprintf(err, CP_ERRLEN, "a continuous fill= on a filled point is not "
                      "implemented; map a discrete column (or factor(%s)) to fill= "
@@ -1516,7 +1569,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     if (spec->shape.col) {
         const Column *shc = df_col(df, spec->shape.col);
         if (!shc) {
-            snprintf(err, CP_ERRLEN, "column `%s` not found", spec->shape.col);
+            col_missing(err, df, spec->shape.col);
             return -1;
         }
         if (!haspoint) {
@@ -1547,7 +1600,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     if (spec->group.col) {
         const Column *gc = df_col(df, spec->group.col);
         if (!gc) {
-            snprintf(err, CP_ERRLEN, "column `%s` not found", spec->group.col);
+            col_missing(err, df, spec->group.col);
             return -1;
         }
         if (!spec->group.is_factor && gc->type == COL_NUM) {
@@ -1606,7 +1659,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         }
         const Column *lc = df_col(df, spec->linetype.col);
         if (!lc && main_lines) {
-            snprintf(err, CP_ERRLEN, "column `%s` not found", spec->linetype.col);
+            col_missing(err, df, spec->linetype.col);
             return -1;
         }
         if (lc && !spec->linetype.is_factor && lc->type == COL_NUM) {
@@ -1667,7 +1720,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     const Column *szc = NULL;
     if (spec->size.col) {
         szc = df_col(df, spec->size.col);
-        if (!szc) { snprintf(err, CP_ERRLEN, "column `%s` not found", spec->size.col); return -1; }
+        if (!szc) { col_missing(err, df, spec->size.col); return -1; }
         if (szc->type != COL_NUM || spec->size.is_factor) {
             snprintf(err, CP_ERRLEN, "aes(size=) needs a numeric column; `%s` is not numeric", spec->size.col);
             return -1;
@@ -1688,7 +1741,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     if (grid) {
         if (spec->facet_rowvar) {
             const Column *rc = df_col(df, spec->facet_rowvar);
-            if (!rc) { snprintf(err, CP_ERRLEN, "column `%s` not found", spec->facet_rowvar); return -1; }
+            if (!rc) { col_missing(err, df, spec->facet_rowvar); return -1; }
             rowf = factor_make(df, rc);
             if (rowf->nlev < 1) {
                 snprintf(err, CP_ERRLEN, "facet_grid() row column `%s` has no values",
@@ -1698,7 +1751,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         }
         if (spec->facet_colvar) {
             const Column *cc2 = df_col(df, spec->facet_colvar);
-            if (!cc2) { snprintf(err, CP_ERRLEN, "column `%s` not found", spec->facet_colvar); return -1; }
+            if (!cc2) { col_missing(err, df, spec->facet_colvar); return -1; }
             colf = factor_make(df, cc2);
             if (colf->nlev < 1) {
                 snprintf(err, CP_ERRLEN, "facet_grid() column column `%s` has no values",
@@ -1726,7 +1779,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         }
     } else if (spec->facet_var) {
         const Column *fc = df_col(df, spec->facet_var);
-        if (!fc) { snprintf(err, CP_ERRLEN, "column `%s` not found", spec->facet_var); return -1; }
+        if (!fc) { col_missing(err, df, spec->facet_var); return -1; }
         ff = factor_make(df, fc);
         if (ff->nlev < 1) { snprintf(err, CP_ERRLEN, "facet column `%s` has no values", spec->facet_var); return -1; }
         if (spec->n_facet_levels
@@ -2343,8 +2396,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     }
 
     /* ---- stat_density: Gaussian KDE per (panel, colour group), bandwidth
-     * nrd0 (Silverman), evaluated at DENS_N points over [min-3bw, max+3bw]
-     * (ggplot's cut=3). The x-scale stays on the data range (ggplot-style). --- */
+     * nrd0 (Silverman), evaluated at DENS_N points over the x scale's data
+     * range (ggplot2's stat_density, trim=FALSE). --- */
 #define DENS_N 512
     int densg = cf ? cf->nlev : 1;
     /* map each layer to its density-layer index so multiple geom_density()
@@ -2388,9 +2441,23 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 double bw = (densl->bw > 0 ? densl->bw : 0.9 * lo * pow((double)n, -0.2))
                           * densl->adjust;               /* bw= override, x adjust= */
                 if (bw <= 0) bw = 1e-6;
-                /* eval over [min-3bw, max+3bw] (cut=3); the curve is clipped to
-                 * the data-range panel at draw time, matching ggplot */
-                double xlo = buf[0] - 3 * bw, xhi = buf[n-1] + 3 * bw;
+                /* evaluated over the x scale's data range, as ggplot2's
+                 * stat_density does (trim=FALSE): a beta's curve stops at
+                 * the data instead of running past 0 and 1 into the panel
+                 * expansion. trim=TRUE takes each group's own range; free-x
+                 * facets take their panel's. */
+                double xlo = txmin, xhi = txmax;
+                if (densl->trim) { xlo = buf[0]; xhi = buf[n-1]; }
+                else if (ff && spec->free_x && !disc_x && !genome_x) {
+                    xlo = 1e300; xhi = -1e300;
+                    for (int r = 0; r < df->nrow; r++) {
+                        if (!use[r] || ff->idx[r] != p) continue;
+                        double t = TXR(r);
+                        if (t < xlo) xlo = t;
+                        if (t > xhi) xhi = t;
+                    }
+                }
+                if (!(xhi > xlo)) { xlo = buf[0] - 3 * bw; xhi = buf[n-1] + 3 * bw; }
                 double inv = 1.0 / ((double)n * bw * sqrt(2 * M_PI));
                 for (int j = 0; j < DENS_N; j++) {
                     double xj = xlo + (xhi - xlo) * j / (DENS_N - 1), s = 0;
@@ -4872,10 +4939,19 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                                 : cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BLACK;
                         m++;
                     }
-                    if (L->repel && panelw_pt > 0 && panelh_pt > 0)
+                    char *rdrop = cp_xcalloc(m ? m : 1, 1);
+                    if (L->repel && panelw_pt > 0 && panelh_pt > 0) {
                         repel_labels(rl, m, px, py, m, panelw_pt, panelh_pt, 2.0);
+                        int nd = repel_settle(rl, m, rdrop, panelw_pt, panelh_pt, px, py, m);
+                        if (nd)
+                            fprintf(stderr, "cinderplot: warning: %s: %d unlabeled data "
+                                    "point%s (too many overlaps)\n",
+                                    gt == GEOM_LABEL ? "geom_label_repel" : "geom_text_repel",
+                                    nd, nd == 1 ? "" : "s");
+                    }
                     if (L->repel)                         /* connectors, drawn under the text */
                         for (int i = 0; i < m; i++) {
+                            if (rdrop[i]) continue;
                             double ex = rl[i].cx - px[i], ey = rl[i].cy - py[i];
                             if (fabs(ex) <= rl[i].hw && fabs(ey) <= rl[i].hh) continue;
                             double fx = fabs(ex) > 1e-6 ? rl[i].hw / fabs(ex) : 1e9;
@@ -4888,6 +4964,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                             g->y1 = (rl[i].cy - ey * f) / panelh_pt;
                         }
                     for (int i = 0; i < m; i++) {
+                        if (rdrop[i]) continue;
                         g = gt_add(T, G_TEXT, R, C, R, C);
                         g->str = strs[i]; g->size = fs; g->clip = 1; g->col = cols[i];
                         g->tx = panelw_pt > 0 ? rl[i].cx / panelw_pt : NPCX(0);
@@ -4899,7 +4976,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                             g->text_box = 1; g->box_fill = C_WHITE; g->box_line = cols[i];
                         }
                     }
-                    free(rl); free(strs); free(cols); free(px); free(py);
+                    free(rl); free(strs); free(cols); free(px); free(py); free(rdrop);
                 }
 #undef TOK
 #undef TXF

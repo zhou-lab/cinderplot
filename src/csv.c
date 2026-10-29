@@ -241,11 +241,12 @@ DataFrame *df_read_csv(const char *path, char *err) {
 
     DataFrame *df = cp_xmalloc(sizeof *df);
     df->nrow = nrow; df->ncol = ncol;
+    df->header = fname; df->nheader = ncol_file;
     df->cols = cp_xcalloc(ncol, sizeof(Column));
     int any_str = 0;
     int k = 0;
     for (int c = 0; c < ncol_file; c++) {
-        if (!keep[c]) { free(fname[c]); continue; }   /* pruned: never stored */
+        if (!keep[c]) continue;                       /* pruned: name kept in header */
         Column *col = &df->cols[k++];
         col->name = fname[c];
         /* Type and convert in a single pass: write into the double array while
@@ -311,7 +312,7 @@ DataFrame *df_read_csv(const char *path, char *err) {
     }
     free(cells);        /* per-column .v arrays are transferred to df or freed above */
     free(header.v);
-    free(fname);        /* the surviving name pointers are owned by the columns */
+    /* fname is kept as df->header (column names alias its entries) */
     free(keep);
     /* Nothing points into the image once every column is numeric, so hand the
      * memory back rather than holding the whole file for the render. */

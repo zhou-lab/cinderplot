@@ -42,7 +42,7 @@ static const char *USAGE =
     "  DSL:   'data.csv + aes(x, y, colour=factor(g)) + geom_point() + facet_wrap(~g)'\n"
     "  flags: -x COL -y COL [-c COL] [-f COL] [-t TITLE] [-m point|line|col|histogram|boxplot|bar] [--log x|y|xy]\n"
     "         -r/--region chr:start-end (track mode) · -H/--no-header · --no-legend\n"
-    "         --size WxH (partial Wx / xH auto-fits) · --dpi N · --font FAMILY · --font-size PT · --dump-spec · -V/--version · --help\n";
+    "         --size WxH (partial Wx / xH auto-fits) · --dpi N · --font FAMILY · --font-size PT · --dump-spec · -V/-v/--version · --help\n";
 
 /* A modern, sectioned --help. Colour is enabled for a TTY (or CLICOLOR_FORCE)
  * and suppressed by NO_COLOR, so piped/redirected output stays plain text. */
@@ -101,7 +101,7 @@ static void print_help(void) {
     printf("    %s--no-legend%s    drop every guide (colour/fill, size, shape, linetype) %s(guides(colour=\"none\") drops one)%s\n", G, R, D, R);
     printf("    %s-r, --region%s CHR:START-END   the window for track mode, when region() is left empty\n", G, R);
     printf("    %s-x -y -c -f -t -m --log%s   shortcut flags that desugar to the grammar (not with a DSL expression)\n", G, R);
-    printf("    %s--dump-spec%s    print the desugared DSL (and still render if an output is given)\n", G, R);
+    printf("    %s--dump-spec%s    print the desugared DSL; renders too only with -o FILE\n", G, R);
     printf("    %s-V, --version%s  ·  %s-h, --help%s\n", G, R, G, R);
 
     printf("\n  %sdocs%s  https://zhou-lab.github.io/cinderplot\n\n", D, R);
@@ -277,7 +277,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--dump-spec")) dump = 1;
         else if (!strcmp(a, "--no-header") || !strcmp(a, "-H")) cp_set_no_header(1);
         else if (!strcmp(a, "--no-legend")) no_legend = 1;
-        else if (!strcmp(a, "--version") || !strcmp(a, "-V")) { printf("cinderplot %s (%s)\n", CINDERPLOT_VERSION, CINDERPLOT_BUILD); return 0; }
+        else if (!strcmp(a, "--version") || !strcmp(a, "-V") || !strcmp(a, "-v")) { printf("cinderplot %s (%s)\n", CINDERPLOT_VERSION, CINDERPLOT_BUILD); return 0; }
         else if (!strcmp(a, "-h") || !strcmp(a, "--help")) { print_help(); return 0; }
         else if (strchr(a, '(')) expr = a;
         /* a recognized value-flag that fell through the branches above was given

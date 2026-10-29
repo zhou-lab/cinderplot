@@ -1977,6 +1977,9 @@ static int parse_term(P *p, PlotSpec *spec) {
                 } else if (gt == GEOM_DENSITY && !strcmp(key, "bw")) {
                     l->bw = strtod(p->s, (char **)&p->s);
                     if (!(l->bw > 0) || !isfinite(l->bw)) return fail(p, "geom_density(bw=...) must be > 0", "");
+                } else if (gt == GEOM_DENSITY && !strcmp(key, "trim")) {
+                    if (parse_bool(p, &l->trim))
+                        return fail(p, "geom_density(trim=) expects TRUE or FALSE", "");
                 } else if (gt == GEOM_DENSITY && !strcmp(key, "adjust")) {
                     l->adjust = strtod(p->s, (char **)&p->s);
                     if (!(l->adjust > 0) || !isfinite(l->adjust)) return fail(p, "geom_density(adjust=...) must be > 0", "");
@@ -2806,7 +2809,17 @@ static int parse_term(P *p, PlotSpec *spec) {
         }
         while (*p->s != ')') {
             char *key = ident(p);
-            if (!key || expect(p, '=')) return fail(p, "bad chord() argument", "");
+            if (!key || expect(p, '=')) {
+                /* name the token it choked on: "bad argument" alone sends
+                 * the reader hunting through the whole call */
+                char tok[64]; int k = 0;
+                const char *q = p->s;
+                while (q[k] && q[k] != ')' && q[k] != ',' && k < 40) { tok[k] = q[k]; k++; }
+                tok[k] = 0;
+                return fail(p, "chord() expects name=value arguments, got `%s`; supported: "
+                            "from=, to=, value=, gap=, alpha=, order=, bipartite= "
+                            "(e.g. chord(gap=2, alpha=0.6))", tok);
+            }
             skip_ws(p);
             if (!strcmp(key, "from")) {
                 spec->chord_from = string_lit(p);
@@ -3548,7 +3561,8 @@ static int parse_term(P *p, PlotSpec *spec) {
         || !strcmp(name, "geom_pointrange") || !strcmp(name, "geom_bin2d") || !strcmp(name, "geom_hex")
         || !strcmp(name, "geom_polygon") || !strcmp(name, "geom_dotplot") || !strcmp(name, "geom_rug")
         || !strcmp(name, "geom_freqpoly") || !strcmp(name, "geom_curve") || !strcmp(name, "geom_count"))
-        return fail(p, "%s() is not implemented (see the geom list in --help)", name);
+        return fail(p, "%s() is not implemented; the geoms are "
+                    "geom_point/jitter/line/smooth/col/bar/histogram/boxplot/density/tile/raster/segment/rect/hline/vline/abline/errorbar/linerange/text/label/text_repel/label_repel()", name);
     if (!strcmp(name, "scale_colour_gradientn") || !strcmp(name, "scale_color_gradientn")
         || !strcmp(name, "scale_fill_gradientn"))
         return fail(p, "%s() is not implemented; use gradient2() (three stops) or a "

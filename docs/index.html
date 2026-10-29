@@ -156,12 +156,12 @@
                 title="Copy a prompt that points your coding agent at the cinderplot reference"
                 aria-label="Copy a prompt for your coding agent"><span class="ico"></span>agent prompt</button>
         <button class="install" id="installBox" type="button"
-                data-cmd="conda install -c zhou-lab -c conda-forge cinderplot"
-                title="conda install -c zhou-lab -c conda-forge cinderplot — click to copy"
+                data-cmd="conda create -n cinderplot -c zhou-lab -c conda-forge cinderplot"
+                title="conda create -n cinderplot -c zhou-lab -c conda-forge cinderplot — click to copy"
                 aria-label="Copy install command to clipboard">
           <span class="ic ic-copy" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></span>
           <span class="ic ic-ok" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span>
-          <code>conda install</code>
+          <code>conda create</code>
         </button>
       </div>
       <div class="hstats">
@@ -175,13 +175,21 @@
       <section class="panel">
         <div class="panel__head"><h2>Install &amp; plot</h2></div>
         <div class="panel__body">
-          <pre class="code"><span class="c"># from the zhou-lab conda channel</span>
-conda install -c zhou-lab -c conda-forge cinderplot
+          <pre class="code"><span class="c"># from the zhou-lab conda channel, in its own env</span>
+conda create -n cinderplot -c zhou-lab -c conda-forge cinderplot
+conda activate cinderplot
+
+<span class="c"># example data: R's mtcars as a CSV</span>
+curl -LO https://raw.githubusercontent.com/zhou-lab/cinderplot-examples/main/data/mtcars.csv
 
 <span class="c"># plot straight from a CSV</span>
-cinderplot 'data.csv
+cinderplot 'mtcars.csv
   + aes(hp, mpg, colour=factor(cyl))
-  + geom_point()' -o plot.pdf</pre>
+  + geom_point()' -o plot.pdf
+
+<span class="c"># or build from source (C11, Cairo, pkg-config)</span>
+git clone https://github.com/zhou-lab/cinderplot &amp;&amp; cd cinderplot
+make &amp;&amp; make install PREFIX=$HOME/.local</pre>
         </div>
       </section>
       <section class="panel">
@@ -190,7 +198,7 @@ cinderplot 'data.csv
           <ul class="feat">
             <li><span class="d"></span><div><b>Small &amp; fast.</b> <span>One C11 binary, Cairo output. Milliseconds per figure, no runtime.</span></div></li>
             <li><span class="d"></span><div><b>Familiar grammar.</b> <span>aes, geoms, scales, legends and themes inspired by ggplot2 — reproduces <code>theme_gray</code> by default, with <code>theme_bw</code>/<code>minimal</code>/<code>classic</code>/<code>void</code> and more.</span></div></li>
-            <li><span class="d"></span><div><b>Vector or raster.</b> <span>PDF, SVG or PNG chosen by the output file extension (<code>--dpi</code> for PNG). Publication-ready.</span></div></li>
+            <li><span class="d"></span><div><b>Vector or raster.</b> <span>PDF, SVG or PNG chosen by the output file extension (<code>--dpi</code> for PNG, default 96). Publication-ready.</span></div></li>
           </ul>
         </div>
       </section>

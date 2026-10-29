@@ -38,8 +38,9 @@ PREVIEW  = os.environ.get("CINDERPLOT_PREVIEW", str(HERE / "_preview.html"))
 # Reference genome annotation (cytoband, seqinfo, bgzip+tabix gene models) is
 # read straight from the local genomes repo — cinderplot decompresses gzip and
 # region-queries the tabix index in memory, so no flattened copies live in
-# data/. Override the location with $CINDERPLOT_GENOMES.
-GENOMES  = os.environ.get("CINDERPLOT_GENOMES", os.path.expanduser("~/repo/genomes/hg38"))
+# data/. The default is a zhou-lab/genomes checkout beside this repo, as for
+# the examples; override the location with $CINDERPLOT_GENOMES.
+GENOMES  = os.environ.get("CINDERPLOT_GENOMES", str(REPO.parent / "genomes" / "hg38"))
 
 # Gallery figures grouped into sections. Each section renders as a full-width
 # separator line + heading + its figure grid. Add future sections (heatmaps,
@@ -279,7 +280,8 @@ DATASETS = [
 # figures rendered at a non-default size (WxH inches); genome plots are wide.
 # k562cnv is grammar mode (wide whole-genome aspect) so it needs an explicit
 # size; the heatmap and region (track) cards auto-fit from their content.
-SIZES = {"k562cnv": "12x3.6"}
+SIZES = {"k562cnv": "12x3.6",
+         "tree": "x16"}    # a phylogram's node labels need more than one text row
 # figures whose gallery card spans the full row (wide banners).
 WIDE = set()   # no full-width cards — every figure sits in a normal grid cell
 # Hybrid vector/raster: every card ships as SVG unless its rendered SVG is
@@ -411,7 +413,9 @@ ZOOM_SVG = ('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-w
 def card_html(i, slug, title, cp, rc, src):
     """One figure card. i is the global 1-based index (also shown in the caption
     and used as the zoom button's 0-based data-i)."""
-    out_line = f"  -o out.{cp_ext(slug)}" + (f" --size {SIZES[slug]}" if slug in SIZES else "")
+    ext = cp_ext(slug)
+    out_line = (f"  -o {slug}.{ext}" + (f" --size {SIZES[slug]}" if slug in SIZES else "")
+                + (" --dpi 200" if ext == "png" else ""))   # what render() used
     # Render uses the absolute genomes-repo path; the shown command abbreviates
     # it to hg38/… so the published HTML carries no local home directory.
     shown = cp.replace(GENOMES, "hg38")
@@ -503,6 +507,14 @@ STYLE = """<style>
   .divider .d__n{font-family:var(--head);font-weight:600;font-size:.64rem;color:var(--muted);
                  background:var(--bg);border:1px solid var(--line);border-radius:99px;padding:1px 8px;}
   .smallprint{color:var(--muted);font-size:.76rem;margin:24px 0 0;}
+  .getdata{border:1px solid var(--line);border-radius:var(--radius);background:var(--bg);
+           padding:12px 16px;margin:0 0 18px;font-size:.84rem;}
+  .getdata .k{margin:0 0 4px;font-family:var(--head);font-weight:600;color:var(--ink);}
+  .getdata p{margin:0 0 8px;}
+  .getdata a{color:var(--accent);text-decoration:none;}
+  .getdata code,.getdata pre{font-family:var(--mono);color:var(--code-ink);}
+  .getdata pre{margin:0;padding:10px 12px;background:var(--bg-soft);border-radius:7px;
+               overflow-x:auto;font-size:.76rem;line-height:1.5;}
   .smallprint a{color:var(--accent);text-decoration:none;}
   .smallprint a:hover{text-decoration:underline;}
   .cell{position:relative;margin:0;cursor:pointer;}
@@ -617,6 +629,16 @@ GALLERY_BODY = """
 <main class="scroll">
   <div class="wrap">
     <div class="galtools"><button id="foldAll" class="foldbtn" type="button">Fold all</button></div>
+    <section class="getdata">
+      <p class="k">Get the data</p>
+      <p>Every command below reads <code>data/&hellip;</code> from the
+        <a href="https://github.com/zhou-lab/cinderplot-examples">cinderplot-examples</a>
+        repository, and the genome cards read <code>hg38/&hellip;</code> from
+        <a href="https://github.com/zhou-lab/genomes">zhou-lab/genomes</a>. Run them from:</p>
+      <pre>git clone https://github.com/zhou-lab/cinderplot-examples &amp;&amp; cd cinderplot-examples
+mkdir -p hg38 &amp;&amp; for f in seqinfo.tsv.gz cytoband.tsv.gz genes.bed.gz genes.bed.gz.tbi; do
+  curl -sL -o hg38/$f https://raw.githubusercontent.com/zhou-lab/genomes/main/hg38/$f; done</pre>
+    </section>
 __SECTIONS__
     <p class="smallprint">Datasets used in these examples (mtcars, quakes, diamonds, …) are available from the
       <a href="https://github.com/zhou-lab/cinderplot-examples">cinderplot-examples</a> repository.</p>
@@ -946,12 +968,12 @@ LANDING_BODY = """<main>
                 title="Copy a prompt that points your coding agent at the cinderplot reference"
                 aria-label="Copy a prompt for your coding agent"><span class="ico"></span>agent prompt</button>
         <button class="install" id="installBox" type="button"
-                data-cmd="conda install -c zhou-lab -c conda-forge cinderplot"
-                title="conda install -c zhou-lab -c conda-forge cinderplot — click to copy"
+                data-cmd="conda create -n cinderplot -c zhou-lab -c conda-forge cinderplot"
+                title="conda create -n cinderplot -c zhou-lab -c conda-forge cinderplot — click to copy"
                 aria-label="Copy install command to clipboard">
           <span class="ic ic-copy" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></span>
           <span class="ic ic-ok" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg></span>
-          <code>conda install</code>
+          <code>conda create</code>
         </button>
       </div>
       <div class="hstats">
@@ -965,13 +987,21 @@ LANDING_BODY = """<main>
       <section class="panel">
         <div class="panel__head"><h2>Install &amp; plot</h2></div>
         <div class="panel__body">
-          <pre class="code"><span class="c"># from the zhou-lab conda channel</span>
-conda install -c zhou-lab -c conda-forge cinderplot
+          <pre class="code"><span class="c"># from the zhou-lab conda channel, in its own env</span>
+conda create -n cinderplot -c zhou-lab -c conda-forge cinderplot
+conda activate cinderplot
+
+<span class="c"># example data: R's mtcars as a CSV</span>
+curl -LO https://raw.githubusercontent.com/zhou-lab/cinderplot-examples/main/data/mtcars.csv
 
 <span class="c"># plot straight from a CSV</span>
-cinderplot 'data.csv
+cinderplot 'mtcars.csv
   + aes(hp, mpg, colour=factor(cyl))
-  + geom_point()' -o plot.pdf</pre>
+  + geom_point()' -o plot.pdf
+
+<span class="c"># or build from source (C11, Cairo, pkg-config)</span>
+git clone https://github.com/zhou-lab/cinderplot &amp;&amp; cd cinderplot
+make &amp;&amp; make install PREFIX=$HOME/.local</pre>
         </div>
       </section>
       <section class="panel">
@@ -980,7 +1010,7 @@ cinderplot 'data.csv
           <ul class="feat">
             <li><span class="d"></span><div><b>Small &amp; fast.</b> <span>One C11 binary, Cairo output. Milliseconds per figure, no runtime.</span></div></li>
             <li><span class="d"></span><div><b>Familiar grammar.</b> <span>aes, geoms, scales, legends and themes inspired by ggplot2 — reproduces <code>theme_gray</code> by default, with <code>theme_bw</code>/<code>minimal</code>/<code>classic</code>/<code>void</code> and more.</span></div></li>
-            <li><span class="d"></span><div><b>Vector or raster.</b> <span>PDF, SVG or PNG chosen by the output file extension (<code>--dpi</code> for PNG). Publication-ready.</span></div></li>
+            <li><span class="d"></span><div><b>Vector or raster.</b> <span>PDF, SVG or PNG chosen by the output file extension (<code>--dpi</code> for PNG, default 96). Publication-ready.</span></div></li>
           </ul>
         </div>
       </section>

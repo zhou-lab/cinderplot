@@ -213,7 +213,10 @@ typedef struct {
 /* `backing` owns the raw file image when any COL_STR column points into it;
  * it is NULL once every column typed numeric and the image could be released.
  * String cells are borrowed slices of it, never individually allocated. */
-typedef struct { int nrow, ncol; Column *cols; char *backing; } DataFrame;
+/* header/nheader: every column name in the file, the pruned ones included,
+ * so a "column not found" error can list what the file really has. */
+typedef struct { int nrow, ncol; Column *cols; char *backing;
+                 char **header; int nheader; } DataFrame;
 
 DataFrame *df_read_csv(const char *path, char *err);
 int cp_utf8_bad_byte(const char *s);   /* -1 = valid UTF-8, else the bad byte */   /* "-" = stdin */
@@ -354,6 +357,8 @@ typedef struct {
     int color_is_fill;          /* ... written as fill= (geom_boxplot draws
                                  * fill= on the body, colour= on the chrome) */
     double bw, adjust;          /* geom_density: bandwidth (0 = nrd0) x adjust */
+    int trim;                   /* geom_density(trim=TRUE): each curve over its own
+                                 * group's range, not the x scale's (ggplot2) */
     double span;                /* geom_smooth: loess span (0 = ggplot's 0.75) */
     int se_given;               /* geom_smooth: se= was written out */
     double slope, intercept;    /* geom_abline; hline/vline store value in intercept */

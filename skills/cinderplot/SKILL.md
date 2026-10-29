@@ -16,12 +16,34 @@ Source: <https://github.com/zhou-lab/cinderplot>
 ## Install and invoke
 
 ```sh
-conda install -c zhou-lab -c conda-forge cinderplot   # or: make && make install
+conda create -n cinderplot -c zhou-lab -c conda-forge cinderplot   # its own env
+conda activate cinderplot     # (conda install ... puts it in the active env)
 
-cinderplot '<expression>' out.pdf [--size WxH] [--dpi N]
-cat data.tsv | cinderplot 'heatmap(cluster=both)' out.png    # data on stdin
-cinderplot data.csv -x hp -y mpg -c cyl -f gear out.pdf      # shortcut flags
+# or from source: a C11 compiler, Cairo and pkg-config (brew install cairo pkg-config)
+git clone https://github.com/zhou-lab/cinderplot && cd cinderplot
+make && make install PREFIX=$HOME/.local      # PREFIX defaults to /usr/local
 ```
+
+The call shape, then two runnable lines (data below):
+
+```sh
+# template: cinderplot '<expression>' out.pdf [--size WxH] [--dpi N]
+cat data/mtcars_heat.csv | cinderplot 'heatmap(cluster=both)' heat.png   # data on stdin
+cinderplot data/mtcars.csv -x hp -y mpg -c cyl -f gear flags.pdf         # shortcut flags
+```
+
+**Example data.** The blocks below that read `data/...` run from a clone of
+the examples repository, and the genome blocks read `hg38/...` from
+[zhou-lab/genomes](https://github.com/zhou-lab/genomes):
+
+```sh
+git clone https://github.com/zhou-lab/cinderplot-examples && cd cinderplot-examples
+mkdir -p hg38 && for f in seqinfo.tsv.gz cytoband.tsv.gz genes.bed.gz genes.bed.gz.tbi; do
+  curl -sL -o hg38/$f https://raw.githubusercontent.com/zhou-lab/genomes/main/hg38/$f; done
+```
+
+A block whose input is in neither place starts with a `# template:` comment
+giving that file's columns; substitute your own file.
 
 - **The output file is required** — a trailing filename or `-o FILE`. The format
   comes from the extension (`.pdf`, `.svg`, `.png`; anything else is an error,
@@ -58,7 +80,9 @@ cinderplot data.csv -x hp -y mpg -c cyl -f gear out.pdf      # shortcut flags
   white, R's `svg()` a white rect), so a figure stays readable in a
   dark-themed viewer; `--transparent` drops it. PDF keeps no ground — PDF
   viewers draw a white page.
-- `--dump-spec` prints the desugared expression without rendering.
+- `--dump-spec` prints the desugared expression. It renders as well only when
+  the output is given as `-o FILE`; a trailing positional filename is not
+  taken as the output, so nothing is written.
 - The delimiter is **sniffed from the first line** — a tab anywhere means TSV,
   otherwise CSV. The extension is ignored, except that `.gz` (gzip or bgzip) is
   decompressed.
@@ -101,16 +125,17 @@ Mixing them is an error. The distinction is the data model, not the appearance.
 ### 1. Grammar — `aes()` + `geom_*()`
 
 ```sh
-cinderplot 'sweep.csv + aes(coverage, mae, colour=model) + geom_line() + geom_point()
-  + facet_wrap(~panel, levels=c("continuous","binary")) + scale_x_log10()
-  + scale_colour_manual(values=c("#2a78d6","#eb6834"))
+cinderplot 'data/upscale_mae.csv + aes(coverage, mae, colour=model) + geom_line() + geom_point()
+  + facet_wrap(~panel, levels=c("Loyfer, continuous", "Loyfer, binary",
+                                "external, continuous", "external, binary"))
+  + scale_x_log10() + scale_colour_manual(values=c("#2a78d6","#eb6834"))
   + labs(title="MAE vs coverage", x="CpGs per cell", y="MAE") + theme_bw()' fig.pdf
 ```
 
 R's own spelling is accepted too, so a call written from ggplot2 memory runs:
 
 ```sh
-cinderplot 'ggplot("mtcars.csv", aes(hp, mpg, colour=factor(cyl))) + geom_point()' f.pdf
+cinderplot 'ggplot("data/mtcars.csv", aes(hp, mpg, colour=factor(cyl))) + geom_point()' f.pdf
 ```
 
 `data=` and `mapping=` keywords work, and a trailing `ggsave(...)` is accepted
@@ -164,7 +189,9 @@ and ignored (the output path is a command-line argument here).
   (boxplot, bar, col, histogram, density, tile), which group by colour only.
 - **geoms**: `point jitter line smooth col histogram boxplot bar segment rect
   density tile raster hline vline abline text label errorbar linerange`, plus
-  `text_repel`/`label_repel`.
+  `text_repel`/`label_repel`. A repel label that cannot be placed clear of
+  the others is dropped with a stderr warning ("N unlabeled data points (too
+  many overlaps)"), as ggrepel does, never drawn on top of another.
   Up to 8 layers.
 - `geom_errorbar([width=])` / `geom_linerange()` draw `aes(ymin=, ymax=)`
   intervals — the mean-and-CI bar chart is `aes(x=factor(g), y=m, ymin=lo,
@@ -195,7 +222,9 @@ and ignored (the output path is a command-line argument here).
   figure — `theme_*(base_line_size=)` thins only the chrome,
   `bins=` (histogram; ggplot2's default binning — right-closed bins whose
   edges sit on the (k+½)·width lattice — so counts match `ggplot_build()`),
-  `bw=`/`adjust=` (density, R's `bw.nrd0` scaled by `adjust`),
+  `bw=`/`adjust=` (density, R's `bw.nrd0` scaled by `adjust`; the curve spans
+  the x scale's data range as in ggplot2, and `trim=TRUE` stops each group's
+  curve at that group's own range),
   `nudge_x=`/`nudge_y=` (text),
   `geom_point(raster=TRUE)` — see trap 9 — and
   `geom_boxplot(outlier.shape=NA)` to hide the outlier marks when a jitter
@@ -433,7 +462,8 @@ to 6x4; an explicit `--size` is always honoured as given.
 ### 2. Heatmap — a matrix with clustering, anchor-placed objects
 
 ```sh
-cinderplot 'm.tsv + heatmap(name="m", cluster=both, rownames=right)
+# template: groups.tsv = sample, diagnosis (one row per heatmap row name)
+cinderplot 'data/mtcars_heat.csv + heatmap(name="m", cluster=both, rownames=right)
   + dendrogram(top_of("m"))
   + annotation("groups.tsv", column="diagnosis", left_of("m"), name="dx")
   + dendrogram(left_of("dx"))
@@ -627,7 +657,7 @@ facets or continuous axes rather than clustering and anchor-placed objects.
 ### 3. Newick tree — a hierarchy you already have
 
 ```sh
-cinderplot 'taxonomy.tre + geom_tree() + geom_tiplab() + geom_nodelab()' tree.pdf
+cinderplot 'data/celltype68.tre + geom_tree() + geom_tiplab() + geom_nodelab()' tree.pdf
 ```
 
 Input is **Newick**, not a table: `((a,b)AB,(c,d)CD)root;`. `[...]` comments
@@ -652,9 +682,10 @@ is the key, `colour=` names the mapped column, and a discrete column gets a key
 while a numeric one gets a colourbar:
 
 ```sh
-cinderplot 'tax.tre + geom_tree() + geom_tiplab()
+# template: levels.tsv = node, level; acc.tsv = tip, accuracy (node/tip names)
+cinderplot 'data/celltype68.tre + geom_tree() + geom_tiplab()
   + geom_nodepoint(data="levels.tsv", colour=level)' out.pdf      # internal nodes
-cinderplot 'tax.tre + geom_tree()
+cinderplot 'data/celltype68.tre + geom_tree()
   + geom_tiplab(data="acc.tsv", colour=accuracy)' out.pdf         # colour the labels
 ```
 
@@ -684,8 +715,8 @@ them against `ape` before generating a table in R.
 
 ```sh
 cinderplot 'region("chr20:44616522-44655233")
-  + cytoband("cytoband.tsv.gz", height=0.5) + genes("genes.bed.gz", height=1.5)
-  + matrix("betas_long.tsv", name="b", cluster=samples, rownames=off,
+  + cytoband("hg38/cytoband.tsv.gz", height=0.5) + genes("hg38/genes.bed.gz", height=1.5)
+  + matrix("data/region_betas_long.tsv", name="b", cluster=samples, rownames=off,
            colnames=off, height=10)' locus.pdf
 ```
 
@@ -748,7 +779,9 @@ has `background=` or NA cells, labelled by `legend(missing="Missing")` (default
 `NA`; `missing=none` drops it):
 
 ```sh
-cinderplot 'regions("windows.bed") + genes("genes.bed.gz", height=0.8)
+# template: windows.bed = chrom, start, end[, name];
+#           calls_long.tsv = chrom, beg, end, value (0/1), sample ("group | label")
+cinderplot 'regions("windows.bed") + genes("hg38/genes.bed.gz", height=0.8)
   + matrix("calls_long.tsv", name="m", x=genomic, bar=8, background="#bdbdbd",
            rowgroup=" | ", cluster=none, discrete=TRUE, height=3.2)
   + scale_fill_manual(values=c("0"="#4575b4", "1"="#d73027"),
@@ -766,7 +799,8 @@ shows as several runs rather than being silently merged. A name without the
 separator keeps its whole label and forms no group.
 
 ```sh
-cinderplot 'region("chr1:202004435-202019137") + genes("genes.bed.gz", height=0.6)
+# template: betas_long.tsv = chrom, beg, end, beta, sample ("group | label")
+cinderplot 'region("chr1:202004435-202019137") + genes("hg38/genes.bed.gz", height=0.6)
   + matrix("betas_long.tsv", x=genomic, rowgroup=" | ", cluster=none, height=5)' locus.pdf
 ```
 
@@ -812,6 +846,7 @@ forms:
   errors naming it and listing the sheet's columns.
 
 ```sh
+# template: betas_long.tsv = chrom, beg, end, beta, sample ("group | label")
 # single band, band-only (rowgroup path)
 printf 'group\tcolour\nNeuron\t#d62728\nHepatocyte\tsteelblue\n' > colours.tsv
 cinderplot 'region("chr1:202004435-202019137")
@@ -890,13 +925,16 @@ pins the bar scale; a value outside it is clipped to the strip. `smooth=` and
 `points=` belong to the default `style="line"` and are refused with bars.
 
 ```sh
-cinderplot 'region("chr11:118885846-118886346") + genes("genes.bed", height=1)
+# template: betas_long.tsv = chrom, beg, end, value, sample, series (focal/other)
+cinderplot 'region("chr11:118885846-118886346") + genes("hg38/genes.bed.gz", height=1)
   + signal("betas_long.tsv", style="bars", rowgroup=" | ", ylim=c(0, 1), height=8,
            colour=c(focal="#E8341C", other="#2F6FE4"))' focal.svg
 ```
 
 ```sh
-cinderplot 'regions("windows.bed") + genes("genes.bed.gz", height=0.8)
+# template: windows.bed = chrom, start, end[, name]; calls_long.tsv = chrom, beg,
+#   end, value, sample; betas_long.tsv = chrom, beg, end, beta, sample, series
+cinderplot 'regions("windows.bed") + genes("hg38/genes.bed.gz", height=0.8)
   + matrix("calls_long.tsv", x=genomic, rowgroup=" | ", cluster=none, colnames=off, height=3)
   + signal("betas_long.tsv", height=2.5, smooth=0.25, points=on, ylim=c(0, 1),
            colour=c("Ground Truth"="#000000", "Reconstruction 1"="#e69f00"))' fig.pdf
@@ -912,8 +950,9 @@ its own panel with a real gap between them, sharing the sample rows, colour
 scale and legend:
 
 ```sh
-cinderplot 'regions("windows.bed") + genes("genes.bed.gz", height=1.4)
-  + matrix("betas_long.tsv", name="b", cluster=samples, colnames=off, height=9)' multi.pdf
+cinderplot 'regions("data/ada_windows.bed") + genes("hg38/genes.bed.gz", height=1.4)
+  + matrix("data/region_betas_long.tsv", name="b", cluster=samples, colnames=off,
+           height=9)' multi.pdf
 ```
 
 `windows.bed` is `chrom start end [name]`; the optional name titles the panel.
@@ -926,6 +965,7 @@ Supported inside `regions()` so far: `matrix()`, `genes()`, `interval()`,
 sample row and genomic span rather than row and column:
 
 ```sh
+# template: betas_long.tsv = chrom, beg, end, beta, sample (sample RCC-KI258T)
 cinderplot 'region("chr10:131089928-131099667")
   + matrix("betas_long.tsv", name="beta", cluster=none, height=5)
   + highlight(name="beta", row="RCC-KI258T", region="chr10:131092575-131093386",
@@ -951,8 +991,9 @@ sample row is an error.
 ### 5. Chord diagram — circlize's chordDiagram() defaults, its own mode
 
 ```sh
-cinderplot 'links.csv + chord([gap=2][, alpha=0.6])
-  + scale_fill_manual(values=c("LIHC"="#1b9e77", ...))' out.pdf --size 6x6
+cinderplot 'data/chord_flows.csv + chord(gap=2, alpha=0.6)
+  + scale_fill_manual(values=c(Astro="#1b9e77", Endo="#d95f02", Micro="#7570b3",
+                               Neuron="#e7298a", OPC="#66a61e"))' chord.pdf --size 6x6
 ```
 
 Input is a long (from, to, value) table (`from=`/`to=`/`value=` name other
@@ -973,6 +1014,7 @@ circlize's scaling options are not implemented.
 ### 6. Venn diagram — regions that list their items, its own mode
 
 ```sh
+# template: membership.tsv = item, set, n, colour (one row per membership)
 cinderplot 'venn("membership.tsv", item=item, set=set, n=n, colour=colour,
                  sets=c("Array","Sequencing"), set_colours=c("#3465a8","#3a7d3a"),
                  subtitle=c("EPICv2 · {k} cell types · {n} samples", "EM-seq · {k} cell types · {n} samples"),
@@ -1023,7 +1065,8 @@ Four or more sets are refused.
 
 ### 7. UpSet plot — intersection bars over a membership matrix, its own mode
 
-```
+```sh
+printf 'pattern\tset\tn\tdirection\nA&B\tA\t30\thypo\nA&B\tB\t30\thypo\nA\tA\t12\thyper\nB\tB\t20\thypo\n' > patterns.tsv
 cinderplot 'patterns.tsv + upset(intersection=pattern, set=set, n=n, fill=direction)
   + scale_fill_manual(values=c(hypo="#2C7FB8", hyper="#D95F0E"))' -o u.svg --size 6x4
 ```

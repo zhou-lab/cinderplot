@@ -62,6 +62,14 @@
   .divider .d__n{font-family:var(--head);font-weight:600;font-size:.64rem;color:var(--muted);
                  background:var(--bg);border:1px solid var(--line);border-radius:99px;padding:1px 8px;}
   .smallprint{color:var(--muted);font-size:.76rem;margin:24px 0 0;}
+  .getdata{border:1px solid var(--line);border-radius:var(--radius);background:var(--bg);
+           padding:12px 16px;margin:0 0 18px;font-size:.84rem;}
+  .getdata .k{margin:0 0 4px;font-family:var(--head);font-weight:600;color:var(--ink);}
+  .getdata p{margin:0 0 8px;}
+  .getdata a{color:var(--accent);text-decoration:none;}
+  .getdata code,.getdata pre{font-family:var(--mono);color:var(--code-ink);}
+  .getdata pre{margin:0;padding:10px 12px;background:var(--bg-soft);border-radius:7px;
+               overflow-x:auto;font-size:.76rem;line-height:1.5;}
   .smallprint a{color:var(--accent);text-decoration:none;}
   .smallprint a:hover{text-decoration:underline;}
   .cell{position:relative;margin:0;cursor:pointer;}
@@ -171,6 +179,16 @@
 <main class="scroll">
   <div class="wrap">
     <div class="galtools"><button id="foldAll" class="foldbtn" type="button">Fold all</button></div>
+    <section class="getdata">
+      <p class="k">Get the data</p>
+      <p>Every command below reads <code>data/&hellip;</code> from the
+        <a href="https://github.com/zhou-lab/cinderplot-examples">cinderplot-examples</a>
+        repository, and the genome cards read <code>hg38/&hellip;</code> from
+        <a href="https://github.com/zhou-lab/genomes">zhou-lab/genomes</a>. Run them from:</p>
+      <pre>git clone https://github.com/zhou-lab/cinderplot-examples &amp;&amp; cd cinderplot-examples
+mkdir -p hg38 &amp;&amp; for f in seqinfo.tsv.gz cytoband.tsv.gz genes.bed.gz genes.bed.gz.tbi; do
+  curl -sL -o hg38/$f https://raw.githubusercontent.com/zhou-lab/genomes/main/hg38/$f; done</pre>
+    </section>
     <div class="stream">
       <div class="divider" role="button" tabindex="0" aria-expanded="true"><span class="caret" aria-hidden="true">&#9656;</span><span class="d__label">Scatterplots</span><span class="d__n">5</span></div>
         <figure class="cell" tabindex="0" role="button" aria-label="Figure 1: Colour by group — show code" data-title="1 · Colour by group">
@@ -180,7 +198,7 @@
             <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/mtcars.csv
   + aes(wt, mpg, colour=factor(cyl))
   + geom_point()&#x27; \
-  -o out.svg</pre></div>
+  -o group-cyl.svg</pre></div>
             <div class="snip"><span class="k">R</span><pre>ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) + geom_point()</pre></div>
           </template>
         </figure>
@@ -192,7 +210,7 @@
   + aes(long, lat, colour=mag)
   + geom_point()
   + scale_colour_gradient(low=&quot;#132b43&quot;, high=&quot;#56b1f7&quot;)&#x27; \
-  -o out.svg</pre></div>
+  -o quakes.svg</pre></div>
             <div class="snip"><span class="k">R</span><pre>ggplot(quakes, aes(long, lat, colour = mag)) + geom_point() +
   scale_colour_gradient(low = &quot;#132b43&quot;, high = &quot;#56b1f7&quot;)</pre></div>
           </template>
@@ -204,7 +222,7 @@
             <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/diamonds_sample.csv
   + aes(carat, price, colour=cut)
   + geom_point()&#x27; \
-  -o out.png</pre></div>
+  -o diamonds.png --dpi 200</pre></div>
             <div class="snip"><span class="k">R</span><pre># diamonds, a 2000-row sample
 ggplot(diamonds, aes(carat, price, colour = cut)) + geom_point()</pre></div>
           </template>
@@ -218,7 +236,7 @@ ggplot(diamonds, aes(carat, price, colour = cut)) + geom_point()</pre></div>
   + geom_point()
   + scale_x_log10(limits=c(10,1000))
   + ylim(0, 50)&#x27; \
-  -o out.svg</pre></div>
+  -o logx.svg</pre></div>
             <div class="snip"><span class="k">R</span><pre>ggplot(mtcars, aes(hp, mpg)) + geom_point() +
   scale_x_log10(breaks = trans_breaks(&quot;log10&quot;, function(x) 10^x),
                 labels = trans_format(&quot;log10&quot;, math_format(10^.x)),
@@ -234,7 +252,7 @@ ggplot(diamonds, aes(carat, price, colour = cut)) + geom_point()</pre></div>
   + aes(waiting, eruptions)
   + geom_point()
   + geom_smooth(se=FALSE)&#x27; \
-  -o out.svg</pre></div>
+  -o smooth.svg</pre></div>
             <div class="snip"><span class="k">R</span><pre>ggplot(faithful, aes(waiting, eruptions)) + geom_point() +
   geom_smooth(se = FALSE)</pre></div>
           </template>
@@ -249,7 +267,7 @@ ggplot(diamonds, aes(carat, price, colour = cut)) + geom_point()</pre></div>
   + geom_point()
   + geom_abline(slope=-5, intercept=37, color=&quot;#c0392b&quot;)
   + geom_hline(yintercept=20, color=&quot;#7f8c8d&quot;)&#x27; \
-  -o out.svg</pre></div>
+  -o reflines.svg</pre></div>
             <div class="snip"><span class="k">R</span><pre>ggplot(mtcars, aes(wt, mpg)) + geom_point() +
   geom_abline(slope = -5, intercept = 37, colour = &quot;#c0392b&quot;) +
   geom_hline(yintercept = 20, colour = &quot;#7f8c8d&quot;)</pre></div>
@@ -263,7 +281,7 @@ ggplot(diamonds, aes(carat, price, colour = cut)) + geom_point()</pre></div>
   + aes(wt, mpg, label=model)
   + geom_point()
   + geom_text_repel(size=2.6)&#x27; \
-  -o out.svg</pre></div>
+  -o textlabels.svg</pre></div>
             <div class="snip"><span class="k">R</span><pre># mtcars model names, ggrepel-style placement
 library(ggrepel)
 ggplot(mtcars, aes(wt, mpg, label = rownames(mtcars))) +
@@ -278,7 +296,7 @@ ggplot(mtcars, aes(wt, mpg, label = rownames(mtcars))) +
   + aes(wt, mpg, colour=factor(cyl))
   + geom_point()
   + scale_colour_manual(values=c(&quot;4&quot;=&quot;#1b9e77&quot;,&quot;6&quot;=&quot;#d95f02&quot;,&quot;8&quot;=&quot;#7570b3&quot;))&#x27; \
-  -o out.svg</pre></div>
+  -o manualcol.svg</pre></div>
             <div class="snip"><span class="k">R</span><pre>ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) + geom_point() +
   scale_colour_manual(values = c(&quot;4&quot;=&quot;#1b9e77&quot;,&quot;6&quot;=&quot;#d95f02&quot;,&quot;8&quot;=&quot;#7570b3&quot;))</pre></div>
           </template>
@@ -291,7 +309,7 @@ ggplot(mtcars, aes(wt, mpg, label = rownames(mtcars))) +
   + aes(hp, mpg, colour=factor(cyl))
   + geom_point()
   + labs(title=&quot;Fuel economy&quot;, subtitle=&quot;lower is thirstier&quot;, caption=&quot;source: mtcars&quot;, colour=&quot;cylinders&quot;)&#x27; \
-  -o out.svg</pre></div>
+  -o labs.svg</pre></div>
             <div class="snip"><span class="k">R</span><pre>ggplot(mtcars, aes(hp, mpg, colour = factor(cyl))) + geom_point() +
   labs(title = &quot;Fuel economy&quot;, subtitle = &quot;lower is thirstier&quot;,
        caption = &quot;source: mtcars&quot;, colour = &quot;cylinders&quot;)</pre></div>
@@ -306,7 +324,7 @@ ggplot(mtcars, aes(wt, mpg, label = rownames(mtcars))) +
   + aes(beta)
   + geom_density()
   + scale_x_continuous(labels=percent)&#x27; \
-  -o out.svg</pre></div>
+  -o density.svg</pre></div>
             <div class="snip"><span class="k">R</span><pre># GM12878 methylation betas (bimodal)
 ggplot(betas, aes(beta)) + geom_density() +
   scale_x_continuous(labels = scales::percent)</pre></div>
@@ -319,7 +337,7 @@ ggplot(betas, aes(beta)) + geom_density() +
             <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/iris.csv
   + aes(x=Species, y=Petal.Length, fill=Species)
   + geom_boxplot()&#x27; \
-  -o out.svg</pre></div>
+  -o boxplot.svg</pre></div>
             <div class="snip"><span class="k">R</span><pre>ggplot(iris, aes(Species, Petal.Length, fill = Species)) + geom_boxplot()</pre></div>
           </template>
         </figure>
@@ -336,7 +354,7 @@ ggplot(betas, aes(beta)) + geom_density() +
   + scale_x_log10()
   + scale_colour_manual(values=c(&quot;#2a78d6&quot;,&quot;#eb6834&quot;))
   + labs(x=&quot;observed CpGs per cell&quot;, y=&quot;MAE&quot;)&#x27; \
-  -o out.svg</pre></div>
+  -o facets.svg</pre></div>
             <div class="snip"><span class="k">R</span><pre># panel order is set by the factor levels, not alphabetical
 ggplot(transform(upscale, panel = factor(panel,
          levels = c(&quot;Loyfer, continuous&quot;, &quot;external, continuous&quot;,
@@ -360,7 +378,7 @@ ggplot(transform(upscale, panel = factor(panel,
   + dendrogram(left_of(&quot;cyl&quot;))
   + legend(right_of(&quot;m&quot;))
   + scale_fill_gradient2(low=&quot;#2166ac&quot;, mid=&quot;#f7f7f7&quot;, high=&quot;#b2182b&quot;)&#x27; \
-  -o out.svg</pre></div>
+  -o heatmap.svg</pre></div>
             <div class="snip"><span class="k">R</span><pre># mtcars, z-scored features (ComplexHeatmap)
 library(ComplexHeatmap)
 m &lt;- scale(as.matrix(mtcars[, c(&quot;mpg&quot;,&quot;disp&quot;,&quot;hp&quot;,&quot;drat&quot;,&quot;wt&quot;,&quot;qsec&quot;,&quot;carb&quot;)]))
@@ -381,7 +399,7 @@ Heatmap(m, name = &quot;z&quot;, cluster_rows = TRUE, cluster_columns = TRUE,
   + scale_colour_gradient2(low=&quot;#3b4cc0&quot;, mid=&quot;#dcdcdc&quot;, high=&quot;#b40426&quot;, midpoint=0, limits=c(-0.3,0.3))
   + ideogram(&quot;hg38/cytoband.tsv.gz&quot;)
   + labs(title=&quot;K562 copy number&quot;, y=&quot;log2 ratio&quot;)&#x27; \
-  -o out.png --size 12x3.6</pre></div>
+  -o k562cnv.png --size 12x3.6 --dpi 200</pre></div>
             <div class="snip"><span class="k">R</span><pre># K562 copy number, EPICv2 (sesame)
 library(sesame)
 visualizeSegments(cnv)  # bins + CBS segments + ideogram, whole-genome x</pre></div>
@@ -394,7 +412,7 @@ visualizeSegments(cnv)  # bins + CBS segments + ideogram, whole-genome x</pre></
             <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;regions(&quot;data/ada_windows.bed&quot;)
   + genes(&quot;hg38/genes.bed.gz&quot;, height=1.4)
   + matrix(&quot;data/region_betas_long.tsv&quot;, name=&quot;betas&quot;, cluster=samples, rownames=off, colnames=off, height=9)&#x27; \
-  -o out.svg</pre></div>
+  -o regions.svg</pre></div>
             <div class="snip"><span class="k">R</span><pre># Gviz draws one region per plotTracks() call, so several loci means
 # several figures stitched together outside R -- losing the shared
 # sample order, the common colour scale and the single axis.
@@ -411,7 +429,7 @@ for (w in windows) plotTracks(tracks, chromosome = w$chr,
   + cytoband(&quot;hg38/cytoband.tsv.gz&quot;, height=0.5)
   + genes(&quot;hg38/genes.bed.gz&quot;, height=1.5)
   + matrix(&quot;data/region_betas_long.tsv&quot;, name=&quot;betas&quot;, cluster=samples, rownames=off, height=10)&#x27; \
-  -o out.svg</pre></div>
+  -o region.svg</pre></div>
             <div class="snip"><span class="k">R</span><pre># ADA locus methylation, HM450 (sesame)
 library(sesame)
 visualizeRegion(&quot;chr20&quot;, 44616522, 44655233, betas,
@@ -426,7 +444,7 @@ visualizeRegion(&quot;chr20&quot;, 44616522, 44655233, betas,
   + cytoband(&quot;hg38/cytoband.tsv.gz&quot;, height=0.5)
   + genes(&quot;hg38/genes.bed.gz&quot;, height=1.5)
   + matrix(&quot;data/region_betas_grouped.tsv&quot;, name=&quot;betas&quot;, cluster=none, rownames=off, rowmeta=&quot;data/region_betas_samples.tsv&quot;, rowbar=&quot;condition&quot;, rowcolour=&quot;data/region_betas_rowcol.tsv&quot;, height=10)&#x27; \
-  -o out.svg</pre></div>
+  -o metabands.svg</pre></div>
             <div class="snip"><span class="k">R</span><pre># Rows grouped by a sample-metadata column and labelled with a coloured
 # band -- Gviz/ComplexHeatmap need separate annotation objects wired by
 # hand; here it is one matrix() with rowmeta=/rowbar=.</pre></div>
@@ -441,7 +459,7 @@ visualizeRegion(&quot;chr20&quot;, 44616522, 44655233, betas,
   + geom_tree()
   + geom_tiplab()
   + geom_nodelab()&#x27; \
-  -o out.svg</pre></div>
+  -o tree.svg --size x16</pre></div>
             <div class="snip"><span class="k">R</span><pre># 68 cell types, four levels; internal nodes carry the level names
 library(ggtree)   # Bioconductor, and it needs ape for the parse
 tr &lt;- ape::read.tree(&quot;celltype68.tre&quot;)
@@ -459,7 +477,7 @@ ggtree(tr) + geom_tiplab() + geom_nodelab()</pre></div>
   + geom_point()
   + coord_polar()
   + ylim(0,1)&#x27; \
-  -o out.svg</pre></div>
+  -o radar.svg</pre></div>
 
           </template>
         </figure>
@@ -469,7 +487,7 @@ ggtree(tr) + geom_tiplab() + geom_nodelab()</pre></div>
           <template class="code">
             <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/chord_flows.csv
   + chord()&#x27; \
-  -o out.svg</pre></div>
+  -o chord.svg</pre></div>
 
           </template>
         </figure>
@@ -481,7 +499,7 @@ ggtree(tr) + geom_tiplab() + geom_nodelab()</pre></div>
             <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/mtcars_heat.csv
   + heatmap(name=&quot;m&quot;, cluster=none, rownames=none)
   + scale_fill_viridis()&#x27; \
-  -o out.svg</pre></div>
+  -o pal-viridis.svg</pre></div>
 
           </template>
         </figure>
@@ -492,7 +510,7 @@ ggtree(tr) + geom_tiplab() + geom_nodelab()</pre></div>
             <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/mtcars_heat.csv
   + heatmap(name=&quot;m&quot;, cluster=none, rownames=none)
   + scale_fill_magma()&#x27; \
-  -o out.svg</pre></div>
+  -o pal-magma.svg</pre></div>
 
           </template>
         </figure>
@@ -503,7 +521,7 @@ ggtree(tr) + geom_tiplab() + geom_nodelab()</pre></div>
             <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/mtcars_heat.csv
   + heatmap(name=&quot;m&quot;, cluster=none, rownames=none)
   + scale_fill_inferno()&#x27; \
-  -o out.svg</pre></div>
+  -o pal-inferno.svg</pre></div>
 
           </template>
         </figure>
@@ -514,7 +532,7 @@ ggtree(tr) + geom_tiplab() + geom_nodelab()</pre></div>
             <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/mtcars_heat.csv
   + heatmap(name=&quot;m&quot;, cluster=none, rownames=none)
   + scale_fill_plasma()&#x27; \
-  -o out.svg</pre></div>
+  -o pal-plasma.svg</pre></div>
 
           </template>
         </figure>
@@ -525,7 +543,7 @@ ggtree(tr) + geom_tiplab() + geom_nodelab()</pre></div>
             <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/mtcars_heat.csv
   + heatmap(name=&quot;m&quot;, cluster=none, rownames=none)
   + scale_fill_cividis()&#x27; \
-  -o out.svg</pre></div>
+  -o pal-cividis.svg</pre></div>
 
           </template>
         </figure>
@@ -536,7 +554,7 @@ ggtree(tr) + geom_tiplab() + geom_nodelab()</pre></div>
             <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/mtcars_heat.csv
   + heatmap(name=&quot;m&quot;, cluster=none, rownames=none)
   + scale_fill_rocket()&#x27; \
-  -o out.svg</pre></div>
+  -o pal-rocket.svg</pre></div>
 
           </template>
         </figure>
@@ -547,7 +565,7 @@ ggtree(tr) + geom_tiplab() + geom_nodelab()</pre></div>
             <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/mtcars_heat.csv
   + heatmap(name=&quot;m&quot;, cluster=none, rownames=none)
   + scale_fill_mako()&#x27; \
-  -o out.svg</pre></div>
+  -o pal-mako.svg</pre></div>
 
           </template>
         </figure>
@@ -558,7 +576,7 @@ ggtree(tr) + geom_tiplab() + geom_nodelab()</pre></div>
             <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/mtcars_heat.csv
   + heatmap(name=&quot;m&quot;, cluster=none, rownames=none)
   + scale_fill_parula()&#x27; \
-  -o out.svg</pre></div>
+  -o pal-parula.svg</pre></div>
 
           </template>
         </figure>
@@ -569,7 +587,7 @@ ggtree(tr) + geom_tiplab() + geom_nodelab()</pre></div>
             <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/mtcars_heat.csv
   + heatmap(name=&quot;m&quot;, cluster=none, rownames=none)
   + scale_fill_turbo()&#x27; \
-  -o out.svg</pre></div>
+  -o pal-turbo.svg</pre></div>
 
           </template>
         </figure>
@@ -580,7 +598,7 @@ ggtree(tr) + geom_tiplab() + geom_nodelab()</pre></div>
             <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/mtcars_heat.csv
   + heatmap(name=&quot;m&quot;, cluster=none, rownames=none)
   + scale_fill_coolwarm()&#x27; \
-  -o out.svg</pre></div>
+  -o pal-coolwarm.svg</pre></div>
 
           </template>
         </figure>
@@ -591,7 +609,7 @@ ggtree(tr) + geom_tiplab() + geom_nodelab()</pre></div>
             <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/mtcars_heat.csv
   + heatmap(name=&quot;m&quot;, cluster=none, rownames=none)
   + scale_fill_bwr()&#x27; \
-  -o out.svg</pre></div>
+  -o pal-bwr.svg</pre></div>
 
           </template>
         </figure>
@@ -602,7 +620,7 @@ ggtree(tr) + geom_tiplab() + geom_nodelab()</pre></div>
             <div class="snip"><span class="k">cinderplot</span><button class="copy" type="button" aria-label="Copy cinderplot command">Copy</button><pre>cinderplot &#x27;data/mtcars_heat.csv
   + heatmap(name=&quot;m&quot;, cluster=none, rownames=none)
   + scale_fill_jet()&#x27; \
-  -o out.svg</pre></div>
+  -o pal-jet.svg</pre></div>
 
           </template>
         </figure>
@@ -615,7 +633,7 @@ ggtree(tr) + geom_tiplab() + geom_nodelab()</pre></div>
   + aes(wt, mpg, colour=factor(cyl))
   + geom_point()
   + theme_bw()&#x27; \
-  -o out.svg</pre></div>
+  -o theme-bw.svg</pre></div>
             <div class="snip"><span class="k">R</span><pre>ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) + geom_point() + theme_bw()</pre></div>
           </template>
         </figure>
@@ -627,7 +645,7 @@ ggtree(tr) + geom_tiplab() + geom_nodelab()</pre></div>
   + aes(wt, mpg, colour=factor(cyl))
   + geom_point()
   + theme_minimal()&#x27; \
-  -o out.svg</pre></div>
+  -o theme-minimal.svg</pre></div>
             <div class="snip"><span class="k">R</span><pre>ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) + geom_point() + theme_minimal()</pre></div>
           </template>
         </figure>
@@ -639,7 +657,7 @@ ggtree(tr) + geom_tiplab() + geom_nodelab()</pre></div>
   + aes(wt, mpg, colour=factor(cyl))
   + geom_point()
   + theme_classic()&#x27; \
-  -o out.svg</pre></div>
+  -o theme-classic.svg</pre></div>
             <div class="snip"><span class="k">R</span><pre>ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) + geom_point() + theme_classic()</pre></div>
           </template>
         </figure>
@@ -651,7 +669,7 @@ ggtree(tr) + geom_tiplab() + geom_nodelab()</pre></div>
   + aes(wt, mpg, colour=factor(cyl))
   + geom_point()
   + theme_void()&#x27; \
-  -o out.svg</pre></div>
+  -o theme-void.svg</pre></div>
             <div class="snip"><span class="k">R</span><pre>ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) + geom_point() + theme_void()</pre></div>
           </template>
         </figure>
@@ -663,7 +681,7 @@ ggtree(tr) + geom_tiplab() + geom_nodelab()</pre></div>
   + aes(wt, mpg, colour=factor(cyl))
   + geom_point()
   + theme_linedraw()&#x27; \
-  -o out.svg</pre></div>
+  -o theme-linedraw.svg</pre></div>
             <div class="snip"><span class="k">R</span><pre>ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) + geom_point() + theme_linedraw()</pre></div>
           </template>
         </figure>
@@ -675,7 +693,7 @@ ggtree(tr) + geom_tiplab() + geom_nodelab()</pre></div>
   + aes(wt, mpg, colour=factor(cyl))
   + geom_point()
   + theme_light()&#x27; \
-  -o out.svg</pre></div>
+  -o theme-light.svg</pre></div>
             <div class="snip"><span class="k">R</span><pre>ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) + geom_point() + theme_light()</pre></div>
           </template>
         </figure>
@@ -687,7 +705,7 @@ ggtree(tr) + geom_tiplab() + geom_nodelab()</pre></div>
   + aes(wt, mpg, colour=factor(cyl))
   + geom_point()
   + theme_dark()&#x27; \
-  -o out.svg</pre></div>
+  -o theme-dark.svg</pre></div>
             <div class="snip"><span class="k">R</span><pre>ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) + geom_point() + theme_dark()</pre></div>
           </template>
         </figure>
@@ -699,7 +717,7 @@ ggtree(tr) + geom_tiplab() + geom_nodelab()</pre></div>
   + aes(wt, mpg, colour=factor(cyl))
   + geom_point()
   + theme_few()&#x27; \
-  -o out.svg</pre></div>
+  -o theme-few.svg</pre></div>
             <div class="snip"><span class="k">R</span><pre># requires ggthemes
 ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) + geom_point() + theme_few()</pre></div>
           </template>

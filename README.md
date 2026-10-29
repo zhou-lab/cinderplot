@@ -28,11 +28,35 @@ replacement.
 
 ## Install
 
-From the `zhou-lab` conda channel:
+From the `zhou-lab` conda channel, into an environment of its own (the package
+brings a full Cairo/fontconfig stack you may not want in `base`):
 
 ```sh
-conda install -c zhou-lab -c conda-forge cinderplot
+conda create -n cinderplot -c zhou-lab -c conda-forge cinderplot
+conda activate cinderplot
 ```
+
+`conda install -c zhou-lab -c conda-forge cinderplot` puts it in the active
+environment instead.
+
+From source, with a C11 compiler, Cairo and pkg-config (`brew install cairo
+pkg-config` on macOS):
+
+```sh
+git clone https://github.com/zhou-lab/cinderplot && cd cinderplot
+make && make install PREFIX=$HOME/.local      # PREFIX defaults to /usr/local
+```
+
+## First plot
+
+```sh
+curl -LO https://raw.githubusercontent.com/zhou-lab/cinderplot-examples/main/data/mtcars.csv
+cinderplot 'mtcars.csv + aes(hp, mpg, colour=factor(cyl)) + geom_point()' -o plot.pdf
+```
+
+The gallery's examples read their data from
+[cinderplot-examples](https://github.com/zhou-lab/cinderplot-examples); the
+genome examples also use [zhou-lab/genomes](https://github.com/zhou-lab/genomes).
 
 ## Using it from a coding agent
 
