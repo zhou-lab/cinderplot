@@ -273,6 +273,18 @@ and ignored (the output path is a command-line argument here).
   horizontally up to 24 spokes and radially past that; wedge names sit
   outside them; `theme_void()` drops the spoke names. A layer `colour=`
   outlines each tile. Tiles only: no other layer, no facets.
+  Ring and spoke order follow their factor levels, not the layer order: set
+  them with `y=factor(ring, levels=c(...))` and `x=factor(subtype,
+  levels=c(...))` (spokes in wedge order, then e.g. by a value). With ring
+  files, `levels=` is checked against the union of the files, so the first
+  file need not carry every ring. `scale_x_discrete(breaks=c("A", "B"))`
+  names only those spokes (225 radial names are unreadable), and
+  `labels=c(B="Bee")` renames them. `theme(axis.text=element_text(colour=
+  "black"))` colours the spoke, ring and wedge names (default theme grey),
+  and `element_blank()` drops them. The ring names sit in the gap at
+  `start=`; when one is wider than the gap there, a warning names the
+  `gap=` that holds it. The default theme keeps ggplot2's grey panel behind
+  the circle; `theme_minimal()` or `theme_void()` clear it.
 - **Rings on different scales, ggnewscale's way**: each ring is its own
   `geom_tile(data="ring.tsv", aes(fill=col))` layer (the file carries the
   top-level x/y/group columns too), and `new_scale_fill()` separates the
@@ -319,7 +331,10 @@ cinderplot 'dart.csv + aes(x=factor(sp), y=factor(ring), fill=v, group=grp)
   in data units; `geom_label()` and the repel geoms refuse rotation (the box does
   not rotate; repel measures unrotated extents). Tilted axis TICK labels are
   a different verb: `scale_x_discrete(angle=45)`, and crowded discrete labels
-  already auto-rotate. Marks take
+  already auto-rotate; `scale_x_discrete(breaks=c(...), labels=c(...))`
+  labels only the named levels and renames them, and
+  `theme(axis.text=element_text(colour="black"))` recolours the axis text
+  (`element_blank()` drops it). Marks take
   part in scale training, work on log axes and under coord_flip, repeat the
   verb for several, and draw OVER the geoms (a shading rect behind points is
   not expressible yet). The usual use: labelling a geom_hline() reference.

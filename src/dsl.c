@@ -216,6 +216,47 @@ static int parse_levels(P *p, char ***out, int *n) {
     return 0;
 }
 
+/* c("a"="A", "b"="B") or c("A", "B"): names NULL where none was given */
+static int parse_named_strs(P *p, char ***names, char ***vals, int *n, const char *what) {
+    skip_ws(p);
+    if (p->s[0] == 'c' && p->s[1] == '(') p->s += 2;
+    else return fail(p, "%s= expects c(...)", what);
+    int cap = 0;
+    *names = NULL; *vals = NULL; *n = 0;
+    for (;;) {
+        skip_ws(p);
+        if (*p->s == ')') { p->s++; break; }
+        /* a bare name is an identifier ending at its `=`; anything else
+         * (quoted, or a bare value) is read as a token */
+        const char *save = p->s;
+        char *a = is_quote(p) ? string_lit(p) : ident(p);
+        skip_ws(p);
+        char *nm = NULL, *v = a;
+        if (a && *p->s == '=' && p->s[1] != '=') {
+            p->s++;
+            nm = a;
+            v = raw_token(p);
+            if (!v) return fail(p, "bad value in %s=c(...)", what);
+        } else if (!a || (*p->s != ',' && *p->s != ')')) {
+            free(a);
+            p->s = save;
+            v = raw_token(p);
+            if (!v) return fail(p, "bad value in %s=c(...)", what);
+        }
+        if (*n == cap) {
+            cap = cap ? cap * 2 : 8;
+            *names = cp_xrealloc(*names, cap * sizeof(char *));
+            *vals = cp_xrealloc(*vals, cap * sizeof(char *));
+        }
+        (*names)[*n] = nm; (*vals)[*n] = v; (*n)++;
+        skip_ws(p);
+        if (*p->s == ',') { p->s++; continue; }
+        if (*p->s == ')') { p->s++; break; }
+        return fail(p, "expected , or ) in %s=c(...)", what);
+    }
+    return 0;
+}
+
 /* value in aes: IDENT or factor(IDENT[, levels=c(...)]); fills entry incl.
  * source text */
 /* The R idioms a ggplot2 habit reaches for inside aes() that have no
@@ -3096,9 +3137,17 @@ static int parse_term(P *p, PlotSpec *spec) {
                 if (!(v >= 0 && v <= 90))
                     return fail(p, "angle= must be between 0 and 90", "");
                 if (isx) spec->x_angle = v; else spec->y_angle = v;
+            } else if (isx && (!strcmp(key, "breaks") || !strcmp(key, "labels"))) {
+                int isb = key[0] == 'b';
+                free(key);
+                char **nm, **vv; int nn;
+                if (parse_named_strs(p, &nm, &vv, &nn, isb ? "breaks" : "labels")) return -1;
+                if (isb) { spec->xd_breaks = vv; spec->n_xd_breaks = nn; }
+                else { spec->xd_labels = vv; spec->xd_label_names = nm; spec->n_xd_labels = nn; }
             } else
                 return fail(p, "scale_*_discrete() option `%s` not implemented; "
-                            "supported: angle=, expand=", key);
+                            "supported: angle=, expand=, and on x breaks=, labels= "
+                            "(the coord_polar() ring plot's spoke names)", key);
             skip_ws(p);
             if (*p->s == ',') { p->s++; skip_ws(p); }
         }
@@ -3318,6 +3367,43 @@ static int parse_term(P *p, PlotSpec *spec) {
                                 "coordinates in [0, 1]", "");
                 spec->leg_ix = x2; spec->leg_iy = y2;
                 spec->legend_inside = 1;
+            } else if (!strcmp(key, "axis.text")) {
+                /* element_text(colour=) recolours the axis labels -- the ring
+                 * plot's spoke, ring and wedge names too; element_blank()
+                 * drops them, as theme_void() does */
+                char *f = ident(p);
+                if (f && !strcmp(f, "element_blank")) {
+                    free(f);
+                    if (expect(p, '(') || expect(p, ')')) return -1;
+                    spec->axis_text_blank = 1;
+                } else if (f && !strcmp(f, "element_text") && !expect(p, '(')) {
+                    free(f);
+                    skip_ws(p);
+                    while (*p->s != ')') {
+                        char *k = ident(p);
+                        if (!k || expect(p, '=')) { free(k);
+                            return fail(p, "element_text() takes key=value arguments%s", ""); }
+                        if (strcmp(k, "colour") && strcmp(k, "color")) {
+                            char msg[CP_ERRLEN];
+                            snprintf(msg, sizeof msg, "theme(axis.text=element_text(%s=)) is "
+                                     "not implemented; colour= is", k);
+                            free(k);
+                            return fail(p, "%s", msg);
+                        }
+                        free(k);
+                        char *v = string_lit(p);
+                        if (!v || parse_color(v, &spec->axis_text_col))
+                            return fail(p, "axis.text colour= expects a colour%s", "");
+                        spec->has_axis_text_col = 1;
+                        skip_ws(p);
+                        if (*p->s == ',') { p->s++; skip_ws(p); }
+                    }
+                    p->s++;
+                } else {
+                    free(f);
+                    return fail(p, "theme(axis.text=) takes element_text(colour=) or "
+                                "element_blank()%s", "");
+                }
             } else if (!strcmp(key, "strip.text") || !strcmp(key, "strip.text.x")
                        || !strcmp(key, "strip.text.y") || !strcmp(key, "legend.text")) {
                 /* element_text(size=N) in pt, or size=rel(r) of base_size;
@@ -3385,7 +3471,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                                "the rest — supported here: legend.position, "
                                "legend.position.inside, legend.key.size, "
                                "legend.key.height, legend.key.width, "
-                               "legend.key.spacing.y, legend.text, strip.text[.x|.y]", key);
+                               "legend.key.spacing.y, legend.text, strip.text[.x|.y], axis.text", key);
             skip_ws(p);
             if (*p->s == ',') { p->s++; skip_ws(p); }
         }

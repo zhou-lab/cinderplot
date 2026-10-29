@@ -579,6 +579,40 @@ static int repel_settle(RLabel *L, int n, char *drop, double pw, double ph,
     return nd;
 }
 
+/* scale_x_discrete(breaks=, labels=): what discrete x level `lev` (the i-th
+ * level) reads; NULL when breaks= leaves it unlabelled. Positional labels
+ * follow breaks= when given, else the levels. */
+static const char *xd_label(const PlotSpec *spec, const char *lev, int i) {
+    int pos = i;
+    if (spec->n_xd_breaks) {
+        pos = -1;
+        for (int b = 0; b < spec->n_xd_breaks; b++)
+            if (!strcmp(spec->xd_breaks[b], lev)) { pos = b; break; }
+        if (pos < 0) return NULL;
+    }
+    for (int k = 0; k < spec->n_xd_labels; k++) {
+        if (spec->xd_label_names[k]) {
+            if (!strcmp(spec->xd_label_names[k], lev)) return spec->xd_labels[k];
+        } else if (k == pos) return spec->xd_labels[k];
+    }
+    return lev;
+}
+
+/* factor_relevel(), but with only the wanted levels that occur in f: the ring
+ * plot's levels= names every ring, and a ring layer's own file supplies the
+ * ones the main data lacks (the union is checked against levels= later) */
+static int relevel_present(Factor *f, int nrow, char *const *want, int nwant,
+                           const char *what, char *err) {
+    char **w2 = cp_xmalloc((nwant ? nwant : 1) * sizeof(char *));
+    int m = 0;
+    for (int i = 0; i < nwant; i++)
+        for (int l = 0; l < f->nlev; l++)
+            if (!strcmp(want[i], f->levels[l])) { w2[m++] = want[i]; break; }
+    int rc = m ? factor_relevel(f, nrow, w2, m, what, err) : 0;
+    free(w2);
+    return rc;
+}
+
 /* One dartboard tile: spoke (x level), ring (y level), wedge (group level, -1
  * none), its colour and the layer it came from. */
 typedef struct { int spoke, ring, grp, layer; Col col; } DTile;
@@ -1328,9 +1362,14 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     /* discrete x when the column is a string or wrapped in factor() */
     int disc_x = (xc->type == COL_STR) || spec->x.is_factor;
     Factor *xf = disc_x ? factor_make(df, xc) : NULL;
+    int ring_files = 0;                    /* ring-plot layers with their own file */
+    for (int li = 0; li < spec->nlayers; li++)
+        if (spec->polar && spec->layers[li].type == GEOM_TILE && spec->layers[li].data)
+            ring_files = 1;
     if (xf && spec->x.nlevels
-        && factor_relevel(xf, df->nrow, spec->x.levels, spec->x.nlevels,
-                          "x", err)) return -1;
+        && (ring_files ? relevel_present(xf, df->nrow, spec->x.levels, spec->x.nlevels, "x", err)
+                       : factor_relevel(xf, df->nrow, spec->x.levels, spec->x.nlevels,
+                                        "x", err))) return -1;
     const double *xby = NULL;          /* reorder(x, by): the by column */
     if (xf && spec->x.reorder_by) {
         const Column *bc = df_col(df, spec->x.reorder_by);
@@ -1389,8 +1428,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         if (disc_y) {
             yf = factor_make(df, yc);
             if (spec->y.nlevels
-                && factor_relevel(yf, df->nrow, spec->y.levels, spec->y.nlevels,
-                                  "y", err)) return -1;
+                && (ring_files ? relevel_present(yf, df->nrow, spec->y.levels, spec->y.nlevels, "y", err)
+                               : factor_relevel(yf, df->nrow, spec->y.levels, spec->y.nlevels,
+                                                "y", err))) return -1;
             if (spec->y.reorder_by) {
                 const Column *bc = df_col(df, spec->y.reorder_by);
                 if (!bc || bc->type != COL_NUM) {
@@ -1696,8 +1736,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         }
         gf = factor_make(df, gc);
         if (spec->group.nlevels
-            && factor_relevel(gf, df->nrow, spec->group.levels,
-                              spec->group.nlevels, "group", err)) return -1;
+            && (ring_files ? relevel_present(gf, df->nrow, spec->group.levels,
+                                             spec->group.nlevels, "group", err)
+                           : factor_relevel(gf, df->nrow, spec->group.levels,
+                                            spec->group.nlevels, "group", err))) return -1;
     }
     /* aes(linetype=): a discrete column mapped to dash patterns, ggplot2's
      * linetype_pal() order, on the line geoms (line, smooth, segment). It
@@ -2744,7 +2786,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     double *gax_pos = NULL; char **gax_lab = NULL; int gax_n = 0;
     if (disc_x) {                          /* one break per category, level labels */
         nxbr = xf->nlev;
-        for (int i = 0; i < nxbr; i++) { xbr[i] = i + 1; xlabs[i] = cp_xstrdup(xf->levels[i]); }
+        for (int i = 0; i < nxbr; i++) {
+            const char *lb = xd_label(spec, xf->levels[i], i);
+            xbr[i] = i + 1; xlabs[i] = cp_xstrdup(lb ? lb : "");
+        }
     } else if (genome_x) {
         nxbr = gs->n > 1 ? gs->n - 1 : 0;  /* internal boundaries = faint gridlines */
         for (int i = 0; i < nxbr; i++) { xbr[i] = gs->off[i + 1]; xlabs[i] = cp_xstrdup(""); }
@@ -3013,7 +3058,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     for (int l = 0; l < xf->nlev; l++)
                         if (S->xmap[l] >= 0) {
                             S->xbr[S->xmap[l]] = S->xmap[l] + 1;
-                            S->xlabs[S->xmap[l]] = cp_xstrdup(xf->levels[l]);
+                            const char *lb = xd_label(spec, xf->levels[l], l);
+                            S->xlabs[S->xmap[l]] = cp_xstrdup(lb ? lb : "");
                         }
                 } else {
                     /* breaks=/labels= apply per panel: each freed panel keeps
@@ -3168,6 +3214,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     thv.grid_minor_lw *= cp_line_scale;
     thv.border_lw     *= cp_line_scale;
     thv.axis_line_lw  *= cp_line_scale;
+    if (spec->has_axis_text_col) thv.axis_text = spec->axis_text_col;   /* theme(axis.text=) */
+    if (spec->axis_text_blank) thv.axis_text_on = 0;
     const Theme *th = &thv;
 
     /* Under coord_flip the x aesthetic is drawn on the LEFT (vertical) axis and
@@ -4272,7 +4320,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             int show_x = th->axis_text_on;
             double xls = SZ_AXIS_TEXT * (k > 24 ? 0.7 : 1), maxw = 0, gw = 0;
             for (int l = 0; show_x && l < k; l++) {
-                double w = text_w(cr, xls, xlev[l]);
+                const char *lb = xd_label(spec, xlev[l], l);
+                double w = lb ? text_w(cr, xls, lb) : 0;
                 if (w > maxw) maxw = w;
             }
             for (int gi = 0; hasg && gi < ngrp; gi++) {
@@ -4316,9 +4365,11 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             }
             /* spoke names: horizontal for a few, radial past 24 */
             for (int l = 0; show_x && l < k; l++) {
+                const char *lb = xd_label(spec, xlev[l], l);
+                if (!lb || !*lb) continue;            /* breaks= left it unnamed */
                 double a = PANG(a0[l] + step / 2), sa = sin(a), ca = cos(a);
                 g = gt_add(T, G_TEXT, R, C, R, C);
-                g->str = xlev[l]; g->size = xls; g->col = th->axis_text;
+                g->str = (char *)lb; g->size = xls; g->col = th->axis_text;
                 g->va = V_INKCENTER;
                 if (k > 24) {
                     double rr = rmax + 3;
@@ -4346,15 +4397,28 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 g->hj = (1 - sa) / 2; g->va = V_INKCENTER;
             }
             /* ring names, in the gap centred on start= */
-            for (int j = 0; ngap && j < nring; j++) {
+            double need_deg = 0;
+            for (int j = 0; ngap && show_x && j < nring; j++) {
                 double rr = rin + (rmax - rin) * (j + 0.5) / nring;
                 double a = PANG(0);
+                /* the name must fit the gap's chord at its radius, or it
+                 * covers the first spokes: say what gap= would hold it */
+                double w = text_w(cr, SZ_AXIS_TEXT * 0.75, ylev[j]) + 2;
+                if (w > 2 * rr * sin(gap / 2)) {
+                    double d = w >= 2 * rr ? 180 : 2 * asin(w / (2 * rr)) * 180 / M_PI;
+                    if (d > need_deg) need_deg = d;
+                }
                 g = gt_add(T, G_TEXT, R, C, R, C);
                 g->str = ylev[j]; g->size = SZ_AXIS_TEXT * 0.75;
                 g->col = th->axis_text;
                 g->tx = cx + rr * sin(a) / panelw_pt; g->ty = cy + rr * cos(a) / panelh_pt;
                 g->hj = 0.5; g->va = V_INKCENTER;
             }
+            if (need_deg > 0)
+                fprintf(stderr, "cinderplot: warning: coord_polar(gap=%g): the ring "
+                        "names overlap the first spokes; gap=%.0f holds them (or drop "
+                        "them with theme(axis.text=element_blank()))\n",
+                        spec->polar_gap, ceil(need_deg));
 #undef PANG
             free(sg); free(ord); free(a0); free(dt); dt = NULL;
         } else if (spec->polar) {

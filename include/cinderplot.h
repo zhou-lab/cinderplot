@@ -798,6 +798,14 @@ typedef struct {
                                      * pt if > 0, rel() of base_size if < 0,
                                      * 0 = ggplot's rel(0.8) */
     double legend_text_sz;          /* theme(legend.text=element_text(size=)), same coding */
+    /* theme(axis.text=element_text(colour=)) / element_blank(): the axis
+     * label colour (and the ring plot's spoke, ring and wedge names) */
+    Col axis_text_col; int has_axis_text_col, axis_text_blank;
+    /* scale_x_discrete(breaks=c(...), labels=c(...)): which x levels are
+     * labelled, and what they read (labels named by level, or positional
+     * over breaks); the ring plot's spoke names */
+    char **xd_breaks; int n_xd_breaks;
+    char **xd_labels, **xd_label_names; int n_xd_labels;
     double key_w, key_h;            /* theme(legend.key.width/height/size=), pt;
                                      * 0 = the 17.3 default */
     double key_gap; int has_key_gap;   /* theme(legend.key.spacing.y=), pt */
