@@ -407,6 +407,11 @@ typedef struct {
     int raster;                 /* geom_point(raster=TRUE): draw the layer into an
                                  * embedded image instead of per-point vector marks
                                  * (ggrastr's idea); axes and text stay vector */
+    /* geom_tile(aes(fill=col)) / geom_tile(data=): a ring of the coord_polar()
+     * dartboard with its own fill, ggnewscale's idiom. fill_seg is how many
+     * new_scale_fill() calls came before the layer, i.e. which PlotSpec.fsegs
+     * entry scales it. */
+    char *fill_col; int fill_factor, fill_seg;
 } Layer;
 #define MAX_LAYERS 8
 
@@ -810,6 +815,17 @@ typedef struct {
     int nannos;
     FillScale fill;
     int has_fill;                   /* a scale_fill_*() was given (else default) */
+    /* new_scale_fill() (ggnewscale): the fill scale state in force before
+     * each call, then the final state, so layer i reads fsegs[layer.fill_seg].
+     * nfsegs counts the calls; fsegs holds nfsegs + 1 entries once any. */
+#define MAX_FILL_SEGS 8
+    struct FillSeg {
+        FillScale fill; int has_fill;
+        Col man[MAX_MANUAL_COLS]; char *man_names[MAX_MANUAL_COLS];
+        int n_man, has_man, identity;
+        char *title;                /* labs(fill=) given in that segment */
+    } fsegs[MAX_FILL_SEGS];
+    int nfsegs;
     /* grammar mode: continuous colour scale (scale_colour_gradient*) */
     FillScale colour_scale;
     int has_colour_scale;

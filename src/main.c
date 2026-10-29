@@ -537,7 +537,7 @@ int main(int argc, char **argv) {
      * variable, and any per-layer y override. Tell the loader, so a wide table
      * costs only the columns actually plotted. A per-layer data= file is read
      * separately and is unaffected, the filter being one-shot. */
-    char *needed[3 * MAX_LAYERS + 16];
+    char *needed[4 * MAX_LAYERS + 16];
     int nneeded = 0;
     const AesEntry *aes[] = { &spec.x, &spec.y, &spec.colour, &spec.xend,
                               &spec.yend, &spec.ymin, &spec.label, &spec.size,
@@ -555,6 +555,7 @@ int main(int argc, char **argv) {
         if (spec.layers[i].ycol) needed[nneeded++] = spec.layers[i].ycol;
         if (spec.layers[i].eb_lo) needed[nneeded++] = spec.layers[i].eb_lo;
         if (spec.layers[i].eb_hi) needed[nneeded++] = spec.layers[i].eb_hi;
+        if (spec.layers[i].fill_col) needed[nneeded++] = spec.layers[i].fill_col;
     }
     if (nneeded) cp_set_needed_cols(needed, nneeded);
 

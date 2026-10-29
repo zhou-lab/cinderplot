@@ -55,6 +55,22 @@ static char *colname(P *p) {
 
 /* TRUE/true/T/1 and FALSE/false/F/0, the same everywhere a boolean is read;
  * a quoted spelling is accepted too. Returns -1 when the token is not one. */
+/* new_scale_fill(): file the fill scale state given so far and start afresh */
+static void fillseg_snapshot(PlotSpec *spec, struct FillSeg *g) {
+    memset(g, 0, sizeof *g);
+    g->fill = spec->fill; g->has_fill = spec->has_fill;
+    if (spec->has_manual && spec->manual_fill) {
+        g->has_man = 1; g->n_man = spec->n_manual;
+        memcpy(g->man, spec->manual_cols, sizeof g->man);
+        memcpy(g->man_names, spec->manual_names, sizeof g->man_names);
+    }
+    g->identity = spec->identity_scale;
+    g->title = spec->lab_fill;
+    memset(&spec->fill, 0, sizeof spec->fill); spec->has_fill = 0;
+    spec->has_manual = 0; spec->n_manual = 0; spec->identity_scale = 0;
+    spec->lab_fill = NULL; spec->brewer_disc = NULL;
+}
+
 static int parse_bool(P *p, int *out) {
     skip_ws(p);
     const char *save = p->s;
@@ -1718,6 +1734,7 @@ static int parse_term(P *p, PlotSpec *spec) {
         if (spec->nlayers == MAX_LAYERS) return fail(p, "too many layers", "");
         Layer *l = &spec->layers[spec->nlayers++];
         l->type = gt; l->bins = 30; l->adjust = 1;   /* adjust default = 1 (density) */
+        l->fill_seg = spec->nfsegs;                  /* new_scale_fill() calls so far */
         l->slope = 1;                                /* geom_abline default slope */
         l->repel = is_repel;
         l->eb_horiz = !strcmp(name, "geom_errorbarh");
@@ -1795,6 +1812,33 @@ static int parse_term(P *p, PlotSpec *spec) {
                         free(k[0]); free(k[1]);
                         free(l->eb_lo); free(l->eb_hi);
                         l->eb_lo = v[0]; l->eb_hi = v[1]; l->eb_horiz = horiz;
+                        skip_ws(p);
+                        if (*p->s == ',') { p->s++; skip_ws(p); }
+                        continue;
+                    }
+                    if (gt == GEOM_TILE) {
+                        /* geom_tile(aes(fill=col)): this layer's own fill, the
+                         * ring of a dartboard whose scale new_scale_fill()
+                         * separates from the others (ggnewscale) */
+                        p->s++; skip_ws(p);
+                        char *k2 = ident(p);
+                        skip_ws(p);
+                        if (!k2 || strcmp(k2, "fill") || *p->s != '=') { free(k2);
+                            return fail(p, "geom_tile(aes(...)) takes fill= only: the "
+                                        "layer's own fill, scaled apart with "
+                                        "new_scale_fill(); x and y stay top-level%s", ""); }
+                        free(k2);
+                        p->s++; skip_ws(p);
+                        int isf = !strncmp(p->s, "factor(", 7);
+                        if (isf) p->s += 7;
+                        char *v2 = colname(p);
+                        if (!v2) return *p->err ? -1 : fail(p, "geom_tile(aes(fill=)) expects a column name%s", "");
+                        skip_ws(p);
+                        if (isf) { if (*p->s != ')') return fail(p, "factor( needs a )%s", ""); p->s++; skip_ws(p); }
+                        if (*p->s != ')')
+                            return fail(p, "geom_tile(aes()) takes one mapping, fill=%s", "");
+                        p->s++;
+                        free(l->fill_col); l->fill_col = v2; l->fill_factor = isf;
                         skip_ws(p);
                         if (*p->s == ',') { p->s++; skip_ws(p); }
                         continue;
@@ -1950,7 +1994,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                         return fail(p, "bad colour for `%s`", key);
                     l->has_color = 1;
                     l->color_is_fill = key[0] == 'f';
-                } else if (se && !strcmp(key, "data")) {
+                } else if ((se || gt == GEOM_TILE) && !strcmp(key, "data")) {
                     l->data = string_lit(p);
                     if (!l->data) return fail(p, "data= expects a quoted path", "");
                 } else if (se && !strcmp(key, "y")) {
@@ -2559,6 +2603,14 @@ static int parse_term(P *p, PlotSpec *spec) {
             if (*p->s == ')') { p->s++; break; }
             return fail(p, "expected , or ) in values=c(...)%s", "");
         }
+        return expect(p, ')');
+    }
+    if (!strcmp(name, "new_scale_fill")) {
+        /* ggnewscale: the fill scales given so far belong to the layers so
+         * far; the ones after it to the layers after it */
+        if (spec->nfsegs >= MAX_FILL_SEGS - 1)
+            return fail(p, "too many new_scale_fill() calls (at most %d)", "7");
+        fillseg_snapshot(spec, &spec->fsegs[spec->nfsegs++]);
         return expect(p, ')');
     }
     if (!strcmp(name, "scale_fill_manual") || !strcmp(name, "scale_colour_manual")
@@ -3649,6 +3701,22 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
      * silent no-op: the spec parsed, the run succeeded, and the default ramp
      * came out. Alias it onto the colour scale instead. scale_colour_*() still
      * wins if both are given. */
+    {
+        int lay_fill = 0;
+        for (int i = 0; i < spec->nlayers; i++)
+            if (spec->layers[i].type == GEOM_TILE
+                && (spec->layers[i].fill_col || spec->layers[i].data)) lay_fill = 1;
+        if (spec->nfsegs || lay_fill) {
+            int tiles_only = spec->nlayers > 0;
+            for (int i = 0; i < spec->nlayers; i++)
+                if (spec->layers[i].type != GEOM_TILE) tiles_only = 0;
+            if (!spec->polar || !tiles_only)
+                return fail(&p, "new_scale_fill(), geom_tile(aes(fill=)) and "
+                            "geom_tile(data=) are implemented for the coord_polar() "
+                            "ring plot so far: tiles only, with coord_polar()%s", "");
+            fillseg_snapshot(spec, &spec->fsegs[spec->nfsegs]);   /* the last segment */
+        }
+    }
     if (!is_hm && !is_trk && spec->has_fill && !spec->has_colour_scale && !spec->pfill.col) {
         spec->colour_scale = spec->fill;
         spec->has_colour_scale = 1;

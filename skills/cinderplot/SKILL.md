@@ -267,6 +267,29 @@ and ignored (the output path is a command-line argument here).
   horizontally up to 24 spokes and radially past that; wedge names sit
   outside them; `theme_void()` drops the spoke names. A layer `colour=`
   outlines each tile. Tiles only: no other layer, no facets.
+- **Rings on different scales, ggnewscale's way**: each ring is its own
+  `geom_tile(data="ring.tsv", aes(fill=col))` layer (the file carries the
+  top-level x/y/group columns too), and `new_scale_fill()` separates the
+  scales: the `scale_fill_*()` and `labs(fill=)` given before it apply to
+  the rings before it, the ones after to the rings after. Each segment gets
+  its own key (a discrete legend or a colourbar) titled by its `labs(fill=)`
+  or the column name; one segment cannot mix a discrete and a continuous
+  fill. Spokes, rings and wedges are the union over all the files. For now
+  this works only for the ring plot (tiles under `coord_polar()`).
+
+```sh
+# template: conserved.tsv / beta.tsv / purity.tsv = subtype, ring, value, group
+cinderplot 'conserved.tsv + aes(x=factor(subtype), y=factor(ring), group=group)
+  + geom_tile(aes(fill=value), colour="white")
+  + scale_fill_manual(values=c(conserved="#1b7837", lost="#d9d9d9")) + labs(fill="Signature")
+  + new_scale_fill()
+  + geom_tile(data="beta.tsv", aes(fill=value), colour="white")
+  + scale_fill_viridis(limits=c(0, 1)) + labs(fill="Mean beta")
+  + new_scale_fill()
+  + geom_tile(data="purity.tsv", aes(fill=value), colour="white")
+  + scale_fill_distiller(palette="Reds", direction=1) + labs(fill="Purity")
+  + coord_polar(gap=6, inner.radius=0.3) + theme_void()' -o fig2b.svg --size 8x6.5
+```
 
 ```sh
 printf 'sp,ring,v,grp\nA,inner,0.2,g1\nA,outer,0.9,g1\nB,inner,0.5,g1\nB,outer,0.4,g1\nC,inner,0.7,g2\nC,outer,0.1,g2\n' > dart.csv

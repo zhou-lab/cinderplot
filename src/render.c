@@ -579,6 +579,47 @@ static int repel_settle(RLabel *L, int n, char *drop, double pw, double ph,
     return nd;
 }
 
+/* One dartboard tile: spoke (x level), ring (y level), wedge (group level, -1
+ * none), its colour and the layer it came from. */
+typedef struct { int spoke, ring, grp, layer; Col col; } DTile;
+
+/* a union of level strings, in first-seen order */
+static int lev_index(char ***v, int *n, int *cap, const char *s, int add) {
+    for (int i = 0; i < *n; i++) if (!strcmp((*v)[i], s)) return i;
+    if (!add) return -1;
+    if (*n == *cap) *v = cp_xrealloc(*v, (*cap = *cap ? 2 * *cap : 16) * sizeof(char *));
+    (*v)[*n] = (char *)s;
+    return (*n)++;
+}
+static int lev_cmp(const void *a, const void *b) {
+    const char *x = *(char *const *)a, *y = *(char *const *)b;
+    char *ex, *ey;
+    double dx = strtod(x, &ex), dy = strtod(y, &ey);
+    if (ex != x && !*ex && ey != y && !*ey) return dx < dy ? -1 : dx > dy;
+    return strcmp(x, y);
+}
+/* sort a level union the way factor_make() would (numbers numerically), or
+ * impose levels= -- which must name every value, as everywhere else */
+static int lev_order(char ***v, int *n, char *const *want, int nwant,
+                     const char *what, char *err) {
+    if (!nwant) { qsort(*v, *n, sizeof(char *), lev_cmp); return 0; }
+    for (int i = 0; i < *n; i++) {
+        int ok = 0;
+        for (int j = 0; j < nwant && !ok; j++) ok = !strcmp((*v)[i], want[j]);
+        if (!ok) {
+            snprintf(err, CP_ERRLEN, "%s value `%s` is not in its levels=", what, (*v)[i]);
+            return -1;
+        }
+    }
+    char **o = cp_xmalloc((nwant ? nwant : 1) * sizeof(char *));
+    int m = 0;
+    for (int j = 0; j < nwant; j++)
+        for (int i = 0; i < *n; i++)
+            if (!strcmp((*v)[i], want[j])) { o[m++] = (*v)[i]; break; }
+    *v = o; *n = m;
+    return 0;
+}
+
 /* genome coordinate scale: chromosomes concatenated in seqinfo order */
 typedef struct { char **chr; double *off, *len; int n; double total; } GenomeScale;
 static GenomeScale *genome_load(const char *path, char *err) {
@@ -3393,6 +3434,167 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     GTable *guides[18 + MAX_HMOBJS]; int nguide = 0;   /* fill, colour, size, linetype, shape, bands */
     /* with a separate fill= (filled points) the two guides drop separately */
     int no_col_leg = spec->pfill.col ? spec->no_legend_colour : spec->no_legend;
+
+    /* ---- dartboard rings with their own fill (ggnewscale's idiom) ----
+     * Each geom_tile() layer reads its own data= file (or the main data)
+     * and its own aes(fill=), scaled by the fill scales of its segment:
+     * the ones given before the next new_scale_fill(). Spokes, rings and
+     * wedges are the union over every layer. One guide per segment. */
+    int dseg = 0;
+    for (int li = 0; li < spec->nlayers; li++)
+        if (spec->layers[li].fill_col || spec->layers[li].data) dseg = 1;
+    if (spec->nfsegs) dseg = 1;
+    dseg = dseg && spec->polar && hastile;
+    DTile *dt = NULL; int ndt = 0, dtcap = 0;
+    char **dxl = NULL, **dyl = NULL, **dgl = NULL;
+    int dk = 0, dnr = 0, dng = 0;
+    if (dseg) {
+        no_col_leg = 1;                          /* the segments carry the keys */
+        const DataFrame *ldf[MAX_LAYERS];
+        int cxl = 0, cyl = 0, cgl = 0;
+        for (int li = 0; li < spec->nlayers; li++) {
+            const Layer *L = &spec->layers[li];
+            ldf[li] = df;
+            if (L->data && !(ldf[li] = df_read_csv(L->data, err))) return -1;
+            const char *need[3] = { spec->x.col, spec->y.col, spec->group.col };
+            for (int q = 0; q < 3; q++)
+                if (need[q] && !df_col(ldf[li], need[q])) {
+                    col_missing(err, ldf[li], need[q]);
+                    return -1;
+                }
+        }
+        /* level unions: spokes, rings, wedges */
+        Factor *lx[MAX_LAYERS], *ly[MAX_LAYERS], *lg[MAX_LAYERS];
+        for (int li = 0; li < spec->nlayers; li++) {
+            lx[li] = factor_make(ldf[li], df_col(ldf[li], spec->x.col));
+            ly[li] = factor_make(ldf[li], df_col(ldf[li], spec->y.col));
+            lg[li] = spec->group.col ? factor_make(ldf[li], df_col(ldf[li], spec->group.col)) : NULL;
+            for (int i = 0; i < lx[li]->nlev; i++) lev_index(&dxl, &dk, &cxl, lx[li]->levels[i], 1);
+            for (int i = 0; i < ly[li]->nlev; i++) lev_index(&dyl, &dnr, &cyl, ly[li]->levels[i], 1);
+            for (int i = 0; lg[li] && i < lg[li]->nlev; i++) lev_index(&dgl, &dng, &cgl, lg[li]->levels[i], 1);
+        }
+        if (lev_order(&dxl, &dk, spec->x.levels, spec->x.nlevels, "x", err)
+            || lev_order(&dyl, &dnr, spec->y.levels, spec->y.nlevels, "y", err)
+            || (dng && lev_order(&dgl, &dng, spec->group.levels, spec->group.nlevels,
+                                 "group", err))) return -1;
+        /* one scale per segment */
+        for (int sgi = 0; sgi <= spec->nfsegs; sgi++) {
+            const struct FillSeg *S = &spec->fsegs[sgi];
+            int nl = 0, disc = -1;
+            const char *fname = NULL;
+            char **lv = NULL; int nlv = 0, clv = 0;
+            double lo = 1e300, hi = -1e300;
+            for (int li = 0; li < spec->nlayers; li++) {
+                const Layer *L = &spec->layers[li];
+                if (L->fill_seg != sgi) continue;
+                const char *fc = L->fill_col ? L->fill_col : spec->colour.col;
+                if (!fc) continue;                       /* constant grey */
+                const Column *c = df_col(ldf[li], fc);
+                if (!c) { col_missing(err, ldf[li], fc); return -1; }
+                int d = c->type == COL_STR
+                      || (L->fill_col ? L->fill_factor : spec->colour.is_factor);
+                if (disc >= 0 && d != disc) {
+                    snprintf(err, CP_ERRLEN, "new_scale_fill(): one segment mixes a "
+                             "discrete and a continuous fill (`%s`); put "
+                             "new_scale_fill() between them", fc);
+                    return -1;
+                }
+                disc = d; nl++;
+                if (!fname) fname = fc;
+                if (d) {
+                    Factor *f = factor_make(ldf[li], c);
+                    for (int i = 0; i < f->nlev; i++) lev_index(&lv, &nlv, &clv, f->levels[i], 1);
+                } else
+                    for (int r = 0; r < ldf[li]->nrow; r++)
+                        if (!isnan(c->num[r])) { lo = fmin(lo, c->num[r]); hi = fmax(hi, c->num[r]); }
+            }
+            if (!nl) continue;
+            const char *title = S->title ? S->title : fname;
+            Col *spal = NULL;
+            FillScale fs = S->fill;
+            if (disc) {
+                qsort(lv, nlv, sizeof(char *), lev_cmp);
+                spal = cp_xmalloc(nlv * sizeof(Col));
+                if (S->identity) {
+                    for (int i = 0; i < nlv; i++)
+                        if (parse_color(lv[i], &spal[i])) {
+                            snprintf(err, CP_ERRLEN, "scale_fill_identity: `%s` is not a "
+                                     "colour (use names or #RRGGBB)", lv[i]);
+                            return -1;
+                        }
+                } else if (S->has_man) {
+                    int named = S->n_man > 0 && S->man_names[0] != NULL;
+                    for (int i = 0; i < nlv; i++) {
+                        spal[i] = C_NA;
+                        if (named) {
+                            for (int q = 0; q < S->n_man; q++)
+                                if (S->man_names[q] && !strcmp(S->man_names[q], lv[i]))
+                                    { spal[i] = S->man[q]; break; }
+                        } else if (i < S->n_man) spal[i] = S->man[i];
+                    }
+                } else hue_palette(nlv, spal);
+                if (!S->identity && !spec->no_legend) {
+                    Factor tf = { nlv, lv, NULL };
+                    GTable *lg2 = build_legend(cr, th, title, &tf, spal, 0, 0, 1, 0,
+                                               NULL, 1, spec->legend_reverse, NULL, err);
+                    if (!lg2) return -1;
+                    guides[nguide++] = lg2;
+                }
+            } else {
+                if (!S->has_fill) {                  /* ggplot default: blue gradient */
+                    memset(&fs, 0, sizeof fs);
+                    fs.kind = FILL_GRADIENT;
+                    parse_color("#132B43", &fs.low);
+                    parse_color("#56B1F7", &fs.high);
+                }
+                if (fs.has_limits) { lo = fs.lim_lo; hi = fs.lim_hi; }
+                if (!(hi > lo)) hi = lo + 1;
+                if (!spec->no_legend)
+                    guides[nguide++] = build_colorbar_legend(cr, th, title, &fs, lo, hi);
+            }
+            /* this segment's tiles */
+            for (int li = 0; li < spec->nlayers; li++) {
+                const Layer *L = &spec->layers[li];
+                if (L->fill_seg != sgi) continue;
+                const char *fc = L->fill_col ? L->fill_col : spec->colour.col;
+                const Column *c = df_col(ldf[li], fc);
+                for (int r = 0; r < ldf[li]->nrow; r++) {
+                    if (lx[li]->idx[r] < 0 || ly[li]->idx[r] < 0) continue;
+                    Col col;
+                    if (disc) {
+                        const char *v = c->type == COL_STR ? c->str[r] : NULL;
+                        char nb[32];
+                        if (!v) { if (isnan(c->num[r])) continue;
+                                  snprintf(nb, sizeof nb, "%.15g", c->num[r]); v = nb; }
+                        int i = lev_index(&lv, &nlv, &clv, v, 0);
+                        col = i >= 0 ? spal[i] : C_NA;
+                    } else col = isnan(c->num[r]) ? C_NA : fill_map_value(&fs, c->num[r], lo, hi);
+                    if (ndt == dtcap) dt = cp_xrealloc(dt, (dtcap = dtcap ? 2 * dtcap : 256) * sizeof *dt);
+                    dt[ndt].spoke = lev_index(&dxl, &dk, &cxl, lx[li]->levels[lx[li]->idx[r]], 0);
+                    dt[ndt].ring = lev_index(&dyl, &dnr, &cyl, ly[li]->levels[ly[li]->idx[r]], 0);
+                    dt[ndt].grp = lg[li] && lg[li]->idx[r] >= 0
+                                ? lev_index(&dgl, &dng, &cgl, lg[li]->levels[lg[li]->idx[r]], 0) : -1;
+                    dt[ndt].layer = li; dt[ndt].col = col;
+                    ndt++;
+                }
+            }
+        }
+        /* a layer with no fill mapping at all draws grey */
+        for (int li = 0; li < spec->nlayers; li++) {
+            const Layer *L = &spec->layers[li];
+            if (L->fill_col || spec->colour.col) continue;
+            for (int r = 0; r < ldf[li]->nrow; r++) {
+                if (lx[li]->idx[r] < 0 || ly[li]->idx[r] < 0) continue;
+                if (ndt == dtcap) dt = cp_xrealloc(dt, (dtcap = dtcap ? 2 * dtcap : 256) * sizeof *dt);
+                dt[ndt].spoke = lev_index(&dxl, &dk, &cxl, lx[li]->levels[lx[li]->idx[r]], 0);
+                dt[ndt].ring = lev_index(&dyl, &dnr, &cyl, ly[li]->levels[ly[li]->idx[r]], 0);
+                dt[ndt].grp = lg[li] && lg[li]->idx[r] >= 0
+                            ? lev_index(&dgl, &dng, &cgl, lg[li]->levels[lg[li]->idx[r]], 0) : -1;
+                dt[ndt].layer = li; dt[ndt].col = C_BAR;
+                ndt++;
+            }
+        }
+    }
     if (pff && !spec->no_legend_fill) {   /* the filled glyphs' body key */
         const char *ft = spec->lab_fill ? spec->lab_fill : spec->pfill.expr;
         int nc2 = spec->legend_ncol ? spec->legend_ncol
@@ -3986,38 +4188,57 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
              * inner.radius= of the way out. With a gap, the first one is
              * centred on start= and carries the ring names. */
             const double TAU = 2 * M_PI;
-            int k = xf->nlev, nring = yf->nlev;
+            /* the tiles: from the segmented prep (new_scale_fill()), else
+             * the main data through the one fill scale */
+            int k, nring, hasg;
+            char **xlev, **ylev, **glev;
+            if (dseg) {
+                k = dk; nring = dnr; xlev = dxl; ylev = dyl; glev = dgl; hasg = dng > 0;
+            } else {
+                k = xf->nlev; nring = yf->nlev; xlev = xf->levels; ylev = yf->levels;
+                glev = gf ? gf->levels : NULL; hasg = gf != NULL;
+                dt = cp_xmalloc((df->nrow ? df->nrow : 1) * spec->nlayers * sizeof *dt);
+                ndt = 0;
+                for (int li = 0; li < spec->nlayers; li++)
+                    for (int r = 0; r < df->nrow; r++) {
+                        if (!use[r]) continue;
+                        dt[ndt].spoke = xf->idx[r]; dt[ndt].ring = yf->idx[r];
+                        dt[ndt].grp = gf ? gf->idx[r] : -1; dt[ndt].layer = li;
+                        dt[ndt].col = cf ? pal[cf->idx[r]]
+                                    : cont_col ? (isnan(colc->num[r]) ? C_NA : CCOL(r)) : C_BAR;
+                        ndt++;
+                    }
+            }
             int *sg = cp_xmalloc(k * sizeof(int));
             for (int l = 0; l < k; l++) sg[l] = -1;
-            for (int r = 0; gf && r < df->nrow; r++) {
-                if (!use[r]) continue;
-                int l = xf->idx[r], gi = gf->idx[r];
+            for (int t = 0; hasg && t < ndt; t++) {
+                int l = dt[t].spoke, gi = dt[t].grp;
+                if (gi < 0) continue;
                 if (sg[l] >= 0 && sg[l] != gi) {
                     snprintf(err, CP_ERRLEN, "coord_polar() + geom_tile(): spoke `%s` "
                              "falls in two groups (`%s` and `%s`); group= must be "
-                             "constant per x level", xf->levels[l],
-                             gf->levels[sg[l]], gf->levels[gi]);
+                             "constant per x level", xlev[l], glev[sg[l]], glev[gi]);
                     return -1;
                 }
                 sg[l] = gi;
             }
-            int ngrp = gf ? gf->nlev : 1;
+            int ngrp = hasg ? (dseg ? dng : gf->nlev) : 1;
             int *ord = cp_xmalloc(k * sizeof(int)), no = 0;
             for (int gi = 0; gi < ngrp; gi++)          /* wedge order, then x order */
                 for (int l = 0; l < k; l++)
-                    if ((gf ? sg[l] : 0) == gi) ord[no++] = l;
+                    if ((hasg ? sg[l] : 0) == gi) ord[no++] = l;
             for (int l = 0; l < k; l++)                 /* levels with no used row */
-                if (gf && sg[l] < 0) ord[no++] = l;
+                if (hasg && sg[l] < 0) ord[no++] = l;
             int nwedge = 0;
             for (int i = 0; i < no; i++)
-                if (i == 0 || (gf && sg[ord[i]] != sg[ord[i - 1]])) nwedge++;
+                if (i == 0 || (hasg && sg[ord[i]] != sg[ord[i - 1]])) nwedge++;
             double gap = spec->polar_gap * M_PI / 180;
-            int ngap = gap > 0 ? (gf ? nwedge : 1) : 0;
+            int ngap = gap > 0 ? (hasg ? nwedge : 1) : 0;
             double step = (TAU - ngap * gap) / k;
             double *a0 = cp_xmalloc(k * sizeof(double));    /* spoke start, by level */
             double cur = gap / 2;
             for (int i = 0; i < no; i++) {
-                if (i > 0 && gf && sg[ord[i]] != sg[ord[i - 1]]) cur += gap;
+                if (i > 0 && hasg && sg[ord[i]] != sg[ord[i - 1]]) cur += gap;
                 a0[ord[i]] = cur;
                 cur += step;
             }
@@ -4026,24 +4247,23 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             int show_x = th->axis_text_on;
             double xls = SZ_AXIS_TEXT * (k > 24 ? 0.7 : 1), maxw = 0, gw = 0;
             for (int l = 0; show_x && l < k; l++) {
-                double w = text_w(cr, xls, xf->levels[l]);
+                double w = text_w(cr, xls, xlev[l]);
                 if (w > maxw) maxw = w;
             }
-            for (int gi = 0; gf && gi < gf->nlev; gi++) {
-                double w = text_w(cr, SZ_AXIS_TEXT, gf->levels[gi]);
+            for (int gi = 0; hasg && gi < ngrp; gi++) {
+                double w = text_w(cr, SZ_AXIS_TEXT, glev[gi]);
                 if (w > gw) gw = w;
             }
             double room = (show_x ? (k > 24 ? maxw + 4 : labh * 1.6) : 0)
-                        + (gf ? gw + labh : 0) + 4;
+                        + (hasg ? gw + labh : 0) + 4;
             double half = fmin(panelw_pt, panelh_pt) / 2;
             double rmax = half - room;
             if (rmax < half * 0.3) rmax = half * 0.3;
             double rin = spec->polar_inner * rmax, cx = 0.5, cy = 0.5;
-            for (int li = 0; li < spec->nlayers; li++) {
-                const Layer *L = &spec->layers[li];
-                for (int r = 0; r < df->nrow; r++) {
-                    if (!use[r]) continue;
-                    int l = xf->idx[r], j = yf->idx[r];
+            {
+                for (int t = 0; t < ndt; t++) {
+                    const Layer *L = &spec->layers[dt[t].layer];
+                    int l = dt[t].spoke, j = dt[t].ring;
                     double r0 = rin + (rmax - rin) * j / nring;
                     double r1 = rin + (rmax - rin) * (j + 1) / nring;
                     double s0 = a0[l], s1 = a0[l] + step;
@@ -4060,8 +4280,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     }
                     g = gt_add(T, G_POLYGON, R, C, R, C);
                     g->n = 2 * na; g->px = px; g->py = py; g->clip = 1;
-                    g->col = cf ? pal[cf->idx[r]]
-                           : cont_col ? (isnan(colc->num[r]) ? C_NA : CCOL(r)) : C_BAR;
+                    g->col = dt[t].col;
                     g->alpha = L->alpha;
                     if (L->has_color) {                      /* colour= is the border */
                         g->poly_fill_set = 1; g->poly_fill = g->col;
@@ -4074,7 +4293,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             for (int l = 0; show_x && l < k; l++) {
                 double a = PANG(a0[l] + step / 2), sa = sin(a), ca = cos(a);
                 g = gt_add(T, G_TEXT, R, C, R, C);
-                g->str = xf->levels[l]; g->size = xls; g->col = th->axis_text;
+                g->str = xlev[l]; g->size = xls; g->col = th->axis_text;
                 g->va = V_INKCENTER;
                 if (k > 24) {
                     double rr = rmax + 3;
@@ -4089,7 +4308,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 }
             }
             /* wedge names, outside the spoke names */
-            for (int gi = 0; gf && gi < gf->nlev; gi++) {
+            for (int gi = 0; hasg && gi < ngrp; gi++) {
                 double lo = 1e9, hi = -1e9;
                 for (int l = 0; l < k; l++)
                     if (sg[l] == gi) { lo = fmin(lo, a0[l]); hi = fmax(hi, a0[l] + step); }
@@ -4097,7 +4316,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 double a = PANG((lo + hi) / 2), sa = sin(a), ca = cos(a);
                 double rr = rmax + (show_x ? (k > 24 ? maxw + 6 : labh * 1.6) : 4) + labh * 0.5;
                 g = gt_add(T, G_TEXT, R, C, R, C);
-                g->str = gf->levels[gi]; g->size = SZ_AXIS_TEXT; g->col = th->axis_text;
+                g->str = glev[gi]; g->size = SZ_AXIS_TEXT; g->col = th->axis_text;
                 g->tx = cx + rr * sa / panelw_pt; g->ty = cy + rr * ca / panelh_pt;
                 g->hj = (1 - sa) / 2; g->va = V_INKCENTER;
             }
@@ -4106,13 +4325,13 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 double rr = rin + (rmax - rin) * (j + 0.5) / nring;
                 double a = PANG(0);
                 g = gt_add(T, G_TEXT, R, C, R, C);
-                g->str = yf->levels[j]; g->size = SZ_AXIS_TEXT * 0.75;
+                g->str = ylev[j]; g->size = SZ_AXIS_TEXT * 0.75;
                 g->col = th->axis_text;
                 g->tx = cx + rr * sin(a) / panelw_pt; g->ty = cy + rr * cos(a) / panelh_pt;
                 g->hj = 0.5; g->va = V_INKCENTER;
             }
 #undef PANG
-            free(sg); free(ord); free(a0);
+            free(sg); free(ord); free(a0); free(dt); dt = NULL;
         } else if (spec->polar) {
             int k = xf->nlev;
             double rmax = fmin(panelw_pt, panelh_pt) / 2 - 2.6 * labh;
