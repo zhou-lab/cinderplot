@@ -280,7 +280,11 @@ and ignored (the output path is a command-line argument here).
   files, `levels=` is checked against the union of the files, so the first
   file need not carry every ring. `scale_x_discrete(breaks=c("A", "B"))`
   names only those spokes (225 radial names are unreadable), and
-  `labels=c(B="Bee")` renames them. `theme(axis.text=element_text(colour=
+  `labels=c(B="Bee")` renames them. `coord_polar(leader=TRUE)` sets the
+  named spokes as horizontal text in a column each side of the circle, at
+  least a text height apart, each joined to its spoke at the ring edge by a
+  thin elbow line -- the readable form when chosen spokes sit next to each
+  other; the wedge names then sit just outside the rings. `theme(axis.text=element_text(colour=
   "black"))` colours the spoke, ring and wedge names (default theme grey)
   and draws them even over `theme_void()`, as in ggplot2; `element_blank()`
   drops them. The ring names sit in the gap at

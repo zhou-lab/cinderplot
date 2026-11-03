@@ -3028,11 +3028,19 @@ static int parse_term(P *p, PlotSpec *spec) {
             int k_start = !strcmp(key, "start"), k_dir = !strcmp(key, "direction"),
                 k_gap = !strcmp(key, "gap"), k_in = !strcmp(key, "inner.radius"),
                 k_gs = !strcmp(key, "gap.start");
+            if (!strcmp(key, "leader")) {
+                if (parse_bool(p, &spec->polar_leader))
+                    return fail(p, "leader= expects TRUE or FALSE%s", "");
+                skip_ws(p);
+                if (*p->s == ',') { p->s++; skip_ws(p); }
+                continue;
+            }
             if (!k_start && !k_dir && !k_gap && !k_in && !k_gs)
                 return fail(p, "coord_polar option `%s` not implemented; supported: "
                             "start= (radians), direction= (1 or -1), gap= (degrees "
                             "between group wedges), gap.start= (degrees, the gap at "
-                            "start= that holds the ring names), inner.radius= (0..0.9)", key);
+                            "start= that holds the ring names), inner.radius= (0..0.9), "
+                            "leader= (TRUE: spoke names beside the circle on leader lines)", key);
             skip_ws(p);
             char *end;
             double v = strtod(p->s, &end);

@@ -702,6 +702,8 @@ typedef struct {
      * the empty hub as a fraction of the outer radius. */
     int polar_dir;
     double polar_gap, polar_inner;
+    int polar_leader;               /* leader=TRUE: named spokes as horizontal labels
+                                     * beside the circle, joined by elbow lines */
     double polar_gap_start;         /* gap.start=: the gap centred on start=, which
                                      * carries the ring names; < 0 = same as gap= */
     char *genome_seqinfo;           /* scale_x_genome: seqinfo TSV path */

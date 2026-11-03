@@ -4340,6 +4340,12 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         + (hasg ? gw + labh : 0) + 4;
             double half = fmin(panelw_pt, panelh_pt) / 2;
             double rmax = half - room;
+            /* leader=TRUE: the names stand in a column each side of the
+             * circle, LEAD beyond the rings, so the room is horizontal */
+            int leader = spec->polar_leader && show_x;
+            double lead = 14 + (hasg ? labh * 1.4 : 0), lsp = font_h(cr, xls) * 1.15;
+            if (leader)
+                rmax = fmin(panelw_pt / 2 - lead - maxw - 6, panelh_pt / 2 - lsp - 4);
             if (rmax < half * 0.3) rmax = half * 0.3;
             double rin = spec->polar_inner * rmax, cx = 0.5, cy = 0.5;
             {
@@ -4371,8 +4377,61 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     }
                 }
             }
+            /* leader=TRUE: named spokes in two side columns, spread at least
+             * lsp apart from their wanted height, each on an elbow line from
+             * its spoke at the ring edge */
+            if (leader) {
+                int *ls = cp_xmalloc(k * sizeof(int)), nls = 0;
+                double *ly = cp_xmalloc(k * sizeof(double));
+                for (int side = 0; side < 2; side++) {
+                    nls = 0;
+                    for (int l = 0; l < k; l++) {
+                        const char *lb = xd_label(spec, xlev[l], l);
+                        if (!lb || !*lb) continue;
+                        double a = PANG(a0[l] + step / 2);
+                        if ((sin(a) >= 0) != (side == 0)) continue;
+                        ls[nls] = l; ly[nls] = (rmax + lead * 0.5) * cos(a); nls++;
+                    }
+                    for (int i = 1; i < nls; i++)          /* top to bottom */
+                        for (int j2 = i; j2 > 0 && ly[j2] > ly[j2 - 1]; j2--) {
+                            double ty = ly[j2]; ly[j2] = ly[j2 - 1]; ly[j2 - 1] = ty;
+                            int tl = ls[j2]; ls[j2] = ls[j2 - 1]; ls[j2 - 1] = tl;
+                        }
+                    double ytop = panelh_pt / 2 - lsp / 2, ybot = -ytop;
+                    for (int i = 0; i < nls; i++) {        /* push down, clamp at the top */
+                        if (ly[i] > ytop) ly[i] = ytop;
+                        if (i && ly[i] > ly[i - 1] - lsp) ly[i] = ly[i - 1] - lsp;
+                    }
+                    for (int i = nls - 1; i >= 0; i--) {   /* then up from the bottom */
+                        if (ly[i] < ybot) ly[i] = ybot;
+                        if (i < nls - 1 && ly[i] < ly[i + 1] + lsp) ly[i] = ly[i + 1] + lsp;
+                    }
+                    double sx = side == 0 ? 1 : -1;
+                    for (int i = 0; i < nls; i++) {
+                        int l = ls[i];
+                        double a = PANG(a0[l] + step / 2), sa = sin(a), ca = cos(a);
+                        double *px = cp_xmalloc(3 * sizeof(double));
+                        double *py = cp_xmalloc(3 * sizeof(double));
+                        double re = rmax + 1, rk = rmax + lead * 0.45;
+                        px[0] = cx + re * sa / panelw_pt; py[0] = cy + re * ca / panelh_pt;
+                        px[1] = cx + rk * sa / panelw_pt; py[1] = cy + rk * ca / panelh_pt;
+                        px[2] = cx + sx * (rmax + lead - 2) / panelw_pt;
+                        py[2] = cy + ly[i] / panelh_pt;
+                        g = gt_add(T, G_POLYLINE, R, C, R, C);
+                        g->n = 3; g->px = px; g->py = py;
+                        g->col = (Col){0.45, 0.45, 0.45}; g->lw = lw_pt(0.3);
+                        g = gt_add(T, G_TEXT, R, C, R, C);
+                        g->str = (char *)xd_label(spec, xlev[l], l); g->size = xls;
+                        g->col = th->axis_text; g->va = V_INKCENTER;
+                        g->tx = cx + sx * (rmax + lead) / panelw_pt;
+                        g->ty = cy + ly[i] / panelh_pt;
+                        g->hj = side == 0 ? 0 : 1;
+                    }
+                }
+                free(ls); free(ly);
+            }
             /* spoke names: horizontal for a few, radial past 24 */
-            for (int l = 0; show_x && l < k; l++) {
+            for (int l = 0; show_x && !leader && l < k; l++) {
                 const char *lb = xd_label(spec, xlev[l], l);
                 if (!lb || !*lb) continue;            /* breaks= left it unnamed */
                 double a = PANG(a0[l] + step / 2), sa = sin(a), ca = cos(a);
@@ -4398,7 +4457,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     if (sg[l] == gi) { lo = fmin(lo, a0[l]); hi = fmax(hi, a0[l] + step); }
                 if (lo > hi) continue;
                 double a = PANG((lo + hi) / 2), sa = sin(a), ca = cos(a);
-                double rr = rmax + (show_x ? (k > 24 ? maxw + 6 : labh * 1.6) : 4) + labh * 0.5;
+                double rr = leader ? rmax + 4 + labh * 0.5
+                          : rmax + (show_x ? (k > 24 ? maxw + 6 : labh * 1.6) : 4) + labh * 0.5;
                 g = gt_add(T, G_TEXT, R, C, R, C);
                 g->str = glev[gi]; g->size = SZ_AXIS_TEXT; g->col = th->axis_text;
                 g->tx = cx + rr * sa / panelw_pt; g->ty = cy + rr * ca / panelh_pt;
