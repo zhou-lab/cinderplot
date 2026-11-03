@@ -1943,9 +1943,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                              "(rings); pie/rose bars are not implemented");
                     return -1;
                 }
-            if (spec->polar_dir == -1 || spec->polar_gap > 0 || spec->polar_inner > 0) {
+            if (spec->polar_dir == -1 || spec->polar_gap > 0 || spec->polar_inner > 0
+                || spec->polar_gap_start >= 0) {
                 snprintf(err, CP_ERRLEN, "coord_polar(direction=, gap=, "
-                         "inner.radius=) apply to geom_tile() rings, not the "
+                         "inner.radius=, gap.start=) apply to geom_tile() rings, not the "
                          "radar chart");
                 return -1;
             }
@@ -3216,6 +3217,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     thv.axis_line_lw  *= cp_line_scale;
     if (spec->has_axis_text_col) thv.axis_text = spec->axis_text_col;   /* theme(axis.text=) */
     if (spec->axis_text_blank) thv.axis_text_on = 0;
+    if (spec->axis_text_show) thv.axis_text_on = 1;      /* even over theme_void() */
     const Theme *th = &thv;
 
     /* Under coord_flip the x aesthetic is drawn on the LEFT (vertical) axis and
@@ -4305,11 +4307,17 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             int nwedge = 0;
             for (int i = 0; i < no; i++)
                 if (i == 0 || (hasg && sg[ord[i]] != sg[ord[i - 1]])) nwedge++;
+            /* gap= between wedges; gap.start= (default gap=) for the one
+             * centred on start=, which carries the ring names -- so that one
+             * can be wide without widening every wedge boundary */
             double gap = spec->polar_gap * M_PI / 180;
-            int ngap = gap > 0 ? (hasg ? nwedge : 1) : 0;
-            double step = (TAU - ngap * gap) / k;
+            double gap0 = (spec->polar_gap_start >= 0 ? spec->polar_gap_start
+                                                      : spec->polar_gap) * M_PI / 180;
+            int ngap = gap0 > 0;                       /* the start gap is there */
+            int ninner = hasg ? nwedge - 1 : 0;        /* wedge boundaries besides it */
+            double step = (TAU - gap0 - ninner * gap) / k;
             double *a0 = cp_xmalloc(k * sizeof(double));    /* spoke start, by level */
-            double cur = gap / 2;
+            double cur = gap0 / 2;
             for (int i = 0; i < no; i++) {
                 if (i > 0 && hasg && sg[ord[i]] != sg[ord[i - 1]]) cur += gap;
                 a0[ord[i]] = cur;
@@ -4404,7 +4412,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 /* the name must fit the gap's chord at its radius, or it
                  * covers the first spokes: say what gap= would hold it */
                 double w = text_w(cr, SZ_AXIS_TEXT * 0.75, ylev[j]) + 2;
-                if (w > 2 * rr * sin(gap / 2)) {
+                if (w > 2 * rr * sin(gap0 / 2)) {
                     double d = w >= 2 * rr ? 180 : 2 * asin(w / (2 * rr)) * 180 / M_PI;
                     if (d > need_deg) need_deg = d;
                 }
@@ -4415,10 +4423,11 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 g->hj = 0.5; g->va = V_INKCENTER;
             }
             if (need_deg > 0)
-                fprintf(stderr, "cinderplot: warning: coord_polar(gap=%g): the ring "
-                        "names overlap the first spokes; gap=%.0f holds them (or drop "
-                        "them with theme(axis.text=element_blank()))\n",
-                        spec->polar_gap, ceil(need_deg));
+                fprintf(stderr, "cinderplot: warning: coord_polar(): the ring names "
+                        "overlap the first spokes in the %.0f-degree start gap; "
+                        "gap.start=%.0f holds them without widening the other wedge "
+                        "gaps (or drop them with theme(axis.text=element_blank()))\n",
+                        gap0 * 180 / M_PI, ceil(need_deg));
 #undef PANG
             free(sg); free(ord); free(a0); free(dt); dt = NULL;
         } else if (spec->polar) {

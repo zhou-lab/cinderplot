@@ -702,6 +702,8 @@ typedef struct {
      * the empty hub as a fraction of the outer radius. */
     int polar_dir;
     double polar_gap, polar_inner;
+    double polar_gap_start;         /* gap.start=: the gap centred on start=, which
+                                     * carries the ring names; < 0 = same as gap= */
     char *genome_seqinfo;           /* scale_x_genome: seqinfo TSV path */
     char *ideogram_path;            /* ideogram(): cytoband TSV path */
     Layer layers[MAX_LAYERS];
@@ -800,7 +802,7 @@ typedef struct {
     double legend_text_sz;          /* theme(legend.text=element_text(size=)), same coding */
     /* theme(axis.text=element_text(colour=)) / element_blank(): the axis
      * label colour (and the ring plot's spoke, ring and wedge names) */
-    Col axis_text_col; int has_axis_text_col, axis_text_blank;
+    Col axis_text_col; int has_axis_text_col, axis_text_blank, axis_text_show;
     /* scale_x_discrete(breaks=c(...), labels=c(...)): which x levels are
      * labelled, and what they read (labels named by level, or positional
      * over breaks); the ring plot's spoke names */

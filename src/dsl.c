@@ -3020,16 +3020,19 @@ static int parse_term(P *p, PlotSpec *spec) {
          * dartboard: annulus sectors, x as the angle, y as the ring. */
         spec->polar = 1;
         spec->polar_dir = 1;
+        spec->polar_gap_start = -1;              /* gap.start= defaults to gap= */
         skip_ws(p);
         while (*p->s != ')') {
             char *key = ident(p);
             if (!key || expect(p, '=')) return fail(p, "bad coord_polar() argument", "");
             int k_start = !strcmp(key, "start"), k_dir = !strcmp(key, "direction"),
-                k_gap = !strcmp(key, "gap"), k_in = !strcmp(key, "inner.radius");
-            if (!k_start && !k_dir && !k_gap && !k_in)
+                k_gap = !strcmp(key, "gap"), k_in = !strcmp(key, "inner.radius"),
+                k_gs = !strcmp(key, "gap.start");
+            if (!k_start && !k_dir && !k_gap && !k_in && !k_gs)
                 return fail(p, "coord_polar option `%s` not implemented; supported: "
                             "start= (radians), direction= (1 or -1), gap= (degrees "
-                            "between group wedges), inner.radius= (0..0.9)", key);
+                            "between group wedges), gap.start= (degrees, the gap at "
+                            "start= that holds the ring names), inner.radius= (0..0.9)", key);
             skip_ws(p);
             char *end;
             double v = strtod(p->s, &end);
@@ -3039,9 +3042,9 @@ static int parse_term(P *p, PlotSpec *spec) {
             else if (k_dir) {
                 if (v != 1 && v != -1) return fail(p, "direction= is 1 (clockwise) or -1", "");
                 spec->polar_dir = (int)v;
-            } else if (k_gap) {
-                if (!(v >= 0 && v < 90)) return fail(p, "gap= expects degrees in [0, 90)", "");
-                spec->polar_gap = v;
+            } else if (k_gap || k_gs) {
+                if (!(v >= 0 && v < 90)) return fail(p, "%s= expects degrees in [0, 90)", key);
+                if (k_gap) spec->polar_gap = v; else spec->polar_gap_start = v;
             } else {
                 if (!(v >= 0 && v <= 0.9)) return fail(p, "inner.radius= expects 0..0.9", "");
                 spec->polar_inner = v;
@@ -3375,9 +3378,10 @@ static int parse_term(P *p, PlotSpec *spec) {
                 if (f && !strcmp(f, "element_blank")) {
                     free(f);
                     if (expect(p, '(') || expect(p, ')')) return -1;
-                    spec->axis_text_blank = 1;
+                    spec->axis_text_blank = 1; spec->axis_text_show = 0;
                 } else if (f && !strcmp(f, "element_text") && !expect(p, '(')) {
                     free(f);
+                    spec->axis_text_show = 1; spec->axis_text_blank = 0;   /* ggplot: element_text() draws it */
                     skip_ws(p);
                     while (*p->s != ')') {
                         char *k = ident(p);

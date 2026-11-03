@@ -281,10 +281,13 @@ and ignored (the output path is a command-line argument here).
   file need not carry every ring. `scale_x_discrete(breaks=c("A", "B"))`
   names only those spokes (225 radial names are unreadable), and
   `labels=c(B="Bee")` renames them. `theme(axis.text=element_text(colour=
-  "black"))` colours the spoke, ring and wedge names (default theme grey),
-  and `element_blank()` drops them. The ring names sit in the gap at
-  `start=`; when one is wider than the gap there, a warning names the
-  `gap=` that holds it. The default theme keeps ggplot2's grey panel behind
+  "black"))` colours the spoke, ring and wedge names (default theme grey)
+  and draws them even over `theme_void()`, as in ggplot2; `element_blank()`
+  drops them. The ring names sit in the gap at
+  `start=`; `coord_polar(gap=2, gap.start=26)` widens just that gap
+  (default: `gap=`), so the ring names fit without taking angle from every
+  other wedge boundary. When a name is wider than the start gap, a warning
+  names the `gap.start=` that holds it. The default theme keeps ggplot2's grey panel behind
   the circle; `theme_minimal()` or `theme_void()` clear it.
 - **Rings on different scales, ggnewscale's way**: each ring is its own
   `geom_tile(data="ring.tsv", aes(fill=col))` layer (the file carries the
