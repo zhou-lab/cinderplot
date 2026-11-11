@@ -823,6 +823,9 @@ typedef struct {
                                      * pt if > 0, rel() of base_size if < 0,
                                      * 0 = ggplot's rel(0.8) */
     double legend_text_sz;          /* theme(legend.text=element_text(size=)), same coding */
+    /* theme(strip.text=element_text(face=, colour=)): facet strips, and the
+     * coord_polar() ring plot's wedge names (the polar analogue of facets) */
+    int strip_bold; Col strip_col; int has_strip_col;
     /* theme(axis.text=element_text(colour=)) / element_blank(): the axis
      * label colour (and the ring plot's spoke, ring and wedge names) */
     Col axis_text_col; int has_axis_text_col, axis_text_blank, axis_text_show;

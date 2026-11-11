@@ -40,6 +40,14 @@ static double text_w(cairo_t *cr, double size, const char *s) {
     cairo_text_extents(cr, s, &e);
     return e.x_advance;
 }
+/* text_w() in the bold face, for labels a theme draws bold */
+static double text_wb(cairo_t *cr, double size, const char *s, int bold) {
+    if (!bold) return text_w(cr, size, s);
+    cairo_select_font_face(cr, cp_font_family, CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+    double w = text_w(cr, size, s);
+    cairo_select_font_face(cr, cp_font_family, CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+    return w;
+}
 static double font_h(cairo_t *cr, double size) {
     cairo_font_extents_t fe;
     cairo_set_font_size(cr, size);
@@ -4223,7 +4231,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 g->col = th->strip_bg;
             }
             g = gt_add(T, G_TEXT, SR(0), PC(c), SR(0), PC(c));
-            g->str = colf->levels[c]; g->size = stx_sz; g->col = th->strip_text;
+            g->str = colf->levels[c]; g->size = stx_sz; g->bold = spec->strip_bold;
+            g->col = spec->has_strip_col ? spec->strip_col : th->strip_text;
             g->tx = 0.5; g->ty = 0.5; g->hj = 0.5; g->va = V_INKCENTER;
         }
         for (int r = 0; rowf && r < nrowp; r++) {
@@ -4232,7 +4241,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 g->col = th->strip_bg;
             }
             g = gt_add(T, G_TEXT, PR(r), rstrip_c, PR(r), rstrip_c);
-            g->str = rowf->levels[r]; g->size = sty_sz; g->col = th->strip_text;
+            g->str = rowf->levels[r]; g->size = sty_sz; g->bold = spec->strip_bold;
+            g->col = spec->has_strip_col ? spec->strip_col : th->strip_text;
             g->tx = 0.5; g->ty = 0.5; g->hj = 0.5; g->rot = -90;
         }
     }
@@ -4256,7 +4266,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         if (ff && !grid) {
             if (th->strip_bg_on) { g = gt_add(T, G_RECT, SR(pr), C, SR(pr), C); g->col = th->strip_bg; }
             g = gt_add(T, G_TEXT, SR(pr), C, SR(pr), C);
-            g->str = ff->levels[p]; g->size = stx_sz; g->col = th->strip_text;
+            g->str = ff->levels[p]; g->size = stx_sz; g->bold = spec->strip_bold;
+            g->col = spec->has_strip_col ? spec->strip_col : th->strip_text;
             g->tx = 0.5; g->ty = 0.5; g->hj = 0.5; g->va = V_INKCENTER;
         }
 
@@ -4391,6 +4402,11 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 cur += step;
             }
 #define PANG(a) (spec->polar_start + spec->polar_dir * (a))
+            /* wedge names follow theme(strip.text=): the polar analogue of
+             * facet strips; unset, they keep the axis-text size and colour */
+            double gsz = spec->strip_x_sz != 0 ? stx_sz : SZ_AXIS_TEXT;
+            int gbold = spec->strip_bold;
+            Col gcol = spec->has_strip_col ? spec->strip_col : th->axis_text;
             /* label room: spoke names (radial past 24 spokes) and wedge names */
             int show_x = th->axis_text_on;
             double xls = SZ_AXIS_TEXT * (k > 24 ? 0.7 : 1), maxw = 0, gw = 0;
@@ -4400,7 +4416,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 if (w > maxw) maxw = w;
             }
             for (int gi = 0; hasg && gi < ngrp; gi++) {
-                double w = text_w(cr, SZ_AXIS_TEXT, glev[gi]);
+                double w = text_wb(cr, gsz, glev[gi], gbold);
                 if (w > gw) gw = w;
             }
             double room = (show_x ? (k > 24 ? maxw + 4 : labh * 1.6) : 0)
@@ -4467,8 +4483,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 double *ey = cp_xmalloc((k + ngrp + 1) * sizeof(double));
                 double *ea = cp_xmalloc((k + ngrp + 1) * sizeof(double));
                 int *eo = cp_xmalloc((k + ngrp + 1) * sizeof(int));
-                double wsz = SZ_AXIS_TEXT;
-                for (int pass = 0; pass < 2; pass++) {
+                double wsz = gsz;
+                for (int pass = 0; pass < 6; pass++) {
                     ne = 0;
                     for (int l = 0; l < k; l++) {
                         const char *lb = xd_label(spec, xlev[l], l);
@@ -4509,22 +4525,40 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                             }
                         }
                     }
-                    if (pass || !hasg) break;
-                    /* would a wedge name, beside the ring, hit a column name or
-                     * a leader line? then it joins the column (second pass) */
+                    if (pass == 5 || !hasg) break;
+                    /* would a wedge name, beside the ring, hit a column entry
+                     * (spoke or moved wedge), a leader line or another wedge
+                     * name left beside the ring? then it joins the column, and
+                     * the layout runs again until nothing moves */
                     int moved = 0;
                     for (int gi = 0; gi < ngrp; gi++) {
-                        if (isnan(wmid[gi])) continue;
+                        if (isnan(wmid[gi]) || wmoved[gi]) continue;
                         double a = PANG(wmid[gi]), sa = sin(a), ca = cos(a);
-                        double rr = rmax + 4 + labh * 0.5, w = text_w(cr, wsz, glev[gi]);
+                        double gh = font_h(cr, wsz);
+                        double rr = rmax + 4 + gh * 0.5, w = text_wb(cr, wsz, glev[gi], gbold);
                         double ax = rr * sa, ay = rr * ca, hj = (1 - sa) / 2;
                         double bx0 = ax - hj * w - 1, bx1 = bx0 + w + 2;
-                        double by0 = ay - labh / 2, by1 = ay + labh / 2;
+                        double by0 = ay - gh / 2, by1 = ay + gh / 2;
                         int hit = 0;
+                        for (int g2 = 0; g2 < ngrp && !hit; g2++) {   /* another ring-side name */
+                            if (g2 == gi || wmoved[g2] || isnan(wmid[g2])) continue;
+                            double a2 = PANG(wmid[g2]), s2 = sin(a2), c2 = cos(a2);
+                            double w2 = text_wb(cr, wsz, glev[g2], gbold);
+                            double x0b = rr * s2 - (1 - s2) / 2 * w2 - 1, x1b = x0b + w2 + 2;
+                            double yb = rr * c2;
+                            if (x0b < bx1 && bx0 < x1b && yb - gh / 2 < by1 && by0 < yb + gh / 2) {
+                                /* of two clashing names the smaller wedge moves */
+                                double sp1 = 0, sp2 = 0;
+                                for (int l = 0; l < k; l++) { sp1 += sg[l] == gi; sp2 += sg[l] == g2; }
+                                if (sp1 < sp2 || (sp1 == sp2 && gi > g2)) hit = 1;
+                            }
+                        }
                         for (int e = 0; e < ne && !hit; e++) {
                             double sx = sin(ea[e]) >= 0 ? 1 : -1;
-                            const char *lb = xd_label(spec, xlev[et[e]], et[e]);
-                            double tw = text_w(cr, xls, lb), th2 = font_h(cr, xls);
+                            const char *lb = et[e] >= 0 ? xd_label(spec, xlev[et[e]], et[e])
+                                                        : glev[-1 - et[e]];
+                            double tw = et[e] >= 0 ? text_w(cr, xls, lb) : text_wb(cr, wsz, lb, gbold);
+                            double th2 = font_h(cr, et[e] >= 0 ? xls : wsz);
                             double lx0 = sx > 0 ? rmax + lead : -(rmax + lead) - tw;
                             if (lx0 < bx1 && bx0 < lx0 + tw && ey[e] - th2 / 2 < by1 && by0 < ey[e] + th2 / 2)
                                 hit = 1;
@@ -4561,7 +4595,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     g->str = et[e] >= 0 ? (char *)xd_label(spec, xlev[et[e]], et[e])
                                         : glev[-1 - et[e]];
                     g->size = et[e] >= 0 ? xls : wsz;
-                    g->col = th->axis_text; g->va = V_INKCENTER;
+                    if (et[e] < 0) g->bold = gbold;
+                    g->col = et[e] < 0 ? gcol : th->axis_text; g->va = V_INKCENTER;
                     g->tx = cx + sx * (rmax + lead) / panelw_pt;
                     g->ty = cy + ey[e] / panelh_pt;
                     g->hj = sx > 0 ? 0 : 1;
@@ -4593,10 +4628,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             for (int gi = 0; hasg && gi < ngrp; gi++) {
                 if (isnan(wmid[gi]) || wmoved[gi]) continue;   /* moved into a column */
                 double a = PANG(wmid[gi]), sa = sin(a), ca = cos(a);
-                double rr = leader ? rmax + 4 + labh * 0.5
+                double rr = leader ? rmax + 4 + font_h(cr, gsz) * 0.5
                           : rmax + (show_x ? (k > 24 ? maxw + 6 : labh * 1.6) : 4) + labh * 0.5;
                 g = gt_add(T, G_TEXT, R, C, R, C);
-                g->str = glev[gi]; g->size = SZ_AXIS_TEXT; g->col = th->axis_text;
+                g->str = glev[gi]; g->size = gsz; g->col = gcol; g->bold = gbold;
                 g->tx = cx + rr * sa / panelw_pt; g->ty = cy + rr * ca / panelh_pt;
                 g->hj = (1 - sa) / 2; g->va = V_INKCENTER;
             }

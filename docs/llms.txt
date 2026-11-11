@@ -492,7 +492,11 @@ figure with a long legend wants `legend.key.size=unit(10, "pt")`.
 `theme(strip.text=element_text(size=8))` sets the facet strip text in points
 (`size=rel(1)` = base_size; ggplot's default is rel(0.8)), and the strip grows
 to fit; `strip.text.x` is the top strips, `strip.text.y` facet_grid's row
-strips. `theme(legend.text=element_text(size=10))` (or `rel(r)`) sets the
+strips. `face="bold"` and `colour=` style them too, and the same element
+styles a `coord_polar()` ring plot's wedge names (its facets):
+`theme(strip.text=element_text(face="bold", size=11))` sets them apart from
+the spoke names; a larger wedge name that would clash with another, a
+column name or a leader line moves into the leader column. `theme(legend.text=element_text(size=10))` (or `rel(r)`) sets the
 legend label text the same way: the discrete keys, the colourbar and size
 legend breaks, and venn()'s glyph key. Heatmap/track legend() blocks keep
 their own size. Only `size=` is implemented in element_text(). A

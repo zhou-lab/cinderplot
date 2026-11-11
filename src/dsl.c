@@ -3552,15 +3552,40 @@ static int parse_term(P *p, PlotSpec *spec) {
                 }
                 free(f);
                 double v = 0;
+                int got = 0, is_strip = strncmp(key, "strip.text", 10) == 0;
                 skip_ws(p);
                 while (*p->s != ')') {
                     char *k = ident(p);
                     if (!k || expect(p, '=')) { free(k);
                         return fail(p, "element_text() takes key=value arguments%s", ""); }
+                    if (is_strip && !strcmp(k, "face")) {
+                        /* bold for the strips (and the ring plot's wedge names) */
+                        free(k);
+                        char *f2 = word(p);
+                        if (!f2) return fail(p, "face= expects \"plain\" or \"bold\"%s", "");
+                        if (!strcmp(f2, "bold") || !strcmp(f2, "bold.italic")) spec->strip_bold = 1;
+                        else if (!strcmp(f2, "plain") || !strcmp(f2, "italic")) spec->strip_bold = 0;
+                        else return fail(p, "face=\"%s\" invalid; use plain or bold", f2);
+                        got = 1;
+                        skip_ws(p);
+                        if (*p->s == ',') { p->s++; skip_ws(p); }
+                        continue;
+                    }
+                    if (is_strip && (!strcmp(k, "colour") || !strcmp(k, "color"))) {
+                        free(k);
+                        char *c2 = string_lit(p);
+                        if (!c2 || parse_color(c2, &spec->strip_col))
+                            return fail(p, "strip.text colour= expects a colour%s", "");
+                        spec->has_strip_col = 1; got = 1;
+                        skip_ws(p);
+                        if (*p->s == ',') { p->s++; skip_ws(p); }
+                        continue;
+                    }
                     if (strcmp(k, "size")) {
                         char msg[CP_ERRLEN];
                         snprintf(msg, sizeof msg, "element_text(%s=) is not implemented "
-                                 "for %s; size= is", k, key);
+                                 "for %s; size=%s is", k, key,
+                                 is_strip ? " (and face=, colour=)" : "");
                         free(k);
                         return fail(p, "%s", msg);
                     }
@@ -3578,8 +3603,9 @@ static int parse_term(P *p, PlotSpec *spec) {
                     if (*p->s == ',') { p->s++; skip_ws(p); }
                 }
                 p->s++;
-                if (v == 0) return fail(p, "theme(%s=element_text()) needs size=", key);
-                if (!strcmp(key, "legend.text")) spec->legend_text_sz = v;
+                if (v == 0 && !got) return fail(p, "theme(%s=element_text()) needs size=", key);
+                if (v == 0) { /* face=/colour= only: sizes stay as they were */ }
+                else if (!strcmp(key, "legend.text")) spec->legend_text_sz = v;
                 else {
                     if (strcmp(key, "strip.text.y")) spec->strip_x_sz = v;
                     if (strcmp(key, "strip.text.x")) spec->strip_y_sz = v;
