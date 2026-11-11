@@ -926,7 +926,7 @@ int render_tree(const PlotSpec *spec, const char *out,
             g->n = 4; g->px = px; g->py = py;
         }
     }
-    emit(T, R, C, root, spec, x0, x1, y0, y1, lw_pt(0.5), 1,
+    emit(T, R, C, root, spec, x0, x1, y0, y1, lw_pt(spec->tree_lw > 0 ? spec->tree_lw : 0.5), 1,
          &jnode, &jtip, &jlab, cellh > 0 ? cellw / cellh : 1, rmax,
          cellw > 0 ? cellw : 1);
     /* clade labels: a filled box at the clade's outer edge, the title and

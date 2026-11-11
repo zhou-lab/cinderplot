@@ -3211,6 +3211,12 @@ static int parse_term(P *p, PlotSpec *spec) {
                 if (!v || (strcmp(v, "NA") && strcmp(v, "none")))
                     return fail(p, "geom_tree(colour=) takes NA (hide the branches)%s", "");
                 spec->tree_hide_branches = 1;
+            } else if ((!strcmp(key, "linewidth") || !strcmp(key, "size"))
+                       && !strcmp(name, "geom_tree")) {
+                /* ggtree's size= / linewidth=: the branch stroke, ggplot units */
+                char *end; double v = strtod(p->s, &end);
+                if (end == p->s || !(v > 0)) return fail(p, "linewidth= expects a number > 0%s", "");
+                p->s = end; spec->tree_lw = v;
             } else if (!strcmp(key, "size") && (jdata == &spec->tree_np_data
                                                 || jdata == &spec->tree_tp_data)) {
                 char *end; double v = strtod(p->s, &end);
@@ -3221,8 +3227,8 @@ static int parse_term(P *p, PlotSpec *spec) {
                 if (!(*jcol = ident(p)))
                     return fail(p, "colour= expects a column name", "");
             } else return fail(p, "tree geom option `%s` not implemented; "
-                               "supported: layout=, data=, colour=, label=, and size= "
-                               "on the point geoms", key);
+                               "supported: layout=, data=, colour=, label=, linewidth= "
+                               "on geom_tree(), and size= on the point geoms", key);
             free(key);
             skip_ws(p);
             if (*p->s == ',') { p->s++; skip_ws(p); }

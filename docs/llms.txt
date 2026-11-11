@@ -790,7 +790,9 @@ it a clade shares the hue its level has in a `geom_tippoint()`/
 `geom_cladelab(data=, label=col[, sublabel=col][, fill=col])` puts a filled
 box at the clade's outer edge with the label and an optional smaller second
 line ("Carcinomas" / "(e.g. colon cancers)"); boxes that would overlap are
-pushed outward. `geom_tree(colour=NA)` hides the branches so the sectors
+pushed outward. `geom_tree(linewidth=0.2)` (ggtree's `size=`, ggplot units,
+default 0.5) thins the branches of a dense tree; `geom_tree(colour=NA)`
+hides them so the sectors
 carry the picture, and `geom_tippoint(size=)` sizes the tip marks (ggplot
 mm). A circular tree without tip labels sizes its ring for points, not
 labels.

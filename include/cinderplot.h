@@ -789,6 +789,8 @@ typedef struct {
     char *tree_cl_data, *tree_cl_label, *tree_cl_sublabel, *tree_cl_fill;
     int tree_hide_branches;                       /* geom_tree(colour=NA) */
     double tree_pt_size;                          /* geom_tippoint/nodepoint(size=) */
+    double tree_lw;                               /* geom_tree(linewidth=): branch stroke,
+                                                   * ggplot units; 0 = the 0.5 default */
     char *lab_title, *lab_x, *lab_y, *lab_colour, *lab_fill;
     char *lab_shape, *lab_size, *lab_linetype;   /* labs(shape=/size=/linetype=): those legend titles */
     char *lab_subtitle, *lab_caption;             /* labs(subtitle=, caption=) */
