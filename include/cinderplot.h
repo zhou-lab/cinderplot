@@ -784,6 +784,8 @@ typedef struct {
     /* geom_hilight(data=, fill=[, alpha=]): shade each keyed clade's sector
      * (circular) or band (rectangular) under the branches, ggtree's verb */
     char *tree_hl_data, *tree_hl_col; double tree_hl_alpha;
+    double tree_hl_extend; int has_hl_extend;     /* extend=: mm past the clade's own
+                                                   * deepest tip (default 1) */
     /* geom_cladelab(data=, label=[, sublabel=][, fill=]): a filled box at the
      * clade's outer edge, a title line and an optional smaller second line */
     char *tree_cl_data, *tree_cl_label, *tree_cl_sublabel, *tree_cl_fill;

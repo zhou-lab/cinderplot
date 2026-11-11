@@ -3139,6 +3139,12 @@ static int parse_term(P *p, PlotSpec *spec) {
                 if (end == p->s || !(v >= 0 && v <= 1))
                     return fail(p, "alpha= expects a number in [0, 1]%s", "");
                 p->s = end; spec->tree_hl_alpha = v;
+            } else if (hl && !strcmp(key, "extend")) {
+                /* ggtree's extend=: how far past the clade's own deepest tip
+                 * the shade runs, here in mm */
+                char *end; double v = strtod(p->s, &end);
+                if (end == p->s || !(v >= 0)) return fail(p, "extend= expects mm >= 0%s", "");
+                p->s = end; spec->tree_hl_extend = v; spec->has_hl_extend = 1;
             } else if (!hl && (!strcmp(key, "label") || !strcmp(key, "sublabel"))) {
                 char *v = ident(p);
                 if (!v) return fail(p, "%s= expects a column name", key);
@@ -3146,7 +3152,7 @@ static int parse_term(P *p, PlotSpec *spec) {
             } else {
                 char msg[CP_ERRLEN];
                 snprintf(msg, sizeof msg, "%s() option `%s` not implemented; supported: %s",
-                         name, key, hl ? "data=, fill=, alpha=" : "data=, label=, sublabel=, fill=");
+                         name, key, hl ? "data=, fill=, alpha=, extend=" : "data=, label=, sublabel=, fill=");
                 free(key);
                 return fail(p, "%s", msg);
             }

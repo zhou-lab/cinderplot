@@ -269,6 +269,12 @@ static TNode *find_parent(TNode *t, const TNode *c) {
     }
     return NULL;
 }
+/* how deep a clade reaches: the largest x among its nodes */
+static double clade_xmax(const TNode *t) {
+    double m = t->x;
+    for (int i = 0; i < t->nkid; i++) { double k = clade_xmax(t->kid[i]); if (k > m) m = k; }
+    return m;
+}
 /* the leaf rows a clade spans */
 static void clade_span(const TNode *t, double *ymin, double *ymax) {
     if (!t->nkid) {
@@ -885,6 +891,7 @@ int render_tree(const PlotSpec *spec, const char *out,
     int circ = spec->tree_layout == 2;
 #define HX(v) (((v) - x0) / (x1 - x0))
 #define HY(v) (1.0 - ((v) - y0) / (y1 - y0))
+    double hl_ext = (spec->has_hl_extend ? spec->tree_hl_extend : 1) * 72 / 25.4;   /* pt */
     /* clade shading first, so the branches draw over it */
     for (int r = 0; jhl.df && r < jhl.df->nrow; r++) {
         TNode *n = jhl.by_id ? find_by_id(root, (int)jhl.key->num[r])
@@ -909,7 +916,9 @@ int render_tree(const PlotSpec *spec, const char *out,
         if (circ) {
             const int NA = 48;
             double a0 = THETA(ylo - 0.5), a1 = THETA(yhi + 0.5);
-            double r0 = RAD(xs), r1 = rmax + 0.012;
+            /* to its OWN deepest tip plus extend=, as ggtree draws it, so a
+             * clade of short branches gets a short sector */
+            double r0 = RAD(xs), r1 = RAD(clade_xmax(n)) + hl_ext / mincell;
             double *px = cp_xmalloc(2 * NA * sizeof(double));
             double *py = cp_xmalloc(2 * NA * sizeof(double));
             for (int k = 0; k < NA; k++) {
@@ -920,7 +929,8 @@ int render_tree(const PlotSpec *spec, const char *out,
             g->n = 2 * NA; g->px = px; g->py = py;
         } else {
             double *px = cp_xmalloc(4 * sizeof(double)), *py = cp_xmalloc(4 * sizeof(double));
-            double xa = HX(xs), xb = 1, ya = HY(ylo - 0.5), yb = HY(yhi + 0.5);
+            double xa = HX(xs), xb = HX(clade_xmax(n)) + hl_ext / cellw;
+            double ya = HY(ylo - 0.5), yb = HY(yhi + 0.5);
             px[0] = xa; py[0] = ya; px[1] = xb; py[1] = ya;
             px[2] = xb; py[2] = yb; px[3] = xa; py[3] = yb;
             g->n = 4; g->px = px; g->py = py;
@@ -952,17 +962,21 @@ int render_tree(const PlotSpec *spec, const char *out,
         double ylo = 1e300, yhi = -1e300;
         clade_span(n, &ylo, &yhi);
         double ym = (ylo + yhi) / 2, bx, by;          /* box centre, npc */
+        /* just outside the clade's own sector (its deepest tip, extend=),
+         * past the tip labels when they are drawn */
+        double cx_end = clade_xmax(n);
+        double lab_gap = (spec->tree_tiplab ? tipw : 0) + TXT_GAP + hl_ext;
         double bw = w / cellw, bh = h / cellh;
         /* a box that would sit on an earlier one moves outward (radially;
          * on a rectangular tree, rightward) until it is clear */
         for (int tries = 0; ; tries++) {
             double push = tries * (h / fmin(cellw, cellh)) * 0.6;
             if (circ) {
-                double a = THETA(ym), ra = rmax + 0.012 + (tipw + TXT_GAP) / mincell + push;
+                double a = THETA(ym), ra = RAD(cx_end) + lab_gap / mincell + push;
                 bx = 0.5 + ra * cos(a) * kx + cos(a) * bw / 2;
                 by = 0.5 + ra * sin(a) * ky + sin(a) * bh / 2;
             } else {
-                bx = 1 + (tipw + TXT_GAP) / cellw + bw / 2 + push;
+                bx = HX(cx_end) + lab_gap / cellw + bw / 2 + push;
                 by = HY(ym);
             }
             int clash = 0;
