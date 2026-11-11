@@ -800,7 +800,9 @@ default 0.5) thins the branches of a dense tree; `geom_tree(colour=NA)`
 hides them so the sectors
 carry the picture, and `geom_tippoint(size=)` sizes the tip marks (ggplot
 mm). A circular tree without tip labels sizes its ring for points, not
-labels.
+labels, and with no `--size` a circular tree's canvas is cropped to what is
+drawn (branches, sectors, points, clade boxes, labels), so a lopsided tree
+gets no blank margins; an explicit `--size` is kept exactly.
 
 ```sh
 # template: clades.tsv = node (id or name), lineage, sub

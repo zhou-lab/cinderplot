@@ -638,6 +638,7 @@ static void emit(GTable *T, int R, int C, const TNode *t, const PlotSpec *spec,
 
 int render_tree(const PlotSpec *spec, const char *out,
                 double w_pt, double h_pt, char *err) {
+    int auto_size = w_pt <= 0 && h_pt <= 0;   /* no --size: fit the canvas to the drawing */
     char *text = read_all(spec->data_path, err);
     if (!text) return -1;
     TNode *root = newick_parse(text, err);
@@ -816,8 +817,11 @@ int render_tree(const PlotSpec *spec, const char *out,
     }
     cairo_destroy(cr); cairo_surface_destroy(msurf);
 
-    cairo_surface_t *surf = cp_surface_create(out, w_pt, h_pt);
-    cr = cairo_create(surf);
+    /* The grobs are built on a measuring surface; the output surface is made
+     * at the end, once the canvas has been fitted to what was drawn. */
+    cairo_surface_t *surf = NULL;
+    cairo_surface_t *msurf2 = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 8, 8);
+    cr = cairo_create(msurf2);
     cairo_select_font_face(cr, cp_font_family, CAIRO_FONT_SLANT_NORMAL,
                            CAIRO_FONT_WEIGHT_NORMAL);
 
@@ -1009,6 +1013,68 @@ int render_tree(const PlotSpec *spec, const char *out,
 #undef HX
 #undef HY
 
+    /* A circular tree's ring rarely fills its square: short clades, sectors
+     * that end at their own tips. With no --size, crop the panel to the
+     * bounding box of what was drawn there (branches, sectors, points, clade
+     * boxes, labels) and shrink the canvas to match, as other modes fit. */
+    if (circ && auto_size && cellw > 0 && cellh > 0) {
+        double bx0 = 1e9, bx1 = -1e9, by0 = 1e9, by1 = -1e9;
+#define BB(x, y) do { double _x = (x), _y = (y); if (isfinite(_x) && isfinite(_y)) { \
+        bx0 = fmin(bx0, _x); bx1 = fmax(bx1, _x); \
+        by0 = fmin(by0, _y); by1 = fmax(by1, _y); } } while (0)
+        for (int i = 0; i < T->ngrobs; i++) {
+            const Grob *g = &T->grobs[i];
+            if (g->r0 != R || g->c0 != C) continue;
+            switch (g->type) {
+            case G_LINE: BB(g->x0, g->y0); BB(g->x1, g->y1); break;
+            case G_POLYLINE: case G_POLYGON:
+                for (int k = 0; k < g->n; k++) BB(g->px[k], g->py[k]);
+                break;
+            case G_POINTS: {
+                double rx = (g->radius > 0 ? g->radius : PT_RADIUS) / cellw;
+                double ry = (g->radius > 0 ? g->radius : PT_RADIUS) / cellh;
+                for (int k = 0; k < g->n; k++) {
+                    BB(g->px[k] - rx, g->py[k] - ry); BB(g->px[k] + rx, g->py[k] + ry);
+                }
+                break;
+            }
+            case G_TEXT: {
+                double w = text_w(cr, g->size, g->str), h = font_h(cr, g->size);
+                double a = g->rot * M_PI / 180, ca = cos(a), sa = sin(a);
+                double s0 = -g->hj * w, s1 = (1 - g->hj) * w;   /* along the baseline */
+                for (int c2 = 0; c2 < 4; c2++) {
+                    double u = c2 & 1 ? s1 : s0, v = c2 & 2 ? h / 2 : -h / 2;
+                    BB(g->tx + (u * ca - v * sa) / cellw, g->ty + (u * sa + v * ca) / cellh);
+                }
+                break;
+            }
+            default: break;
+            }
+        }
+#undef BB
+        double pad = TXT_GAP;
+        if (bx1 > bx0 && by1 > by0) {
+            double nw = (bx1 - bx0) * cellw + 2 * pad, nh = (by1 - by0) * cellh + 2 * pad;
+            double fx0 = bx0 - pad / cellw, fy0 = by0 - pad / cellh;
+            double sx = cellw / nw, sy = cellh / nh;
+            for (int i = 0; i < T->ngrobs; i++) {
+                Grob *g = &T->grobs[i];
+                if (g->r0 != R || g->c0 != C) continue;
+#define MX(x) (((x) - fx0) * sx)
+#define MY(y) (((y) - fy0) * sy)
+                g->x0 = MX(g->x0); g->x1 = MX(g->x1); g->y0 = MY(g->y0); g->y1 = MY(g->y1);
+                g->tx = MX(g->tx); g->ty = MY(g->ty);
+                if (g->px) for (int k = 0; k < g->n; k++) {
+                    ((double *)g->px)[k] = MX(g->px[k]); ((double *)g->py)[k] = MY(g->py[k]);
+                }
+#undef MX
+#undef MY
+            }
+            w_pt += nw - cellw; h_pt += nh - cellh;
+            cellw = nw; cellh = nh;
+        }
+    }
+
     if (leg) {                        /* key, centred in its own column */
         double ch = h_pt - 2 * MARGIN;
         int nk = leg->discrete ? leg->f->nlev : 0;
@@ -1066,6 +1132,11 @@ int render_tree(const PlotSpec *spec, const char *out,
         }
     }
 
+    cairo_destroy(cr); cairo_surface_destroy(msurf2);
+    surf = cp_surface_create(out, w_pt, h_pt);
+    cr = cairo_create(surf);
+    cairo_select_font_face(cr, cp_font_family, CAIRO_FONT_SLANT_NORMAL,
+                           CAIRO_FONT_WEIGHT_NORMAL);
     gt_resolve(T, 0, 0, w_pt, h_pt);
     gt_render(T, cr);
     cairo_destroy(cr);
