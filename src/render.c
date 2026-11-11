@@ -1300,11 +1300,33 @@ static int layer_frame_build(LayerFrame *lf, DataFrame *d2, const Layer *L,
  * the x range -- possibly the shared, fixed one -- to place its endpoints,
  * and trains y). Returns the number of intercepts dropped for having no
  * place on a log axis -- a value <= 0 used to poison the scale to -inf. */
-static int train_ref_lines(const PlotSpec *spec, int train_x, int train_y,
-                           double *txmin, double *txmax, double *tymin, double *tymax) {
+/* geom_hline/vline(aes(yintercept=col)): the intercepts, and the facet panel
+ * each one belongs to (pan NULL = every panel) */
+typedef struct { int n; double *v; int *pan; } RefRows;
+static RefRows g_refrows[MAX_LAYERS];
+static int ref_row_in(const RefRows *R, int r, int p) {
+    if (!R->pan) return 1;                     /* no facet column: every panel */
+    return p < 0 ? R->pan[r] >= 0 : R->pan[r] == p;   /* -1 = names no panel */
+}
+
+static int train_ref_lines_p(const PlotSpec *spec, int p, int train_x, int train_y,
+                             double *txmin, double *txmax, double *tymin, double *tymax) {
     int drop = 0;
     for (int li = 0; li < spec->nlayers; li++) {
         const Layer *L = &spec->layers[li];
+        const RefRows *RR = &g_refrows[li];
+        if (L->icept_col && (L->type == GEOM_HLINE ? train_y : train_x && txmin)) {
+            for (int r = 0; r < RR->n; r++) {
+                if (!ref_row_in(RR, r, p) || isnan(RR->v[r])) continue;
+                int hl = L->type == GEOM_HLINE;
+                double t = cp_logt(hl ? spec->log_y : spec->log_x, RR->v[r]);
+                if (!isfinite(t)) { drop++; continue; }
+                double *lo = hl ? tymin : txmin, *hi = hl ? tymax : txmax;
+                if (t < *lo) *lo = t;
+                if (t > *hi) *hi = t;
+            }
+            continue;
+        }
         if (L->type == GEOM_HLINE && L->has_intercept && train_y) {
             double t = cp_logt(spec->log_y, L->intercept);
             if (!isfinite(t)) { drop++; continue; }
@@ -1331,6 +1353,7 @@ static int train_ref_lines(const PlotSpec *spec, int train_x, int train_y,
     }
     return drop;
 }
+#define train_ref_lines(spec, tx, ty, a, b, c, d) train_ref_lines_p(spec, -1, tx, ty, a, b, c, d)
 
 /* a stroke geom's line width: the layer's linewidth= (size=) when given,
  * else the geom's ggplot default, both in linewidth units */
@@ -2645,6 +2668,44 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     }
     if (tymax == tymin) { tymin -= 0.5; tymax += 0.5; }
 
+    /* geom_hline/vline(aes(yintercept=col)[, data=]): one line per row,
+     * each in the facet panel its facet column names */
+    for (int li = 0; li < spec->nlayers; li++) {
+        const Layer *L = &spec->layers[li];
+        RefRows *RR = &g_refrows[li];
+        memset(RR, 0, sizeof *RR);
+        if ((L->type == GEOM_HLINE || L->type == GEOM_VLINE) && L->data && !L->icept_col) {
+            snprintf(err, CP_ERRLEN, "%s(data=%s) needs aes(%s=col) naming the "
+                     "column that holds the intercepts",
+                     L->type == GEOM_HLINE ? "geom_hline" : "geom_vline", L->data,
+                     L->type == GEOM_HLINE ? "yintercept" : "xintercept");
+            return -1;
+        }
+        if (!L->icept_col) continue;
+        const DataFrame *d = df;
+        if (L->data && !(d = df_read_csv(L->data, err))) return -1;
+        const Column *c = df_col(d, L->icept_col);
+        if (!c) { col_missing(err, d, L->icept_col); return -1; }
+        if (c->type != COL_NUM) {
+            snprintf(err, CP_ERRLEN, "%s(aes(%s=%s)): the column must be numeric",
+                     L->type == GEOM_HLINE ? "geom_hline" : "geom_vline",
+                     L->type == GEOM_HLINE ? "yintercept" : "xintercept", L->icept_col);
+            return -1;
+        }
+        RR->n = d->nrow; RR->v = c->num;
+        RR->pan = L->data ? layer_panel_idx(d, spec, ff) : NULL;
+        if (!L->data && ff) {                  /* the main data: its own panels */
+            RR->pan = cp_xmalloc((size_t)(d->nrow ? d->nrow : 1) * sizeof(int));
+            for (int r = 0; r < d->nrow; r++) RR->pan[r] = ff->idx[r];
+        }
+        int lost = 0;
+        for (int r = 0; RR->pan && r < RR->n; r++) lost += RR->pan[r] < 0;
+        if (lost)
+            fprintf(stderr, "cinderplot: warning: %s: %d row%s name%s no facet panel "
+                    "and %s not drawn\n", L->data ? L->data : "reference lines", lost,
+                    lost == 1 ? "" : "s", lost == 1 ? "s" : "", lost == 1 ? "is" : "are");
+    }
+
     /* reference lines (hline/vline/abline) widen the trained ranges */
     d_ref += train_ref_lines(spec, 1, !disc_y,
                              (disc_x || genome_x) ? NULL : &txmin,
@@ -2923,7 +2984,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                             if (hs->start[p] + hs->nb[p] * hs->width[p] > hi)
                                 hi = hs->start[p] + hs->nb[p] * hs->width[p];
                         }
-                    train_ref_lines(spec, 1, 0, &lo, &hi, &plo_y, &phi_y);   /* vline */
+                    train_ref_lines_p(spec, p, 1, 0, &lo, &hi, &plo_y, &phi_y);   /* vline */
                     plo_x = lo; phi_x = hi;           /* abline reads the x range */
                     /* A panel can be empty: levels= may name a level the data
                      * never uses. Draw it blank rather than refusing -- naming
@@ -3030,7 +3091,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     }
                     /* hline/abline intercepts, against this panel's x range
                      * when that is free too, else the shared one */
-                    train_ref_lines(spec, 0, 1, (disc_x || genome_x) ? NULL : &plo_x,
+                    train_ref_lines_p(spec, p, 0, 1, (disc_x || genome_x) ? NULL : &plo_x,
                                     (disc_x || genome_x) ? NULL : &phi_x, &lo, &hi);
                     if (spec->has_ylim) {      /* as for x above */
                         lo = cp_logt(spec->log_y, spec->ylim_lo);
@@ -4067,8 +4128,14 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     {
         const char *wide[3] = { spec->lab_title, spec->lab_subtitle, bottom_title };
         const double wsz[3] = { SZ_TITLE, SZ_BASE, SZ_BASE };
+        /* the title and subtitle start at the panel's left edge (ggplot's
+         * plot.title.position = "panel"), past the y title and tick labels,
+         * so that is the room they have -- not the whole canvas */
+        double left = MARGIN + (polar_tiles ? 0 : baseh) + HALF_LINE / 2
+                    + (polar_tiles ? 0 : ylab_w + TXT_GAP + TICK_LEN + band_wl);
         for (int i = 0; i < 3; i++)
-            if (wide[i] && text_w(cr, wsz[i], wide[i]) > w_pt - 2 * MARGIN)
+            if (wide[i] && text_w(cr, wsz[i], wide[i])
+                           > w_pt - MARGIN - (i < 2 ? left : MARGIN))
                 fprintf(stderr, "cinderplot: warning: the %s \"%s\" is wider than "
                         "the %.1fin canvas and will be clipped; shorten it or give "
                         "a wider --size\n", i == 0 ? "title" : i == 1 ? "subtitle"
@@ -4345,7 +4412,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             int leader = spec->polar_leader && show_x;
             double lead = 14 + (hasg ? labh * 1.4 : 0), lsp = font_h(cr, xls) * 1.15;
             if (leader)
-                rmax = fmin(panelw_pt / 2 - lead - maxw - 6, panelh_pt / 2 - lsp - 4);
+                rmax = fmin(panelw_pt / 2 - lead - fmax(maxw, hasg ? gw : 0) - 6,
+                            panelh_pt / 2 - lsp - 4);
             if (rmax < half * 0.3) rmax = half * 0.3;
             double rin = spec->polar_inner * rmax, cx = 0.5, cy = 0.5;
             {
@@ -4380,55 +4448,126 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             /* leader=TRUE: named spokes in two side columns, spread at least
              * lsp apart from their wanted height, each on an elbow line from
              * its spoke at the ring edge */
+            /* leader=TRUE: the named spokes (and any wedge name that would
+             * land on them) are entries of two side columns. Each entry wants
+             * the height of its spoke (a wedge: its middle), is spread from
+             * its neighbours by half their heights plus a margin, and hangs on
+             * an elbow line from the ring edge at its angle. */
+            char *wmoved = cp_xcalloc(ngrp > 0 ? ngrp : 1, 1);
+            double *wmid = cp_xmalloc((ngrp > 0 ? ngrp : 1) * sizeof(double));
+            for (int gi = 0; gi < ngrp; gi++) {
+                double lo = 1e9, hi = -1e9;
+                for (int l = 0; l < k; l++)
+                    if (sg[l] == gi) { lo = fmin(lo, a0[l]); hi = fmax(hi, a0[l] + step); }
+                wmid[gi] = lo > hi ? NAN : (lo + hi) / 2;
+            }
             if (leader) {
-                int *ls = cp_xmalloc(k * sizeof(int)), nls = 0;
-                double *ly = cp_xmalloc(k * sizeof(double));
-                for (int side = 0; side < 2; side++) {
-                    nls = 0;
+                int ne = 0;
+                int *et = cp_xmalloc((k + ngrp + 1) * sizeof(int));     /* >=0 spoke, <0 -1-wedge */
+                double *ey = cp_xmalloc((k + ngrp + 1) * sizeof(double));
+                double *ea = cp_xmalloc((k + ngrp + 1) * sizeof(double));
+                int *eo = cp_xmalloc((k + ngrp + 1) * sizeof(int));
+                double wsz = SZ_AXIS_TEXT;
+                for (int pass = 0; pass < 2; pass++) {
+                    ne = 0;
                     for (int l = 0; l < k; l++) {
                         const char *lb = xd_label(spec, xlev[l], l);
                         if (!lb || !*lb) continue;
-                        double a = PANG(a0[l] + step / 2);
-                        if ((sin(a) >= 0) != (side == 0)) continue;
-                        ls[nls] = l; ly[nls] = (rmax + lead * 0.5) * cos(a); nls++;
+                        et[ne] = l; ea[ne] = PANG(a0[l] + step / 2); ne++;
                     }
-                    for (int i = 1; i < nls; i++)          /* top to bottom */
-                        for (int j2 = i; j2 > 0 && ly[j2] > ly[j2 - 1]; j2--) {
-                            double ty = ly[j2]; ly[j2] = ly[j2 - 1]; ly[j2 - 1] = ty;
-                            int tl = ls[j2]; ls[j2] = ls[j2 - 1]; ls[j2 - 1] = tl;
+                    for (int gi = 0; hasg && gi < ngrp; gi++)
+                        if (wmoved[gi] && !isnan(wmid[gi])) { et[ne] = -1 - gi; ea[ne] = PANG(wmid[gi]); ne++; }
+                    /* lay out each side, top to bottom */
+                    for (int side = 0; side < 2; side++) {
+                        int no2 = 0;
+                        for (int e = 0; e < ne; e++)
+                            if ((sin(ea[e]) >= 0) == (side == 0)) {
+                                eo[no2++] = e; ey[e] = (rmax + lead * 0.5) * cos(ea[e]);
+                            }
+                        for (int a2 = 1; a2 < no2; a2++)
+                            for (int b2 = a2; b2 > 0 && ey[eo[b2]] > ey[eo[b2 - 1]]; b2--) {
+                                int t2 = eo[b2]; eo[b2] = eo[b2 - 1]; eo[b2 - 1] = t2;
+                            }
+#define EH(e) (font_h(cr, et[e] >= 0 ? xls : wsz) * 1.15)
+                        double ytop = panelh_pt / 2, ybot = -ytop;
+                        for (int a2 = 0; a2 < no2; a2++) {        /* down from the top */
+                            int e = eo[a2];
+                            if (ey[e] > ytop - EH(e) / 2) ey[e] = ytop - EH(e) / 2;
+                            if (a2) {
+                                int f = eo[a2 - 1];
+                                double need = (EH(e) + EH(f)) / 2;
+                                if (ey[e] > ey[f] - need) ey[e] = ey[f] - need;
+                            }
                         }
-                    double ytop = panelh_pt / 2 - lsp / 2, ybot = -ytop;
-                    for (int i = 0; i < nls; i++) {        /* push down, clamp at the top */
-                        if (ly[i] > ytop) ly[i] = ytop;
-                        if (i && ly[i] > ly[i - 1] - lsp) ly[i] = ly[i - 1] - lsp;
+                        for (int a2 = no2 - 1; a2 >= 0; a2--) {   /* then up from the bottom */
+                            int e = eo[a2];
+                            if (ey[e] < ybot + EH(e) / 2) ey[e] = ybot + EH(e) / 2;
+                            if (a2 < no2 - 1) {
+                                int f = eo[a2 + 1];
+                                double need = (EH(e) + EH(f)) / 2;
+                                if (ey[e] < ey[f] + need) ey[e] = ey[f] + need;
+                            }
+                        }
                     }
-                    for (int i = nls - 1; i >= 0; i--) {   /* then up from the bottom */
-                        if (ly[i] < ybot) ly[i] = ybot;
-                        if (i < nls - 1 && ly[i] < ly[i + 1] + lsp) ly[i] = ly[i + 1] + lsp;
+                    if (pass || !hasg) break;
+                    /* would a wedge name, beside the ring, hit a column name or
+                     * a leader line? then it joins the column (second pass) */
+                    int moved = 0;
+                    for (int gi = 0; gi < ngrp; gi++) {
+                        if (isnan(wmid[gi])) continue;
+                        double a = PANG(wmid[gi]), sa = sin(a), ca = cos(a);
+                        double rr = rmax + 4 + labh * 0.5, w = text_w(cr, wsz, glev[gi]);
+                        double ax = rr * sa, ay = rr * ca, hj = (1 - sa) / 2;
+                        double bx0 = ax - hj * w - 1, bx1 = bx0 + w + 2;
+                        double by0 = ay - labh / 2, by1 = ay + labh / 2;
+                        int hit = 0;
+                        for (int e = 0; e < ne && !hit; e++) {
+                            double sx = sin(ea[e]) >= 0 ? 1 : -1;
+                            const char *lb = xd_label(spec, xlev[et[e]], et[e]);
+                            double tw = text_w(cr, xls, lb), th2 = font_h(cr, xls);
+                            double lx0 = sx > 0 ? rmax + lead : -(rmax + lead) - tw;
+                            if (lx0 < bx1 && bx0 < lx0 + tw && ey[e] - th2 / 2 < by1 && by0 < ey[e] + th2 / 2)
+                                hit = 1;
+                            /* the leader line, sampled along its two legs */
+                            double re = rmax + 1, rk = rmax + lead * 0.45;
+                            double P[3][2] = { { re * sin(ea[e]), re * cos(ea[e]) },
+                                               { rk * sin(ea[e]), rk * cos(ea[e]) },
+                                               { sx * (rmax + lead - 2), ey[e] } };
+                            for (int sgm = 0; sgm < 2 && !hit; sgm++)
+                                for (int q = 0; q <= 20 && !hit; q++) {
+                                    double x = P[sgm][0] + (P[sgm + 1][0] - P[sgm][0]) * q / 20;
+                                    double y = P[sgm][1] + (P[sgm + 1][1] - P[sgm][1]) * q / 20;
+                                    if (x > bx0 && x < bx1 && y > by0 && y < by1) hit = 1;
+                                }
+                        }
+                        if (hit) { wmoved[gi] = 1; moved = 1; }
                     }
-                    double sx = side == 0 ? 1 : -1;
-                    for (int i = 0; i < nls; i++) {
-                        int l = ls[i];
-                        double a = PANG(a0[l] + step / 2), sa = sin(a), ca = cos(a);
-                        double *px = cp_xmalloc(3 * sizeof(double));
-                        double *py = cp_xmalloc(3 * sizeof(double));
-                        double re = rmax + 1, rk = rmax + lead * 0.45;
-                        px[0] = cx + re * sa / panelw_pt; py[0] = cy + re * ca / panelh_pt;
-                        px[1] = cx + rk * sa / panelw_pt; py[1] = cy + rk * ca / panelh_pt;
-                        px[2] = cx + sx * (rmax + lead - 2) / panelw_pt;
-                        py[2] = cy + ly[i] / panelh_pt;
-                        g = gt_add(T, G_POLYLINE, R, C, R, C);
-                        g->n = 3; g->px = px; g->py = py;
-                        g->col = (Col){0.45, 0.45, 0.45}; g->lw = lw_pt(0.3);
-                        g = gt_add(T, G_TEXT, R, C, R, C);
-                        g->str = (char *)xd_label(spec, xlev[l], l); g->size = xls;
-                        g->col = th->axis_text; g->va = V_INKCENTER;
-                        g->tx = cx + sx * (rmax + lead) / panelw_pt;
-                        g->ty = cy + ly[i] / panelh_pt;
-                        g->hj = side == 0 ? 0 : 1;
-                    }
+                    if (!moved) break;
                 }
-                free(ls); free(ly);
+                for (int e = 0; e < ne; e++) {
+                    double sx = sin(ea[e]) >= 0 ? 1 : -1;
+                    double sa = sin(ea[e]), ca = cos(ea[e]);
+                    double *px = cp_xmalloc(3 * sizeof(double));
+                    double *py = cp_xmalloc(3 * sizeof(double));
+                    double re = rmax + 1, rk = rmax + lead * 0.45;
+                    px[0] = cx + re * sa / panelw_pt; py[0] = cy + re * ca / panelh_pt;
+                    px[1] = cx + rk * sa / panelw_pt; py[1] = cy + rk * ca / panelh_pt;
+                    px[2] = cx + sx * (rmax + lead - 2) / panelw_pt;
+                    py[2] = cy + ey[e] / panelh_pt;
+                    g = gt_add(T, G_POLYLINE, R, C, R, C);
+                    g->n = 3; g->px = px; g->py = py;
+                    g->col = (Col){0.45, 0.45, 0.45}; g->lw = lw_pt(0.3);
+                    g = gt_add(T, G_TEXT, R, C, R, C);
+                    g->str = et[e] >= 0 ? (char *)xd_label(spec, xlev[et[e]], et[e])
+                                        : glev[-1 - et[e]];
+                    g->size = et[e] >= 0 ? xls : wsz;
+                    g->col = th->axis_text; g->va = V_INKCENTER;
+                    g->tx = cx + sx * (rmax + lead) / panelw_pt;
+                    g->ty = cy + ey[e] / panelh_pt;
+                    g->hj = sx > 0 ? 0 : 1;
+                }
+#undef EH
+                free(et); free(ey); free(ea); free(eo);
             }
             /* spoke names: horizontal for a few, radial past 24 */
             for (int l = 0; show_x && !leader && l < k; l++) {
@@ -4452,11 +4591,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             }
             /* wedge names, outside the spoke names */
             for (int gi = 0; hasg && gi < ngrp; gi++) {
-                double lo = 1e9, hi = -1e9;
-                for (int l = 0; l < k; l++)
-                    if (sg[l] == gi) { lo = fmin(lo, a0[l]); hi = fmax(hi, a0[l] + step); }
-                if (lo > hi) continue;
-                double a = PANG((lo + hi) / 2), sa = sin(a), ca = cos(a);
+                if (isnan(wmid[gi]) || wmoved[gi]) continue;   /* moved into a column */
+                double a = PANG(wmid[gi]), sa = sin(a), ca = cos(a);
                 double rr = leader ? rmax + 4 + labh * 0.5
                           : rmax + (show_x ? (k > 24 ? maxw + 6 : labh * 1.6) : 4) + labh * 0.5;
                 g = gt_add(T, G_TEXT, R, C, R, C);
@@ -4489,7 +4625,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         "gaps (or drop them with theme(axis.text=element_blank()))\n",
                         gap0 * 180 / M_PI, ceil(need_deg));
 #undef PANG
-            free(sg); free(ord); free(a0); free(dt); dt = NULL;
+            free(sg); free(ord); free(a0); free(dt); dt = NULL; free(wmoved); free(wmid);
         } else if (spec->polar) {
             int k = xf->nlev;
             double rmax = fmin(panelw_pt, panelh_pt) / 2 - 2.6 * labh;
@@ -5386,6 +5522,20 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     }
                 }
                 free(present);
+            } else if ((gt == GEOM_HLINE || gt == GEOM_VLINE) && spec->layers[li].icept_col) {
+                const Layer *L = &spec->layers[li];
+                const RefRows *RR = &g_refrows[li];
+                for (int r = 0; r < RR->n; r++) {
+                    if (!ref_row_in(RR, r, p) || isnan(RR->v[r])) continue;
+                    double t = gt == GEOM_HLINE ? NPCY(TY(RR->v[r]))
+                                                : NPCX(cp_logt(spec->log_x, RR->v[r]));
+                    if (!isfinite(t)) continue;
+                    g = gt_add(T, G_LINE, R, C, R, C);
+                    g->col = L->has_color ? L->color : C_BLACK;
+                    g->lw = LAYER_LW(L, 0.5); g->clip = 1;
+                    if (gt == GEOM_HLINE) { g->x0 = 0; g->x1 = 1; g->y0 = g->y1 = t; }
+                    else { g->y0 = 0; g->y1 = 1; g->x0 = g->x1 = t; }
+                }
             } else if (gt == GEOM_HLINE) {
                 const Layer *L = &spec->layers[li];
                 /* a reference value <= 0 has no place on a log axis; ggplot

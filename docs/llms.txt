@@ -240,7 +240,13 @@ and ignored (the output path is a command-line argument here).
   and `geom_abline(slope=M, intercept=B)`. Each takes ONE value per layer, so
   `yintercept=c(10, 20)` is refused — repeat the layer instead
   (`+ geom_hline(yintercept=10) + geom_hline(yintercept=20)`), which is what
-  the error tells you to do.
+  the error tells you to do. **One line per row** is ggplot2's
+  `geom_hline(data="lines.tsv", aes(yintercept=y))` (or
+  `geom_vline(..., aes(xintercept=x))`; without `data=` the main data's
+  column): a row whose file carries the facet column is drawn only in that
+  panel, a file without it in every panel, and under `scales="free_y"` each
+  panel's axis trains on its own lines -- the decision line at 0 in one facet
+  of several.
 - `geom_tile(colour="white"[, linewidth=])` strokes each cell's border over
   the mapped fill, as in ggplot2 — the thin white separators of a manuscript
   heatmap; linewidth defaults to 0.1. Pair with
@@ -284,7 +290,10 @@ and ignored (the output path is a command-line argument here).
   named spokes as horizontal text in a column each side of the circle, at
   least a text height apart, each joined to its spoke at the ring edge by a
   thin elbow line -- the readable form when chosen spokes sit next to each
-  other; the wedge names then sit just outside the rings. `theme(axis.text=element_text(colour=
+  other. The wedge names sit just outside the rings, unless one would land
+  on a column name or a leader line (small wedges among named spokes): that
+  wedge name joins the side column on its own leader line to the wedge's
+  middle, spread with the spoke names. `theme(axis.text=element_text(colour=
   "black"))` colours the spoke, ring and wedge names (default theme grey)
   and draws them even over `theme_void()`, as in ggplot2; `element_blank()`
   drops them. The ring names sit in the gap at
@@ -658,8 +667,13 @@ cells, and each number switches black/white against its fill's luminance; under
 `highlight("row","col"[, colour="red"][, name="m"])` draws a bounding box on one
 cell, addressed by its row and column names (so clustering cannot move the box
 off the intended cell); an unknown name errors. Repeat the verb for several
-cells; `name=` picks the heatmap when the figure has more than one. (The track
-form of the same verb boxes a `matrix()` track row — see mode 3.)
+cells; `name=` picks the heatmap when the figure has more than one. A
+**block** is `highlight(rows=c("Epith-", "Epith_NoHepaKidney-"), cols=c("EKVX",
+"NCI-H23"), colour="#0000FF", linewidth=1)`: one outline round the rectangle
+from the first to the last named row and column as displayed (after
+clustering), ComplexHeatmap's `decorate_heatmap_body` + `grid.rect`.
+`linewidth=` is in ggplot units (1 is about 2 pt; default 1) on either form.
+(The track form of the same verb boxes a `matrix()` track row — see mode 3.)
 
 `scale_fill_*(limits=c(lo,hi))` pins the fill domain, so several figures (a
 multi-page grid, say) share one ramp; out-of-range values squish to the ends
@@ -765,6 +779,29 @@ cinderplot 'data/celltype68.tre + geom_tree()
 `geom_tippoint()` does the same at the tips. Input is **long form**: several
 rows for one name draw several marks stacked back along its branch, so a node
 belonging to three categories shows three dots. Names with no row get no mark.
+
+**Clades** -- ggtree's verbs, keyed the same way (first column: node id or
+name). `geom_hilight(data="clades.tsv", fill=lineage[, alpha=0.5])` shades
+each row's clade under the branches: a sector of a circular tree from half
+way up the clade's incoming branch to past its tips, or a band of a
+rectangular one. `scale_fill_manual(values=)` names the colours; without
+it a clade shares the hue its level has in a `geom_tippoint()`/
+`geom_nodepoint()` join, so a lineage's sector and its tips match.
+`geom_cladelab(data=, label=col[, sublabel=col][, fill=col])` puts a filled
+box at the clade's outer edge with the label and an optional smaller second
+line ("Carcinomas" / "(e.g. colon cancers)"); boxes that would overlap are
+pushed outward. `geom_tree(colour=NA)` hides the branches so the sectors
+carry the picture, and `geom_tippoint(size=)` sizes the tip marks (ggplot
+mm). A circular tree without tip labels sizes its ring for points, not
+labels.
+
+```sh
+# template: clades.tsv = node (id or name), lineage, sub
+cinderplot 'tree.nwk + geom_tree(layout=circular, colour=NA)
+  + geom_hilight(data="clades.tsv", fill=lineage)
+  + geom_cladelab(data="clades.tsv", label=lineage, sublabel=sub, fill=lineage)
+  + geom_tippoint(data="tips.tsv", colour=lineage, size=0.8)' -o tree.svg
+```
 
 The key column's **type decides how it joins**, as ggtree's first column does:
 

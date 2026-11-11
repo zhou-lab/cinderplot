@@ -16,6 +16,7 @@
 #include "cinderplot.h"
 #include <ctype.h>
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 /* Local copies: the equivalents in render_tracks.c are file-static, and one
@@ -244,6 +245,39 @@ static TNode *find_by_id(TNode *t, int id) {
  * Only for a cladogram: there x is depth, an arbitrary unit, so stretching a
  * branch misrepresents nothing. On a phylogram the length is the datum and must
  * be left alone -- the labels crowd instead, which is the honest failure. */
+/* one cell as text: strings verbatim, numbers as fmt_num prints them */
+static void cell_label(const Column *c, int r, char *buf, size_t cap) {
+    if (c->type == COL_STR) snprintf(buf, cap, "%s", c->str[r] ? c->str[r] : "");
+    else if (isnan(c->num[r])) snprintf(buf, cap, "%s", "");
+    else fmt_num(c->num[r], buf, cap);
+}
+
+/* the node called `name` (tips and internal alike), or NULL */
+static TNode *find_by_name(TNode *t, const char *name) {
+    if (t->name && !strcmp(t->name, name)) return t;
+    for (int i = 0; i < t->nkid; i++) {
+        TNode *f = find_by_name(t->kid[i], name);
+        if (f) return f;
+    }
+    return NULL;
+}
+static TNode *find_parent(TNode *t, const TNode *c) {
+    for (int i = 0; i < t->nkid; i++) {
+        if (t->kid[i] == c) return t;
+        TNode *f = find_parent(t->kid[i], c);
+        if (f) return f;
+    }
+    return NULL;
+}
+/* the leaf rows a clade spans */
+static void clade_span(const TNode *t, double *ymin, double *ymax) {
+    if (!t->nkid) {
+        if (t->y < *ymin) *ymin = t->y;
+        if (t->y > *ymax) *ymax = t->y;
+    }
+    for (int i = 0; i < t->nkid; i++) clade_span(t->kid[i], ymin, ymax);
+}
+
 static void layout(TNode *t, double px, int has_blen, double *next_y,
                    double *maxx, int *nleaf, double fit, const TNode *parent) {
     double step = 1;
@@ -469,7 +503,7 @@ static void emit(GTable *T, int R, int C, const TNode *t, const PlotSpec *spec,
     double kx = aspect >= 1 ? 1.0 / aspect : 1.0;
     double ky = aspect >= 1 ? 1.0 : aspect;
     Grob *g;
-    if (!tn_leaf(t)) {
+    if (!tn_leaf(t) && !spec->tree_hide_branches) {
         if (circ) {
             /* the spine is an arc at this node's radius, swept between its
              * first and last child */
@@ -585,7 +619,8 @@ static void emit(GTable *T, int R, int C, const TNode *t, const PlotSpec *spec,
             }
             Grob *p = gt_add(T, G_POINTS, R, C, R, C);
             p->n = n; p->px = px; p->py = py; p->pcol = pc;
-            p->radius = PT_RADIUS; p->clip = 1;
+            p->radius = spec->tree_pt_size > 0 ? spec->tree_pt_size * 2.845276 / 2 : PT_RADIUS;
+            p->clip = 1;
         }
     }
     for (int i = 0; i < t->nkid; i++)
@@ -652,6 +687,73 @@ int render_tree(const PlotSpec *spec, const char *out,
     if (join_check_unique(&jtip, root, 1, err)) return -1;
     if (join_check_unique(&jlab, root, 1, err)) return -1;
 
+    /* geom_hilight(): one shaded clade per row, its fill from the mapped
+     * column (scale_fill_manual(values=) names the colours); geom_cladelab():
+     * one boxed label per row. Both key on node id or name, as above. */
+    Join jhl;
+    memset(&jhl, 0, sizeof jhl);
+    if (spec->tree_hl_data
+        && join_load(&jhl, spec->tree_hl_data, spec->tree_hl_col, spec, err)) return -1;
+    if (jhl.df && jhl.discrete && spec->has_manual) {
+        int named = spec->n_manual > 0 && spec->manual_names[0] != NULL;
+        for (int k = 0; k < jhl.f->nlev; k++) {
+            if (named) {
+                for (int q = 0; q < spec->n_manual; q++)
+                    if (spec->manual_names[q] && !strcmp(spec->manual_names[q], jhl.f->levels[k]))
+                        { jhl.pal[k] = spec->manual_cols[q]; break; }
+            } else if (k < spec->n_manual) jhl.pal[k] = spec->manual_cols[k];
+        }
+    }
+    /* one meaning, one colour: a lineage shaded and a lineage's tip points
+     * take the same hue unless scale_fill_manual() says otherwise */
+    const Join *jpt = jtip.df ? &jtip : jnode.df ? &jnode : NULL;
+    if (jhl.df && jhl.discrete && !spec->has_manual && jpt && jpt->discrete)
+        for (int k = 0; k < jhl.f->nlev; k++)
+            for (int q = 0; q < jpt->f->nlev; q++)
+                if (!strcmp(jhl.f->levels[k], jpt->f->levels[q])) { jhl.pal[k] = jpt->pal[q]; break; }
+    const DataFrame *cldf = NULL;
+    const Column *clkey = NULL, *cllab = NULL, *clsub = NULL, *clfill = NULL;
+    Factor *clf = NULL; Col *clpal = NULL;
+    double boxw = 0, boxh = 0, bpad = 3;
+    if (spec->tree_cl_data) {
+        if (!(cldf = df_read_csv(spec->tree_cl_data, err))) return -1;
+        clkey = &cldf->cols[0];
+        if (!(cllab = df_col(cldf, spec->tree_cl_label))) {
+            snprintf(err, CP_ERRLEN, "geom_cladelab(): column `%s` not found in %s",
+                     spec->tree_cl_label, spec->tree_cl_data);
+            return -1;
+        }
+        if (spec->tree_cl_sublabel && !(clsub = df_col(cldf, spec->tree_cl_sublabel))) {
+            snprintf(err, CP_ERRLEN, "geom_cladelab(): column `%s` not found in %s",
+                     spec->tree_cl_sublabel, spec->tree_cl_data);
+            return -1;
+        }
+        if (spec->tree_cl_fill) {
+            if (!(clfill = df_col(cldf, spec->tree_cl_fill))) {
+                snprintf(err, CP_ERRLEN, "geom_cladelab(): column `%s` not found in %s",
+                         spec->tree_cl_fill, spec->tree_cl_data);
+                return -1;
+            }
+            clf = factor_make(cldf, clfill);
+            clpal = cp_xmalloc((clf->nlev ? clf->nlev : 1) * sizeof(Col));
+            hue_palette(clf->nlev, clpal);
+            for (int k = 0; k < clf->nlev; k++)     /* the hilight's colour for a shared level */
+                for (int q = 0; jhl.df && jhl.discrete && q < jhl.f->nlev; q++)
+                    if (!strcmp(jhl.f->levels[q], clf->levels[k])) { clpal[k] = jhl.pal[q]; break; }
+        }
+        for (int r = 0; r < cldf->nrow; r++) {
+            char a[256], b[256];
+            cell_label(cllab, r, a, sizeof a);
+            double w = text_w(cr, SZ_AXIS_TEXT, a), h = font_h(cr, SZ_AXIS_TEXT);
+            if (clsub) {
+                cell_label(clsub, r, b, sizeof b);
+                w = fmax(w, text_w(cr, SZ_AXIS_TEXT * 0.8, b));
+                h += font_h(cr, SZ_AXIS_TEXT * 0.8);
+            }
+            boxw = fmax(boxw, w + 2 * bpad); boxh = fmax(boxh, h + 2 * bpad);
+        }
+    }
+
     /* Measure before laying out: on a cladogram the branch lengths depend on
      * how wide the labels are. */
     measure_labels(cr, root, spec->tree_tiplab, spec->tree_nodelab,
@@ -674,11 +776,15 @@ int render_tree(const PlotSpec *spec, const char *out,
          * much arc each one needs */
         /* Each tip needs roughly a line-height of arc, plus slack: labels
          * radiate, so neighbours converge as they approach the ring. */
-        double ring = nleaf * labh * 1.7;
+        /* without tip labels a tip needs only room for its point, so the
+         * ring is a third the size and the canvas no longer leaves wide
+         * empty margins round a label-free tree */
+        double ring = nleaf * labh * (spec->tree_tiplab ? 1.7 : 0.55);
         double rtree = ring / (2 * M_PI);
         /* Must invert rmax below, which is (mincell/2 - tipw - gap), or the
          * canvas grows without the drawn radius following it. */
-        double side = 2 * (rtree + tipw + TXT_GAP * 2) + 2 * MARGIN;
+        double side = 2 * (rtree + tipw + TXT_GAP * 2 + (boxw > 0 ? boxw + TXT_GAP * 2 : 0))
+                    + 2 * MARGIN;
         side = fmin(30.0 * 72, fmax(4.0 * 72, side));
         if (w_pt <= 0) w_pt = side;
         if (h_pt <= 0) h_pt = side;
@@ -699,7 +805,8 @@ int render_tree(const PlotSpec *spec, const char *out,
         double body = fit > 0 ? maxx : fmax(120.0, maxx * 26.0);
         double legroom = (spec->tree_nodepoint || spec->tree_tippoint
                           || spec->tree_tl_data) ? 90 : 0;
-        w_pt = fmin(30.0 * 72, fmax(3.0 * 72, 2 * MARGIN + tipw + body + legroom));
+        w_pt = fmin(30.0 * 72, fmax(3.0 * 72, 2 * MARGIN + tipw + body + legroom
+                                       + (boxw > 0 ? boxw + TXT_GAP : 0)));
     }
     cairo_destroy(cr); cairo_surface_destroy(msurf);
 
@@ -712,10 +819,13 @@ int render_tree(const PlotSpec *spec, const char *out,
     /* A joined aesthetic needs a key, or the colours say nothing. One legend,
      * for whichever join is present -- a tree carrying two different mapped
      * tables at once is not a figure worth encouraging. */
-    const Join *leg = jnode.df ? &jnode : jtip.df ? &jtip : jlab.df ? &jlab : NULL;
+    const Join *leg = jnode.df ? &jnode : jtip.df ? &jtip : jlab.df ? &jlab
+                    : jhl.df ? &jhl : NULL;
+    if (spec->no_legend) leg = NULL;
     const char *leg_title = leg == &jnode ? spec->tree_np_col
                           : leg == &jtip  ? spec->tree_tp_col
-                          : leg == &jlab  ? spec->tree_tl_col : NULL;
+                          : leg == &jlab  ? spec->tree_tl_col
+                          : leg == &jhl   ? spec->tree_hl_col : NULL;
     double legw = 0;
     if (leg) {
         double w = leg_title ? text_w(cr, SZ_BASE, leg_title) : 0;
@@ -739,7 +849,8 @@ int render_tree(const PlotSpec *spec, const char *out,
     /* Rectangular and slanted trees put every tip label on the right, so the
      * room goes in a column. A circular tree radiates them all round, so the
      * room comes out of the radius instead (rmax below). */
-    T->colw[2] = upt(spec->tree_layout == 2 ? MARGIN : MARGIN + tipw);
+    T->colw[2] = upt(spec->tree_layout == 2 ? MARGIN
+                     : MARGIN + tipw + (boxw > 0 ? boxw + TXT_GAP : 0));
     T->colw[3] = upt(legw ? legw + MARGIN : 0);
     T->nrow = 3;
     T->rowh[0] = upt(MARGIN + (spec->lab_title ? font_h(cr, SZ_TITLE) : 0));
@@ -758,7 +869,8 @@ int render_tree(const PlotSpec *spec, const char *out,
     double y0 = -0.5, y1 = (nleaf - 1) + 0.5;
     double x0 = 0, x1 = maxx > 0 ? maxx : 1;
     /* the canvas cell, in points, so the circular mapping can stay round */
-    double cellw = w_pt - 2 * MARGIN - (spec->tree_layout == 2 ? 0 : tipw)
+    double cellw = w_pt - 2 * MARGIN
+                 - (spec->tree_layout == 2 ? 0 : tipw + (boxw > 0 ? boxw + TXT_GAP : 0))
                  - (legw ? legw + MARGIN : 0);
     double cellh = h_pt - 2 * MARGIN - (spec->lab_title ? font_h(cr, SZ_TITLE) : 0);
     /* The circle is measured against the shorter side, so leave the labels
@@ -766,10 +878,122 @@ int render_tree(const PlotSpec *spec, const char *out,
     double mincell = fmin(cellw, cellh);
     double rmax = 0.5;
     if (spec->tree_layout == 2 && mincell > 0)
-        rmax = fmax(0.12, 0.5 - (tipw + TXT_GAP * 2) / mincell);
+        rmax = fmax(0.12, 0.5 - (tipw + TXT_GAP * 2
+                                 + (boxw > 0 ? fmax(boxw, boxh) + TXT_GAP * 2 : 0)) / mincell);
+    double aspect = cellh > 0 ? cellw / cellh : 1;
+    double kx = aspect >= 1 ? 1.0 / aspect : 1.0, ky = aspect >= 1 ? 1.0 : aspect;
+    int circ = spec->tree_layout == 2;
+#define HX(v) (((v) - x0) / (x1 - x0))
+#define HY(v) (1.0 - ((v) - y0) / (y1 - y0))
+    /* clade shading first, so the branches draw over it */
+    for (int r = 0; jhl.df && r < jhl.df->nrow; r++) {
+        TNode *n = jhl.by_id ? find_by_id(root, (int)jhl.key->num[r])
+                 : jhl.key->str[r] ? find_by_name(root, jhl.key->str[r]) : NULL;
+        if (!n) {
+            char kb[64];
+            cell_label(jhl.key, r, kb, sizeof kb);
+            snprintf(err, CP_ERRLEN, "geom_hilight(): `%s` is not a node of the tree "
+                     "(key on node ids, see geom_nodelab(label=id), or on names)", kb);
+            return -1;
+        }
+        Col fc;
+        if (jhl.discrete) { if (jhl.f->idx[r] < 0) continue; fc = jhl.pal[jhl.f->idx[r]]; }
+        else { if (!isfinite(jhl.val->num[r])) continue;
+               fc = fill_map_value(&jhl.fs, jhl.val->num[r], jhl.dmin, jhl.dmax); }
+        double ylo = 1e300, yhi = -1e300;
+        clade_span(n, &ylo, &yhi);
+        TNode *par = find_parent(root, n);
+        double xs = par ? (par->x + n->x) / 2 : x0;      /* from half-way up its branch */
+        Grob *g = gt_add(T, G_POLYGON, R, C, R, C);
+        g->col = fc; g->alpha = spec->tree_hl_alpha > 0 ? spec->tree_hl_alpha : 0.5;
+        if (circ) {
+            const int NA = 48;
+            double a0 = THETA(ylo - 0.5), a1 = THETA(yhi + 0.5);
+            double r0 = RAD(xs), r1 = rmax + 0.012;
+            double *px = cp_xmalloc(2 * NA * sizeof(double));
+            double *py = cp_xmalloc(2 * NA * sizeof(double));
+            for (int k = 0; k < NA; k++) {
+                double a = a0 + (a1 - a0) * k / (NA - 1), b = a1 - (a1 - a0) * k / (NA - 1);
+                px[k] = 0.5 + r1 * cos(a) * kx; py[k] = 0.5 + r1 * sin(a) * ky;
+                px[NA + k] = 0.5 + r0 * cos(b) * kx; py[NA + k] = 0.5 + r0 * sin(b) * ky;
+            }
+            g->n = 2 * NA; g->px = px; g->py = py;
+        } else {
+            double *px = cp_xmalloc(4 * sizeof(double)), *py = cp_xmalloc(4 * sizeof(double));
+            double xa = HX(xs), xb = 1, ya = HY(ylo - 0.5), yb = HY(yhi + 0.5);
+            px[0] = xa; py[0] = ya; px[1] = xb; py[1] = ya;
+            px[2] = xb; py[2] = yb; px[3] = xa; py[3] = yb;
+            g->n = 4; g->px = px; g->py = py;
+        }
+    }
     emit(T, R, C, root, spec, x0, x1, y0, y1, lw_pt(0.5), 1,
          &jnode, &jtip, &jlab, cellh > 0 ? cellw / cellh : 1, rmax,
          cellw > 0 ? cellw : 1);
+    /* clade labels: a filled box at the clade's outer edge, the title and
+     * an optional smaller second line */
+    double *pb = cp_xmalloc(4 * (cldf ? cldf->nrow + 1 : 1) * sizeof(double));
+    int npb = 0;                                   /* boxes placed so far: x0 y0 x1 y1 */
+    for (int r = 0; cldf && r < cldf->nrow; r++) {
+        TNode *n = clkey->type == COL_NUM ? find_by_id(root, (int)clkey->num[r])
+                 : clkey->str[r] ? find_by_name(root, clkey->str[r]) : NULL;
+        if (!n) {
+            char kb[64];
+            cell_label(clkey, r, kb, sizeof kb);
+            snprintf(err, CP_ERRLEN, "geom_cladelab(): `%s` is not a node of the tree", kb);
+            return -1;
+        }
+        char *lt = cp_xmalloc(256), *st = clsub ? cp_xmalloc(256) : NULL;
+        cell_label(cllab, r, lt, 256);
+        if (st) cell_label(clsub, r, st, 256);
+        double h1 = font_h(cr, SZ_AXIS_TEXT), h2 = st ? font_h(cr, SZ_AXIS_TEXT * 0.8) : 0;
+        double w = fmax(text_w(cr, SZ_AXIS_TEXT, lt), st ? text_w(cr, SZ_AXIS_TEXT * 0.8, st) : 0)
+                 + 2 * bpad;
+        double h = h1 + h2 + 2 * bpad;
+        double ylo = 1e300, yhi = -1e300;
+        clade_span(n, &ylo, &yhi);
+        double ym = (ylo + yhi) / 2, bx, by;          /* box centre, npc */
+        double bw = w / cellw, bh = h / cellh;
+        /* a box that would sit on an earlier one moves outward (radially;
+         * on a rectangular tree, rightward) until it is clear */
+        for (int tries = 0; ; tries++) {
+            double push = tries * (h / fmin(cellw, cellh)) * 0.6;
+            if (circ) {
+                double a = THETA(ym), ra = rmax + 0.012 + (tipw + TXT_GAP) / mincell + push;
+                bx = 0.5 + ra * cos(a) * kx + cos(a) * bw / 2;
+                by = 0.5 + ra * sin(a) * ky + sin(a) * bh / 2;
+            } else {
+                bx = 1 + (tipw + TXT_GAP) / cellw + bw / 2 + push;
+                by = HY(ym);
+            }
+            int clash = 0;
+            for (int q = 0; q < npb && !clash; q++)
+                clash = bx - bw / 2 < pb[4 * q + 2] && pb[4 * q] < bx + bw / 2
+                     && by - bh / 2 < pb[4 * q + 3] && pb[4 * q + 1] < by + bh / 2;
+            if (!clash || tries > 40) break;
+        }
+        pb[4 * npb] = bx - bw / 2; pb[4 * npb + 1] = by - bh / 2;
+        pb[4 * npb + 2] = bx + bw / 2; pb[4 * npb + 3] = by + bh / 2; npb++;
+        Col fc = (Col){0.85, 0.85, 0.85};
+        if (clf && clf->idx[r] >= 0) fc = clpal[clf->idx[r]];
+        Grob *g = gt_add(T, G_POLYGON, R, C, R, C);
+        double *qx = cp_xmalloc(4 * sizeof(double)), *qy = cp_xmalloc(4 * sizeof(double));
+        qx[0] = bx - bw / 2; qy[0] = by - bh / 2; qx[1] = bx + bw / 2; qy[1] = by - bh / 2;
+        qx[2] = bx + bw / 2; qy[2] = by + bh / 2; qx[3] = bx - bw / 2; qy[3] = by + bh / 2;
+        g->n = 4; g->col = fc; g->alpha = 0.9; g->px = qx; g->py = qy;
+        g = gt_add(T, G_TEXT, R, C, R, C);
+        g->str = lt; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
+        g->tx = bx; g->ty = by + bh / 2 - (bpad + h1 / 2) / cellh;
+        g->hj = 0.5; g->va = V_INKCENTER;
+        if (st) {
+            g = gt_add(T, G_TEXT, R, C, R, C);
+            g->str = st; g->size = SZ_AXIS_TEXT * 0.8; g->col = C_BLACK;
+            g->tx = bx; g->ty = by - bh / 2 + (bpad + h2 / 2) / cellh;
+            g->hj = 0.5; g->va = V_INKCENTER;
+        }
+    }
+    free(pb);
+#undef HX
+#undef HY
 
     if (leg) {                        /* key, centred in its own column */
         double ch = h_pt - 2 * MARGIN;

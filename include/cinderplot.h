@@ -415,6 +415,10 @@ typedef struct {
     /* geom_point(fill="white"): the body of a filled glyph (shape 21-25),
      * kept apart from colour=, which is then its outline */
     Col fill_c; int has_fill_c;
+    /* geom_hline(aes(yintercept=col)) / geom_vline(aes(xintercept=col)): one
+     * line per row of the layer's data= file (or the main data), drawn only
+     * in the facet panel its facet column names (every panel without one) */
+    char *icept_col;
 } Layer;
 #define MAX_LAYERS 8
 
@@ -517,6 +521,11 @@ typedef struct {
     int dash;                      /* 0 solid, 1 dashed, 2 dotted */
     char *label;                   /* tiny corner label, NULL = none */
     char *file;                    /* file form; row/region are then per line */
+    /* block form: highlight(rows=c(...), cols=c(...)) boxes the rectangle
+     * from the first to the last named row and column as displayed (after
+     * clustering), one outline round the block */
+    char **rows, **cols; int nrows, ncols;
+    double lw;                     /* linewidth= (ggplot units); 0 = the 1 default */
 } CellHighlight;
 #define MAX_HIGHLIGHTS 64
 
@@ -772,6 +781,14 @@ typedef struct {
     char *tree_np_data, *tree_np_col;             /* internal nodes */
     char *tree_tp_data, *tree_tp_col;             /* tips */
     char *tree_tl_data, *tree_tl_col;             /* tip LABEL colour */
+    /* geom_hilight(data=, fill=[, alpha=]): shade each keyed clade's sector
+     * (circular) or band (rectangular) under the branches, ggtree's verb */
+    char *tree_hl_data, *tree_hl_col; double tree_hl_alpha;
+    /* geom_cladelab(data=, label=[, sublabel=][, fill=]): a filled box at the
+     * clade's outer edge, a title line and an optional smaller second line */
+    char *tree_cl_data, *tree_cl_label, *tree_cl_sublabel, *tree_cl_fill;
+    int tree_hide_branches;                       /* geom_tree(colour=NA) */
+    double tree_pt_size;                          /* geom_tippoint/nodepoint(size=) */
     char *lab_title, *lab_x, *lab_y, *lab_colour, *lab_fill;
     char *lab_shape, *lab_size, *lab_linetype;   /* labs(shape=/size=/linetype=): those legend titles */
     char *lab_subtitle, *lab_caption;             /* labs(subtitle=, caption=) */

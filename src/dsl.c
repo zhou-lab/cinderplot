@@ -1884,11 +1884,38 @@ static int parse_term(P *p, PlotSpec *spec) {
                         if (*p->s == ',') { p->s++; skip_ws(p); }
                         continue;
                     }
-                    if (gt == GEOM_HLINE || gt == GEOM_VLINE)
-                        return fail(p, "%s(aes(...)) -- one line per data row -- is "
-                                    "not implemented; give a literal intercept "
-                                    "(yintercept=20 / xintercept=20) and repeat the "
-                                    "layer for several", name);
+                    if (gt == GEOM_HLINE || gt == GEOM_VLINE) {
+                        /* aes(yintercept=col): one line per row, ggplot2's
+                         * per-facet reference line with data= */
+                        const char *want = gt == GEOM_HLINE ? "yintercept" : "xintercept";
+                        p->s++; skip_ws(p);
+                        char *k2 = ident(p);
+                        skip_ws(p);
+                        if (!k2 || strcmp(k2, want) || *p->s != '=') { free(k2);
+                            char msg[CP_ERRLEN];
+                            snprintf(msg, sizeof msg, "%s(aes()) takes one mapping, %s=col",
+                                     name, want);
+                            return fail(p, "%s", msg); }
+                        free(k2);
+                        p->s++;
+                        skip_ws(p);
+                        if (isdigit((unsigned char)*p->s) || *p->s == '-' || *p->s == '.') {
+                            char msg[CP_ERRLEN];
+                            snprintf(msg, sizeof msg, "%s(aes(%s=<number>)) maps a constant; "
+                                     "give the literal intercept, %s(%s=N), or name a column",
+                                     name, want, name, want);
+                            return fail(p, "%s", msg);
+                        }
+                        char *v2 = colname(p);
+                        if (!v2) return *p->err ? -1 : fail(p, "%s(aes()) expects a column name", name);
+                        skip_ws(p);
+                        if (*p->s != ')') return fail(p, "%s(aes()) takes one mapping", name);
+                        p->s++;
+                        free(l->icept_col); l->icept_col = v2;
+                        skip_ws(p);
+                        if (*p->s == ',') { p->s++; skip_ws(p); }
+                        continue;
+                    }
                     /* one layer-level mapping IS supported, because it
                      * names a column rather than a scale: aes(y=other), the
                      * long spelling of the y= option. Anything else still
@@ -2043,7 +2070,8 @@ static int parse_term(P *p, PlotSpec *spec) {
                     if (!(pt && is_f && l->has_color && !l->color_is_fill)) {
                         l->color = cv; l->has_color = 1; l->color_is_fill = is_f;
                     }
-                } else if ((se || gt == GEOM_TILE) && !strcmp(key, "data")) {
+                } else if ((se || gt == GEOM_TILE || gt == GEOM_HLINE || gt == GEOM_VLINE)
+                           && !strcmp(key, "data")) {
                     l->data = string_lit(p);
                     if (!l->data) return fail(p, "data= expects a quoted path", "");
                 } else if (se && !strcmp(key, "y")) {
@@ -2249,10 +2277,14 @@ static int parse_term(P *p, PlotSpec *spec) {
             return fail(p, "geom_text(vjust=) with angle= is not implemented (the "
                         "rotated frame centres vertically); use nudge_y= instead", "");
         /* a reference line with no position parsed and drew nothing */
-        if (gt == GEOM_HLINE && !l->has_intercept)
-            return fail(p, "geom_hline() needs yintercept=", "");
-        if (gt == GEOM_VLINE && !l->has_intercept)
-            return fail(p, "geom_vline() needs xintercept=", "");
+        if (gt == GEOM_HLINE && !l->has_intercept && !l->icept_col)
+            return fail(p, l->data ? "geom_hline(data=) needs aes(yintercept=col) naming "
+                        "the column that holds the intercepts%s"
+                        : "geom_hline() needs yintercept=%s", "");
+        if (gt == GEOM_VLINE && !l->has_intercept && !l->icept_col)
+            return fail(p, l->data ? "geom_vline(data=) needs aes(xintercept=col) naming "
+                        "the column that holds the intercepts%s"
+                        : "geom_vline() needs xintercept=%s", "");
         return 0;
     }
     if (!strcmp(name, "scale_x_log10") || !strcmp(name, "scale_y_log10") ||
@@ -2594,18 +2626,35 @@ static int parse_term(P *p, PlotSpec *spec) {
                 char *v = string_lit(p);
                 if (!v) return fail(p, "label= expects a quoted string", "");
                 h->label = v;
+            } else if (!strcmp(key, "rows") || !strcmp(key, "cols")) {
+                char **nm, **vv; int nn;
+                if (parse_named_strs(p, &nm, &vv, &nn, key)) return -1;
+                if (!nn) return fail(p, "%s=c() is empty", key);
+                if (key[0] == 'r') { h->rows = vv; h->nrows = nn; }
+                else { h->cols = vv; h->ncols = nn; }
+            } else if (!strcmp(key, "linewidth") || !strcmp(key, "size")) {
+                char *end; double v = strtod(p->s, &end);
+                if (end == p->s || !(v > 0)) return fail(p, "linewidth= expects a number > 0%s", "");
+                p->s = end; h->lw = v;
             } else return fail(p, "option `%s` not implemented on highlight(); "
                                "supported: colour=, name=, row=, region=, "
-                               "linetype=, label=", key);
+                               "linetype=, label=, rows=, cols=, linewidth=", key);
             skip_ws(p);
         }
         if (expect(p, ')')) return -1;
         if (h->file && (h->row || h->region || h->label))
             return fail(p, "highlight(\"file\") takes only name=; the rows, spans, "
                         "colours and labels come from the file", "");
-        if (!h->file && !h->col && !h->region)
+        if ((h->nrows > 0) != (h->ncols > 0))
+            return fail(p, "highlight(rows=, cols=) boxes a block: give both, the rows "
+                        "and the columns it spans%s", "");
+        if (h->nrows && (h->col || h->row || h->region || h->file))
+            return fail(p, "highlight(rows=, cols=) is the heatmap block form; it takes "
+                        "no (\"row\",\"col\"), row=, region= or file%s", "");
+        if (!h->file && !h->col && !h->region && !h->nrows)
             return fail(p, "highlight() needs a target: (\"row\",\"col\") for a "
-                        "heatmap cell, or row= and region= for a matrix() track", "");
+                        "heatmap cell, rows=c(...) and cols=c(...) for a block, or "
+                        "row= and region= for a matrix() track", "");
         if (!h->file && h->region && !h->row)
             return fail(p, "highlight(region=) needs row= (the sample to box)", "");
         if (h->col && (h->region || h->label || h->dash))
@@ -3066,6 +3115,53 @@ static int parse_term(P *p, PlotSpec *spec) {
         spec->coord_flip = 1;
         return expect(p, ')');
     }
+    if (!strcmp(name, "geom_hilight") || !strcmp(name, "geom_highlight")
+        || !strcmp(name, "geom_cladelab")) {
+        /* ggtree's clade layers: a table keyed (first column) on node id or
+         * name, like the other tree joins */
+        int hl = name[5] == 'h';
+        skip_ws(p);
+        while (*p->s != ')') {
+            char *key = ident(p);
+            if (!key || expect(p, '='))
+                return fail(p, "%s() takes key=value arguments", name);
+            skip_ws(p);
+            if (!strcmp(key, "data")) {
+                char *v = string_lit(p);
+                if (!v) return fail(p, "data= expects a quoted path%s", "");
+                if (hl) spec->tree_hl_data = v; else spec->tree_cl_data = v;
+            } else if (!strcmp(key, "fill")) {
+                char *v = ident(p);
+                if (!v) return fail(p, "fill= expects a column name%s", "");
+                if (hl) spec->tree_hl_col = v; else spec->tree_cl_fill = v;
+            } else if (hl && !strcmp(key, "alpha")) {
+                char *end; double v = strtod(p->s, &end);
+                if (end == p->s || !(v >= 0 && v <= 1))
+                    return fail(p, "alpha= expects a number in [0, 1]%s", "");
+                p->s = end; spec->tree_hl_alpha = v;
+            } else if (!hl && (!strcmp(key, "label") || !strcmp(key, "sublabel"))) {
+                char *v = ident(p);
+                if (!v) return fail(p, "%s= expects a column name", key);
+                if (key[0] == 'l') spec->tree_cl_label = v; else spec->tree_cl_sublabel = v;
+            } else {
+                char msg[CP_ERRLEN];
+                snprintf(msg, sizeof msg, "%s() option `%s` not implemented; supported: %s",
+                         name, key, hl ? "data=, fill=, alpha=" : "data=, label=, sublabel=, fill=");
+                free(key);
+                return fail(p, "%s", msg);
+            }
+            free(key);
+            skip_ws(p);
+            if (*p->s == ',') { p->s++; skip_ws(p); }
+        }
+        if (hl && (!spec->tree_hl_data || !spec->tree_hl_col))
+            return fail(p, "geom_hilight() needs data= (key column first: node id or "
+                        "name) and fill=<column>%s", "");
+        if (!hl && (!spec->tree_cl_data || !spec->tree_cl_label))
+            return fail(p, "geom_cladelab() needs data= (key column first: node id or "
+                        "name) and label=<column>%s", "");
+        return expect(p, ')');
+    }
     if (!strcmp(name, "geom_tree") || !strcmp(name, "geom_tiplab")
         || !strcmp(name, "geom_nodelab") || !strcmp(name, "geom_nodepoint")
         || !strcmp(name, "geom_tippoint")) {
@@ -3108,12 +3204,25 @@ static int parse_term(P *p, PlotSpec *spec) {
                 if (!jdata) return fail(p, "%s() takes no data=", name);
                 if (!(*jdata = string_lit(p)))
                     return fail(p, "data= expects a quoted path", "");
+            } else if ((!strcmp(key, "colour") || !strcmp(key, "color"))
+                       && !strcmp(name, "geom_tree")) {
+                /* ggtree(colour=NA): the clade sectors carry the picture */
+                char *v = is_quote(p) ? string_lit(p) : ident(p);
+                if (!v || (strcmp(v, "NA") && strcmp(v, "none")))
+                    return fail(p, "geom_tree(colour=) takes NA (hide the branches)%s", "");
+                spec->tree_hide_branches = 1;
+            } else if (!strcmp(key, "size") && (jdata == &spec->tree_np_data
+                                                || jdata == &spec->tree_tp_data)) {
+                char *end; double v = strtod(p->s, &end);
+                if (end == p->s || !(v > 0)) return fail(p, "size= expects a number > 0%s", "");
+                p->s = end; spec->tree_pt_size = v;
             } else if (!strcmp(key, "colour") || !strcmp(key, "color")) {
                 if (!jcol) return fail(p, "%s() takes no colour=", name);
                 if (!(*jcol = ident(p)))
                     return fail(p, "colour= expects a column name", "");
             } else return fail(p, "tree geom option `%s` not implemented; "
-                               "supported: layout=, data=, colour=, label=", key);
+                               "supported: layout=, data=, colour=, label=, and size= "
+                               "on the point geoms", key);
             free(key);
             skip_ws(p);
             if (*p->s == ',') { p->s++; skip_ws(p); }
@@ -3902,7 +4011,8 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
 
     /* ---- mode mixing ---- */
     int any_tree = spec->tree_mode || spec->tree_tiplab || spec->tree_nodelab
-                || spec->tree_nodepoint || spec->tree_tippoint;
+                || spec->tree_nodepoint || spec->tree_tippoint
+                || spec->tree_hl_data || spec->tree_cl_data;
     int any_grammar = spec->nlayers || spec->x.col || spec->facet_var || spec->facet_grid;
     if (spec->venn_mode) {
         if (spec->chord_mode || any_grammar || spec->nhobjs || spec->ntracks || any_tree

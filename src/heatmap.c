@@ -2335,6 +2335,36 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                      "row/column names to address a cell by");
             return -1;
         }
+        if (hl->nrows) {                     /* the block form: one outline */
+            int r0 = m->nr, r1 = -1, c0 = m->nc, c1 = -1;
+            for (int q = 0; q < hl->nrows + hl->ncols; q++) {
+                int isr = q < hl->nrows;
+                const char *nm = isr ? hl->rows[q] : hl->cols[q - hl->nrows];
+                int nn = isr ? m->nr : m->nc, kk = -1;
+                for (int k = 0; k < nn; k++)
+                    if (!strcmp(isr ? m->rn[k] : m->cn[k], nm)) { kk = k; break; }
+                if (kk < 0) {
+                    snprintf(err, CP_ERRLEN, "highlight(%s=): `%s` is not a %s name of "
+                             "the heatmap", isr ? "rows" : "cols", nm, isr ? "row" : "column");
+                    return -1;
+                }
+                const int *ord = isr ? r->roword : r->coword;
+                for (int k = 0; k < nn; k++)
+                    if (ord[k] == kk) {              /* its display slot */
+                        if (isr) { if (k < r0) r0 = k; if (k > r1) r1 = k; }
+                        else { if (k < c0) c0 = k; if (k > c1) c1 = k; }
+                        break;
+                    }
+            }
+            g = gt_add(T, G_RECT, CR, CC, CR, CC);
+            g->sub = 1; g->stroke = 1; g->clip = 1;
+            g->lw = lw_pt(hl->lw > 0 ? hl->lw : 1);
+            g->col = hl->color;
+            g->x0 = r->l + c0 * (r->w / m->nc); g->x1 = r->l + (c1 + 1) * (r->w / m->nc);
+            g->y1 = r->b + r->h - r0 * (r->h / m->nr);
+            g->y0 = r->b + r->h - (r1 + 1) * (r->h / m->nr);
+            continue;
+        }
         int kr = -1, kc = -1;
         for (int k = 0; k < m->nr; k++)
             if (!strcmp(m->rn[k], hl->row)) { kr = k; break; }
@@ -2354,7 +2384,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
         for (int k = 0; k < m->nr; k++) if (r->roword[k] == kr) { rr = k; break; }
         for (int k = 0; k < m->nc; k++) if (r->coword[k] == kc) { cc = k; break; }
         g = gt_add(T, G_RECT, CR, CC, CR, CC);
-        g->sub = 1; g->stroke = 1; g->lw = lw_pt(1); g->clip = 1;
+        g->sub = 1; g->stroke = 1; g->lw = lw_pt(hl->lw > 0 ? hl->lw : 1); g->clip = 1;
         g->col = hl->color;
         g->x0 = r->l + cc * (r->w / m->nc); g->x1 = g->x0 + r->w / m->nc;
         g->y1 = r->b + r->h - rr * (r->h / m->nr); g->y0 = g->y1 - r->h / m->nr;
