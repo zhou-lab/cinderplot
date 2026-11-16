@@ -254,7 +254,16 @@ and ignored (the output path is a command-line argument here).
   hug the tile grid. Discrete expansion measures from the TILE EDGE
   (category ± 0.5), so `c(0,0)` leaves the outer cells full-sized and
   flush, never cut in half; `expand=c(mult, add)` on any scale overrides
-  the defaults (continuous 5%%, discrete 0.6 from the centre) generally.
+  the defaults (continuous 5%, discrete 0.6 from the centre) generally.
+- `geom_hex(stat="identity"[, offset=TRUE])` draws one pointy-top hexagon
+  per row at (x, y): a gapless spot map (Visium-style). Half-width = the x
+  pitch and vertices at +-2/3 of the y pitch, so a staggered grid (odd rows
+  already half a cell over, as Visium array coordinates and hexbin centres
+  are) tiles with no gap; `offset=TRUE` staggers a square grid first. Fill,
+  `colour=` border and `linewidth=` work as on `geom_tile()`, and the axis
+  range is trained on the hexagons. Plain `geom_hex()` (ggplot2's binning)
+  errors. On a square grid the hexagons are 15% taller than regular; add
+  `coord_fixed(ratio=0.866)` for regular ones.
 - `geom_boxplot()` renders `fill=` and `colour=` differently, as ggplot2
   does: `fill=` colours the box body under dark chrome (outline, whiskers,
   median, outliers); `colour=` colours the chrome over a white body.

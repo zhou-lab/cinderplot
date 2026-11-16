@@ -1758,6 +1758,7 @@ static int parse_term(P *p, PlotSpec *spec) {
      * the distinction is a rendering optimisation there, so accept it as a
      * synonym rather than making the caller care. */
     else if (!strcmp(name, "geom_raster")) gt = GEOM_TILE;
+    else if (!strcmp(name, "geom_hex")) gt = GEOM_TILE;   /* l->hex marks it */
     else if (!strcmp(name, "geom_segment")) gt = GEOM_SEGMENT;
     else if (!strcmp(name, "geom_errorbar") || !strcmp(name, "geom_errorbarh")) gt = GEOM_ERRORBAR;
     else if (!strcmp(name, "geom_linerange")) gt = GEOM_LINERANGE;
@@ -1779,6 +1780,7 @@ static int parse_term(P *p, PlotSpec *spec) {
         l->slope = 1;                                /* geom_abline default slope */
         l->repel = is_repel;
         l->eb_horiz = !strcmp(name, "geom_errorbarh");
+        l->hex = !strcmp(name, "geom_hex");
         skip_ws(p);
         {
             /* generic layer args: color=/colour=/fill= sets a constant colour
@@ -2249,6 +2251,19 @@ static int parse_term(P *p, PlotSpec *spec) {
                 } else if ((gt == GEOM_TEXT || gt == GEOM_LABEL) && !strcmp(key, "nudge_y")) {
                     l->nudge_y = strtod(p->s, (char **)&p->s);
                     if (!isfinite(l->nudge_y)) return fail(p, "nudge_y= must be finite", "");
+                } else if (l->hex && !strcmp(key, "stat")) {
+                    skip_ws(p);
+                    char *v = *p->s == '"' ? string_lit(p) : ident(p);
+                    int ok = v && !strcmp(v, "identity");
+                    free(v);
+                    if (!ok)
+                        return fail(p, "geom_hex(stat=) supports \"identity\" only: one "
+                                    "hexagon per row at (x, y); hexagonal binning is not "
+                                    "implemented%s", "");
+                    l->hex_identity = 1;
+                } else if (l->hex && !strcmp(key, "offset")) {
+                    if (parse_bool(p, &l->hex_offset))
+                        return fail(p, "geom_hex(offset=) expects TRUE or FALSE%s", "");
                 } else if (!strcmp(key, "alpha")) {
                     /* ggplot2's alpha: the first thing anyone reaches for on a
                      * large scatter, where an opaque overplot hides where the
@@ -2273,6 +2288,13 @@ static int parse_term(P *p, PlotSpec *spec) {
             }
         }
         if (expect(p, ')')) return -1;
+        if (l->hex && !l->hex_identity)
+            return fail(p, "geom_hex() bins points into hexagons in ggplot2, which is not "
+                        "implemented; geom_hex(stat=\"identity\") draws one hexagon per "
+                        "row at (x, y) -- add offset=TRUE for a square grid%s", "");
+        if (l->hex && (l->data || l->fill_col))
+            return fail(p, "geom_hex() takes the main data and its fill= mapping; "
+                        "data= and aes(fill=) are geom_tile()'s ring-plot forms%s", "");
         if (l->has_txt_vjust && l->txt_angle != 0)
             return fail(p, "geom_text(vjust=) with angle= is not implemented (the "
                         "rotated frame centres vertically); use nudge_y= instead", "");
@@ -3925,11 +3947,11 @@ static int parse_term(P *p, PlotSpec *spec) {
     /* a few near-misses get a pointer instead of the whole menu */
     if (!strcmp(name, "geom_path") || !strcmp(name, "geom_step") || !strcmp(name, "geom_area")
         || !strcmp(name, "geom_ribbon") || !strcmp(name, "geom_violin") || !strcmp(name, "geom_crossbar")
-        || !strcmp(name, "geom_pointrange") || !strcmp(name, "geom_bin2d") || !strcmp(name, "geom_hex")
+        || !strcmp(name, "geom_pointrange") || !strcmp(name, "geom_bin2d")
         || !strcmp(name, "geom_polygon") || !strcmp(name, "geom_dotplot") || !strcmp(name, "geom_rug")
         || !strcmp(name, "geom_freqpoly") || !strcmp(name, "geom_curve") || !strcmp(name, "geom_count"))
         return fail(p, "%s() is not implemented; the geoms are "
-                    "geom_point/jitter/line/smooth/col/bar/histogram/boxplot/density/tile/raster/segment/rect/hline/vline/abline/errorbar/linerange/text/label/text_repel/label_repel()", name);
+                    "geom_point/jitter/line/smooth/col/bar/histogram/boxplot/density/tile/raster/hex/segment/rect/hline/vline/abline/errorbar/linerange/text/label/text_repel/label_repel()", name);
     if (!strcmp(name, "scale_colour_gradientn") || !strcmp(name, "scale_color_gradientn")
         || !strcmp(name, "scale_fill_gradientn"))
         return fail(p, "%s() is not implemented; use gradient2() (three stops) or a "
@@ -3940,7 +3962,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                     "`data + aes() + geom_*()` and the output is the CLI argument", name);
     return fail(p, "`%s()` is not implemented; supported: "
                    "aes(), ggplot(), ggsave(); geom_point/jitter/line/smooth/col/bar/histogram/"
-                   "boxplot/density/tile/raster/segment/rect/hline/vline/abline/errorbar/linerange/"
+                   "boxplot/density/tile/raster/hex/segment/rect/hline/vline/abline/errorbar/linerange/"
                    "text/label/text_repel/label_repel(), annotate(); labs()/xlab()/ylab()/ggtitle(); "
                    "facet_wrap(~var), facet_grid(row ~ col); coord_flip/polar/cartesian/fixed(); scale_x|y_log10/log2/continuous/"
                    "discrete(), xlim(), ylim(), scale_x_genome(); scale_colour|fill_manual/brewer/"
@@ -4178,6 +4200,10 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
     }
     if (spec->polar && spec->coord_flip)
         return fail(&p, "coord_polar() and coord_flip() contradict each other", "");
+    for (int i = 0; i < spec->nlayers; i++)
+        if (spec->layers[i].hex && spec->polar)
+            return fail(&p, "geom_hex() draws on Cartesian axes; coord_polar() rings "
+                        "are geom_tile()%s", "");
     if (spec->coord_ratio > 0 && (spec->polar || spec->coord_flip))
         return fail(&p, "coord_fixed() is a coordinate system of its own; it does "
                     "not combine with %s", spec->polar ? "coord_polar()" : "coord_flip()");
@@ -4369,7 +4395,8 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
                : t == GEOM_SEGMENT ? "geom_segment" : t == GEOM_ERRORBAR ? "geom_errorbar"
                : t == GEOM_LINERANGE ? "geom_linerange" : t == GEOM_DENSITY ? "geom_density"
                : t == GEOM_COL ? "geom_col" : t == GEOM_BAR ? "geom_bar"
-               : t == GEOM_HISTOGRAM ? "geom_histogram" : t == GEOM_TILE ? "geom_tile"
+               : t == GEOM_HISTOGRAM ? "geom_histogram"
+               : t == GEOM_TILE ? (spec->layers[i].hex ? "geom_hex" : "geom_tile")
                : t == GEOM_RECT ? "geom_rect" : NULL;
         }
         if (g0 && spec->colour.is_fill && stroke && !area)

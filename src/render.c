@@ -2795,6 +2795,19 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     "(clipped to the panel)\n", nout, nout == 1 ? "" : "s");
     }
 
+    /* geom_hex(): train the range on the hexagons, not their centres (as
+     * ggplot2 does), so expand=FALSE hugs the outer cells instead of
+     * halving them; xlim()/ylim() still win */
+    for (int li = 0; li < spec->nlayers; li++) {
+        const Layer *L = &spec->layers[li];
+        if (!L->hex || disc_x || disc_y || genome_x || !yc) continue;
+        double wx = tile_step(df, use, NULL, 0, 0, 1, xc, spec);
+        double wy = tile_step(df, use, NULL, 0, 0, 0, yc, spec);
+        double dx = L->hex_offset ? wx / 2 : wx;
+        if (!spec->has_xlim) { txmin -= dx; txmax += dx + (L->hex_offset ? wx / 2 : 0); }
+        if (!spec->has_ylim) { tymin -= wy * 2 / 3; tymax += wy * 2 / 3; }
+        break;
+    }
     /* ---- expansion + breaks. Discrete x uses ggplot's additive 0.6 on
      * each side; continuous uses 5% of the range. ---- */
     double xm2 = spec->has_x_expand ? spec->x_exp_mult : -1;   /* -1 = default */
@@ -5367,6 +5380,58 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                  * sensibly for an irregular one. */
                 double wx = tile_step(df, use, ff, p, disc_x, 1, xc, spec);
                 double wy = tile_step(df, use, ff, p, disc_y, 0, yc, spec);
+                if (spec->layers[li].hex) {
+                    /* geom_hex(stat="identity"): a pointy-top hexagon per row,
+                     * as ggplot2's GeomHex -- half-width = the x pitch, so a
+                     * staggered grid (odd rows already shifted half a cell,
+                     * as Visium spots and hexbin centres are) tiles across;
+                     * vertices at +-2/3 of the y pitch (ggplot2 uses
+                     * 1.15/sqrt(3) = 0.664, which leaves hairline seams), so
+                     * the rows interlock. offset=TRUE staggers a square grid
+                     * first: odd rows move half a pitch right. */
+                    const Layer *L = &spec->layers[li];
+                    if (disc_x || disc_y) {
+                        snprintf(err, CP_ERRLEN, "geom_hex() needs numeric x and y "
+                                 "(hexagon centres); a discrete axis is geom_tile()'s");
+                        return -1;
+                    }
+                    double ymin = INFINITY;
+                    int nh = 0;
+                    for (int r = 0; r < df->nrow; r++) {
+                        if (!use[r] || (ff && ff->idx[r] != p)) continue;
+                        double cy = TY(yc->num[r]);
+                        if (isnan(cy) || isnan(TXR(r))) continue;
+                        if (cy < ymin) ymin = cy;
+                        nh++;
+                    }
+                    double dx = L->hex_offset ? wx / 2 : wx, ry = wy * 2 / 3;
+                    double *hx = cp_xmalloc((size_t)(nh ? nh : 1) * 6 * sizeof(double));
+                    double *hy = cp_xmalloc((size_t)(nh ? nh : 1) * 6 * sizeof(double));
+                    static const double VX[6] = {1, 0, -1, -1, 0, 1};
+                    static const double VY[6] = {0.5, 1, 0.5, -0.5, -1, -0.5};
+                    int k = 0;
+                    for (int r = 0; r < df->nrow && k < nh; r++) {
+                        if (!use[r] || (ff && ff->idx[r] != p)) continue;
+                        double cx = TXR(r), cy = TY(yc->num[r]);
+                        if (isnan(cx) || isnan(cy)) continue;
+                        if (L->hex_offset && ((long)llround((cy - ymin) / wy)) % 2)
+                            cx += wx / 2;
+                        double *px = hx + 6 * k, *py = hy + 6 * k;
+                        k++;
+                        for (int v = 0; v < 6; v++) {
+                            px[v] = NPCX(cx + VX[v] * dx);
+                            py[v] = NPCY(cy + VY[v] * ry);
+                        }
+                        g = gt_add(T, G_POLYGON, R, C, R, C);
+                        g->n = 6; g->px = px; g->py = py; g->sub = 1; g->clip = 1;
+                        g->col = cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BAR;
+                        if (L->has_color) {                  /* colour= is the border */
+                            g->poly_fill_set = 1; g->poly_fill = g->col;
+                            g->col = L->color; g->stroke = 1;
+                            g->lw = lw_pt(L->tile_lw > 0 ? L->tile_lw : 0.1);
+                        }
+                    }
+                } else
                 for (int r = 0; r < df->nrow; r++) {
                     if (!use[r] || (ff && ff->idx[r] != p)) continue;
                     double cx = TXR(r), cy = disc_y ? YVAL(r) : TY(yc->num[r]);

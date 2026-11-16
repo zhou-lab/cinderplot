@@ -380,6 +380,12 @@ typedef struct {
     int eb_horiz;        /* a horizontal bar: xmin..xmax at y, caps vertical */
     double eb_width;     /* geom_errorbar(width=): cap width in x-axis units
                           * (transformed space; 0 = the 0.25 default) */
+    int hex;             /* geom_hex(stat="identity"): a GEOM_TILE layer drawn as
+                          * one pointy-top hexagon per row, sized from the grid
+                          * pitch so a staggered grid tiles with no gap */
+    int hex_identity;    /* stat="identity" was given (binning is not implemented) */
+    int hex_offset;      /* offset=TRUE: shift odd rows half an x pitch right,
+                          * staggering a square grid (Visium-style spots) */
     double tile_lw;      /* geom_tile(linewidth=): border stroke width in
                           * ggplot linewidth units (0 = the 0.1 default) */
     int arrow_ends;      /* geom_segment/geom_line(arrow=arrow()): 0 none,
