@@ -666,6 +666,11 @@ typedef struct {
                                      * a filled point glyph (geom_point(shape=21..25)),
                                      * colour= then strokes its outline */
     int coord_flip;                 /* coord_flip(): swap the x and y axes */
+    /* coord_fixed(ratio=) / coord_equal(): one y data unit spans ratio x
+     * units on the page, as ggplot2. 0 = free aspect. The panel keeps the
+     * aspect inside any --size (slack centred, as ggplot2 centres it) and
+     * the auto canvas is sized around it. */
+    double coord_ratio;
     /* chord mode: chord("links.csv") — a circlize-style chord diagram from a
      * (from, to, value) table; its own mode, like the tree */
     int chord_mode;

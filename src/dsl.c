@@ -3111,6 +3111,44 @@ static int parse_term(P *p, PlotSpec *spec) {
         }
         return expect(p, ')');
     }
+    if (!strcmp(name, "coord_fixed") || !strcmp(name, "coord_equal")) {
+        /* a fixed aspect: ratio= (or a bare first number) is y units per x
+         * unit, default 1; expand=FALSE as coord_cartesian() */
+        spec->coord_ratio = 1;
+        skip_ws(p);
+        int first = 1;
+        while (*p->s != ')') {
+            const char *save = p->s;
+            char *key = NULL;
+            if (!(first && (isdigit((unsigned char)*p->s) || *p->s == '.'))) {
+                key = ident(p);
+                if (!key || expect(p, '=')) { p->s = save;
+                    return fail(p, "bad %s() argument", name); }
+            }
+            first = 0;
+            if (key && !strcmp(key, "expand")) {
+                int b;
+                if (parse_bool(p, &b) || b)
+                    return fail(p, "%s() supports only expand=FALSE", name);
+                spec->x_exp_mult = spec->x_exp_add = 0; spec->has_x_expand = 1;
+                spec->y_exp_mult = spec->y_exp_add = 0; spec->has_y_expand = 1;
+            } else if (!key || !strcmp(key, "ratio")) {
+                skip_ws(p);
+                char *end;
+                double v = strtod(p->s, &end);
+                if (end == p->s || !(v > 0) || !isfinite(v))
+                    return fail(p, "ratio= expects a positive number%s", "");
+                p->s = end;
+                spec->coord_ratio = v;
+            } else
+                return fail(p, "coord_fixed option `%s` not implemented; supported: "
+                            "ratio= (y units per x unit, default 1), expand=FALSE "
+                            "(xlim()/ylim() set the limits)", key);
+            skip_ws(p);
+            if (*p->s == ',') { p->s++; skip_ws(p); }
+        }
+        return expect(p, ')');
+    }
     if (!strcmp(name, "coord_flip")) {          /* swap the x and y axes */
         spec->coord_flip = 1;
         return expect(p, ')');
@@ -3904,7 +3942,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                    "aes(), ggplot(), ggsave(); geom_point/jitter/line/smooth/col/bar/histogram/"
                    "boxplot/density/tile/raster/segment/rect/hline/vline/abline/errorbar/linerange/"
                    "text/label/text_repel/label_repel(), annotate(); labs()/xlab()/ylab()/ggtitle(); "
-                   "facet_wrap(~var), facet_grid(row ~ col); coord_flip/polar/cartesian(); scale_x|y_log10/log2/continuous/"
+                   "facet_wrap(~var), facet_grid(row ~ col); coord_flip/polar/cartesian/fixed(); scale_x|y_log10/log2/continuous/"
                    "discrete(), xlim(), ylim(), scale_x_genome(); scale_colour|fill_manual/brewer/"
                    "distiller/identity/gradient/gradient2/viridis/magma/...(); theme_bw/minimal/"
                    "classic/...(), theme(legend.position=), guides(); heatmap(), annotation(), "
@@ -4140,6 +4178,12 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
     }
     if (spec->polar && spec->coord_flip)
         return fail(&p, "coord_polar() and coord_flip() contradict each other", "");
+    if (spec->coord_ratio > 0 && (spec->polar || spec->coord_flip))
+        return fail(&p, "coord_fixed() is a coordinate system of its own; it does "
+                    "not combine with %s", spec->polar ? "coord_polar()" : "coord_flip()");
+    if (spec->coord_ratio > 0 && (spec->free_x || spec->free_y))
+        return fail(&p, "coord_fixed() needs one data range for every panel; "
+                    "facet scales=\"free\" gives each panel its own (as in ggplot2)%s", "");
     /* angle= leans the BOTTOM axis's labels; on the side axis it was parsed
      * and dropped. Under coord_flip() the bottom axis is y. */
     if (spec->coord_flip ? spec->x_angle >= 0 : spec->y_angle >= 0)
@@ -4177,8 +4221,8 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
         }
         if (any_grammar || spec->nhobjs > nleg)
             return fail(&p, "track functions cannot be mixed with grammar/heatmap", "");
-        if (spec->polar || spec->coord_flip)
-            return fail(&p, "coord_polar()/coord_flip() do not apply to the track browser", "");
+        if (spec->polar || spec->coord_flip || spec->coord_ratio > 0)
+            return fail(&p, "coord_polar()/coord_flip()/coord_fixed() do not apply to the track browser", "");
         /* the preset itself (panel, grid, strips) has nothing to act on here,
          * but base_line_size= does: it scales the track frames and ticks
          * through cp_line_scale, so theme_*(base_line_size=) is honoured */
@@ -4244,8 +4288,8 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
                 && (spec->hobjs[i].missing || spec->hobjs[i].missing_off))
                 return fail(&p, "legend(missing=) labels the background swatch a matrix() "
                             "track's key adds; a heatmap() key draws no NA swatch", "");
-        if (spec->polar || spec->coord_flip)
-            return fail(&p, "coord_polar()/coord_flip() do not apply to heatmap mode "
+        if (spec->polar || spec->coord_flip || spec->coord_ratio > 0)
+            return fail(&p, "coord_polar()/coord_flip()/coord_fixed() do not apply to heatmap mode "
                         "(cluster=diagonal/symmetric and placements set the layout)", "");
         /* as for tracks: the preset is inert (box=/grid= frame the cells) but
          * base_line_size= scales the frames through cp_line_scale */

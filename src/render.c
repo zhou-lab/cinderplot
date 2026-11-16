@@ -4007,6 +4007,40 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
      * scatter. Give every panel room for its own categories and let the figure
      * grow, but never shrink below the old default, and never touch a size the
      * caller asked for. */
+    /* coord_fixed(): the panel's shape is the data's, so the auto canvas
+     * derives the free axis from the given one (or, with neither given,
+     * fits the panel in a box of the auto panel width) and drops the 6x4
+     * floor, which would only surround the panel with blank paper. */
+    double fix_aspect = 0;          /* panel height / width; 0 = free */
+    if (spec->coord_ratio > 0 && ps[0].x1 > ps[0].x0 && ps[0].y1 > ps[0].y0)
+        fix_aspect = spec->coord_ratio * (ps[0].y1 - ps[0].y0) / (ps[0].x1 - ps[0].x0);
+    if (fix_aspect > 0 && (w_pt <= 0 || h_pt <= 0)) {
+        double chrome_w = MARGIN + ylab_w + TICK_LEN + TXT_GAP + baseh + MARGIN
+                        + striph_side + (leg ? gt_fixed_w(leg) + 2 * HALF_LINE : 0)
+                        + (ncolp - 1) * PANEL_SPACE;
+        double chrome_h = auto_h_raw - nrowp * auto_panelh;
+        double pw, ph;
+        if (w_pt > 0) {
+            pw = fmax(1, (w_pt - chrome_w) / ncolp); ph = pw * fix_aspect;
+        } else if (h_pt > 0) {
+            ph = fmax(1, (h_pt - chrome_h) / nrowp); pw = ph / fix_aspect;
+        } else {
+            double box = fmax(auto_panelw, auto_panelh);
+            if (fix_aspect <= 1) { pw = box; ph = box * fix_aspect; }
+            else { ph = box; pw = box / fix_aspect; }
+        }
+        /* the 30in cap scales the panel down, keeping its shape */
+        double sw = (30.0 * 72 - chrome_w) / (ncolp * pw);
+        double sh = (30.0 * 72 - chrome_h) / (nrowp * ph);
+        double sc = fmin(1, fmin(sw, sh));
+        if (sc > 0) { pw *= sc; ph *= sc; }
+        if (w_pt <= 0) w_pt = fmax(1.0 * 72, chrome_w + ncolp * pw);
+        if (h_pt <= 0) {
+            h_pt = chrome_h + nrowp * ph + fc_leg_h;
+            if (leg) h_pt = fmax(h_pt, gt_fixed_h(leg) + leg_chrome_h);
+            h_pt = fmax(1.0 * 72, h_pt);
+        }
+    }
     {
         if (w_pt <= 0) {
             double panelw = auto_panelw;
@@ -4217,6 +4251,21 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             if (T->rowh[r].k == U_PT) fh += T->rowh[r].v; else nh += T->rowh[r].v;
         panelw_pt = nw > 0 ? fmax(0, w_pt - fw) / nw : 0;
         panelh_pt = nh > 0 ? fmax(0, h_pt - fh) / nh : 0;
+    }
+    /* coord_fixed(): shrink whichever panel side is too long for the aspect,
+     * pin both as points and split the slack over the outer margins, so the
+     * whole figure sits centred on the canvas as ggplot2 centres it */
+    if (fix_aspect > 0 && panelw_pt > 0 && panelh_pt > 0) {
+        double pw = panelw_pt, ph = panelh_pt;
+        if (ph / pw > fix_aspect) ph = pw * fix_aspect; else pw = ph / fix_aspect;
+        double slack_w = (panelw_pt - pw) * ncolp, slack_h = (panelh_pt - ph) * nrowp;
+        for (int c = 0; c < ncolp; c++) T->colw[PC(c)] = upt(pw);
+        for (int r = 0; r < nrowp; r++) T->rowh[PR(r)] = upt(ph);
+        T->colw[0] = upt(T->colw[0].v + slack_w / 2);
+        T->colw[T->ncol - 1] = upt(T->colw[T->ncol - 1].v + slack_w / 2);
+        T->rowh[0] = upt(T->rowh[0].v + slack_h / 2);
+        T->rowh[T->nrow - 1] = upt(T->rowh[T->nrow - 1].v + slack_h / 2);
+        panelw_pt = pw; panelh_pt = ph;
     }
 
     /* ---- facet_grid strips ----

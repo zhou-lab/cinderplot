@@ -412,7 +412,11 @@ for.
   endpoints,
   `scale_x_genome("seqinfo.tsv.gz")`, `ideogram("cytoband.tsv.gz")`.
 - **also**: `facet_wrap(~v[, levels=][, scales=][, space=][, ncol=][, nrow=])`,
-  `facet_grid(row ~ col[, scales=][, space=])`, `coord_flip()`, `guides(colour="none")`
+  `facet_grid(row ~ col[, scales=][, space=])`, `coord_flip()`,
+  `coord_fixed([ratio=1][, expand=FALSE])` / `coord_equal()` (one y unit =
+  ratio x units on the page, e.g. square spatial-map tiles; the auto canvas
+  fits the panel, a `--size` of another shape centres it; fixed scales only),
+  `guides(colour="none")`
   (per aesthetic: `guides(size="none")` keeps the colour key; `--no-legend`
   and `theme(legend.position="none")` drop them all), `labs()`/`xlab()`/`ylab()`/`ggtitle()` — `labs()` also
   takes `subtitle=` (under the title), `caption=` (bottom right), and
