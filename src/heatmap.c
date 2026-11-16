@@ -1773,6 +1773,23 @@ int render_heatmap(const PlotSpec *spec, const char *out,
         }
     }
 
+    /* labs(y=) runs up the left edge, centred on the body; a title longer
+     * than the canvas is tall overran both ends (and the start was clipped).
+     * An auto canvas grows to hold it, the extra split above and below so the
+     * body stays where it was; under --size it warns. */
+    double ytitle_len = spec->lab_y && *spec->lab_y ? text_w(cr, SZ_BASE, spec->lab_y) : 0;
+    double padT = 0, padB = 0;
+    if (ytitle_len > 0 && ytitle_len + 2 * MARGIN > h_pt) {
+        if (h_auto) {
+            double d = ytitle_len + 2 * MARGIN - h_pt;
+            padT = padB = d / 2;
+            h_pt += d;
+        } else
+            fprintf(stderr, "cinderplot: warning: the y axis title \"%s\" is taller "
+                    "than the %.1fin canvas and will be clipped; shorten it or give "
+                    "a taller --size\n", spec->lab_y, h_pt / 72);
+    }
+
     /* switch from the scratch measuring context to the real output surface */
     cairo_destroy(cr); cairo_surface_destroy(msurf);
     cairo_surface_t *surf = cp_surface_create(out, w_pt, h_pt);
@@ -1818,16 +1835,16 @@ int render_heatmap(const PlotSpec *spec, const char *out,
     T->colw[1] = unull(1);
     T->colw[2] = upt(marR);
     T->nrow = 5;
-    T->rowh[0] = upt(marT);                        /* top auto-margin */
+    T->rowh[0] = upt(marT + padT);                 /* top auto-margin */
     T->rowh[1] = upt(titleh);
     T->rowh[2] = upt(titlegap);
     T->rowh[3] = unull(1);                         /* canvas */
-    T->rowh[4] = upt(marB + xtitle_h);
+    T->rowh[4] = upt(marB + xtitle_h + padB);
     const int CR = 3, CC = 1;                      /* canvas cell */
 
     /* final canvas cell size in pt, for pt->npc conversions inside it */
     double cw_pt = w_pt - marL - ytitle_w - marR;
-    double ch_pt = h_pt - marT - titleh - titlegap - marB - xtitle_h;
+    double ch_pt = h_pt - marT - titleh - titlegap - marB - xtitle_h - padT - padB;
 #define PTX(pt) ((pt) / cw_pt)
 #define PTY(pt) ((pt) / ch_pt)
 
@@ -1840,14 +1857,22 @@ int render_heatmap(const PlotSpec *spec, const char *out,
     if (xtitle_h > 0) {          /* under the column labels, in the bottom margin */
         g = gt_add(T, G_TEXT, 4, CC, 4, CC);
         g->str = spec->lab_x; g->size = SZ_BASE; g->col = C_BLACK;
-        g->tx = 0.5; g->ty = 0; g->hj = 0.5; g->va = V_BOTTOM;
+        g->tx = 0.5; g->ty = padB / (marB + xtitle_h + padB);
+        g->hj = 0.5; g->va = V_BOTTOM;
     }
     if (ytitle_w > 0) {          /* rotated, left of the row labels */
-        g = gt_add(T, G_TEXT, CR, 0, CR, 0);
+        /* spans the full height: centred on the body when it fits there,
+         * else slid to stay inside the canvas margins */
+        g = gt_add(T, G_TEXT, 0, 0, 4, 0);
         g->str = spec->lab_y; g->size = SZ_BASE; g->col = C_BLACK; g->rot90 = 1;
+        double cy = marT + padT + titleh + titlegap + ch_pt / 2;   /* from top */
+        double half = ytitle_len / 2;
+        if (cy - half < MARGIN) cy = MARGIN + half;
+        if (cy + half > h_pt - MARGIN) cy = h_pt - MARGIN - half;
+        if (ytitle_len + 2 * MARGIN > h_pt) cy = h_pt / 2;
         /* rot90 centres on tx, and this cell is marL wide plus the title, so
          * centre it within its own share or half the glyphs fall outside. */
-        g->tx = (ytitle_w * 0.5) / (marL + ytitle_w); g->ty = 0.5;
+        g->tx = (ytitle_w * 0.5) / (marL + ytitle_w); g->ty = 1 - cy / h_pt;
     }
 
     /* ---- interior gutters: label bands drawn BETWEEN two placed objects ----
