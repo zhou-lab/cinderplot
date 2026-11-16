@@ -2254,13 +2254,34 @@ static int parse_term(P *p, PlotSpec *spec) {
                 } else if (l->hex && !strcmp(key, "stat")) {
                     skip_ws(p);
                     char *v = *p->s == '"' ? string_lit(p) : ident(p);
-                    int ok = v && !strcmp(v, "identity");
+                    int id = v && !strcmp(v, "identity");
+                    int bin = v && (!strcmp(v, "binhex") || !strcmp(v, "bin_hex"));
                     free(v);
-                    if (!ok)
-                        return fail(p, "geom_hex(stat=) supports \"identity\" only: one "
-                                    "hexagon per row at (x, y); hexagonal binning is not "
-                                    "implemented%s", "");
-                    l->hex_identity = 1;
+                    if (!id && !bin)
+                        return fail(p, "geom_hex(stat=) is \"binhex\" (the default: count "
+                                    "the points per hexagon) or \"identity\" (one hexagon "
+                                    "per row at (x, y))%s", "");
+                    l->hex_identity = id;
+                } else if (l->hex && !strcmp(key, "bins")) {
+                    skip_ws(p);
+                    char *end;
+                    double v = strtod(p->s, &end);
+                    if (end == p->s || !(v >= 1 && v <= 1000) || v != floor(v))
+                        return fail(p, "geom_hex(bins=) expects a whole number 1..1000%s", "");
+                    p->s = end;
+                    l->hex_bins = (int)v;
+                } else if (l->hex && !strcmp(key, "binwidth")) {
+                    skip_ws(p);
+                    if (p->s[0] == 'c' && p->s[1] == '(') p->s += 2;
+                    else return fail(p, "geom_hex(binwidth=) expects c(x, y)%s", "");
+                    double a = strtod(p->s, (char **)&p->s);
+                    skip_ws(p); if (*p->s == ',') p->s++;
+                    double b = strtod(p->s, (char **)&p->s);
+                    skip_ws(p);
+                    if (*p->s != ')' || !(a > 0) || !(b > 0) || !isfinite(a) || !isfinite(b))
+                        return fail(p, "geom_hex(binwidth=) expects c(x, y), both > 0%s", "");
+                    p->s++;
+                    l->hex_bw_x = a; l->hex_bw_y = b;
                 } else if (l->hex && !strcmp(key, "offset")) {
                     if (parse_bool(p, &l->hex_offset))
                         return fail(p, "geom_hex(offset=) expects TRUE or FALSE%s", "");
@@ -2288,10 +2309,13 @@ static int parse_term(P *p, PlotSpec *spec) {
             }
         }
         if (expect(p, ')')) return -1;
-        if (l->hex && !l->hex_identity)
-            return fail(p, "geom_hex() bins points into hexagons in ggplot2, which is not "
-                        "implemented; geom_hex(stat=\"identity\") draws one hexagon per "
-                        "row at (x, y) -- add offset=TRUE for a square grid%s", "");
+        if (l->hex && l->hex_identity && (l->hex_bins || l->hex_bw_x > 0))
+            return fail(p, "geom_hex(bins=/binwidth=) size the bins; stat=\"identity\" "
+                        "draws the rows as given%s", "");
+        if (l->hex && !l->hex_identity && l->hex_offset)
+            return fail(p, "geom_hex(offset=) staggers a grid for stat=\"identity\"; the "
+                        "binned hexagons are staggered already%s", "");
+        if (l->hex && !l->hex_identity && !l->hex_bins) l->hex_bins = 30;
         if (l->hex && (l->data || l->fill_col))
             return fail(p, "geom_hex() takes the main data and its fill= mapping; "
                         "data= and aes(fill=) are geom_tile()'s ring-plot forms%s", "");

@@ -563,6 +563,7 @@ int main(int argc, char **argv) {
 
     DataFrame *df = df_read_csv(spec.data_path, err);
     if (!df) { fprintf(stderr, "cinderplot: %s\n", err); return 1; }
+    if (hexbin_apply(&spec, &df, err)) { fprintf(stderr, "cinderplot: %s\n", err); return 1; }
     /* Pass the size through unset. render_plot fits the canvas to the labels
      * when it is, the way heatmap and track modes already size themselves; an
      * explicit --size is never second-guessed. */

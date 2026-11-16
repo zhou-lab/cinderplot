@@ -383,7 +383,14 @@ typedef struct {
     int hex;             /* geom_hex(stat="identity"): a GEOM_TILE layer drawn as
                           * one pointy-top hexagon per row, sized from the grid
                           * pitch so a staggered grid tiles with no gap */
-    int hex_identity;    /* stat="identity" was given (binning is not implemented) */
+    int hex_identity;    /* stat="identity": one hexagon per data row; else the
+                          * layer bins (stat_binhex) -- hexbin.c replaces the
+                          * data with the cell centres and a count column */
+    int hex_bins;        /* bins= (default 30) per axis over the data range */
+    double hex_bw_x, hex_bw_y;   /* binwidth=c(x, y); 0 = from bins= */
+    double hex_dx, hex_ry;       /* set by binning: half-width and centre-to-top
+                                  * vertex height (transformed units); 0 = from
+                                  * the grid pitch (identity) */
     int hex_offset;      /* offset=TRUE: shift odd rows half an x pitch right,
                           * staggering a square grid (Visium-style spots) */
     double tile_lw;      /* geom_tile(linewidth=): border stroke width in
@@ -896,6 +903,10 @@ typedef struct {
 int dsl_parse(const char *src, PlotSpec *spec, char *err);  /* 0 = ok */
 
 /* ---------- render.c ---------- */
+/* hexbin.c: binned geom_hex() replaces *df with its hexagon counts (cell
+ * centres + `count`, facet columns kept) and maps fill= to the count;
+ * 0 = done or nothing to bin */
+int hexbin_apply(PlotSpec *spec, DataFrame **df, char *err);
 int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 double w_pt, double h_pt, char *err);
 

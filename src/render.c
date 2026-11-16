@@ -2803,9 +2803,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         if (!L->hex || disc_x || disc_y || genome_x || !yc) continue;
         double wx = tile_step(df, use, NULL, 0, 0, 1, xc, spec);
         double wy = tile_step(df, use, NULL, 0, 0, 0, yc, spec);
-        double dx = L->hex_offset ? wx / 2 : wx;
+        double dx = L->hex_dx > 0 ? L->hex_dx : L->hex_offset ? wx / 2 : wx;
+        double ry = L->hex_ry > 0 ? L->hex_ry : wy * 2 / 3;
         if (!spec->has_xlim) { txmin -= dx; txmax += dx + (L->hex_offset ? wx / 2 : 0); }
-        if (!spec->has_ylim) { tymin -= wy * 2 / 3; tymax += wy * 2 / 3; }
+        if (!spec->has_ylim) { tymin -= ry; tymax += ry; }
         break;
     }
     /* ---- expansion + breaks. Discrete x uses ggplot's additive 0.6 on
@@ -5404,7 +5405,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         if (cy < ymin) ymin = cy;
                         nh++;
                     }
-                    double dx = L->hex_offset ? wx / 2 : wx, ry = wy * 2 / 3;
+                    double dx = L->hex_dx > 0 ? L->hex_dx : L->hex_offset ? wx / 2 : wx;
+                    double ry = L->hex_ry > 0 ? L->hex_ry : wy * 2 / 3;
                     double *hx = cp_xmalloc((size_t)(nh ? nh : 1) * 6 * sizeof(double));
                     double *hy = cp_xmalloc((size_t)(nh ? nh : 1) * 6 * sizeof(double));
                     static const double VX[6] = {1, 0, -1, -1, 0, 1};
