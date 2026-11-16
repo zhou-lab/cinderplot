@@ -69,7 +69,7 @@ static int svg_show(cairo_t *cr, double x, double y, double size, const char *s)
      * for anyone hand-editing the file */
     double mm[6] = { m.xx, m.yx, m.xy, m.yy, m.x0, m.y0 };
     for (int i = 0; i < 6; i++) t->m[i] = fabs(mm[i]) < 1e-12 ? 0 : mm[i];
-    t->col.r = r; t->col.g = gg; t->col.b = b;
+    t->col.r = r; t->col.g = gg; t->col.b = b; t->col.t = 0;
     t->bold = g_txt_bold;
     t->str = cp_xstrdup(s);
     return 1;
@@ -226,13 +226,17 @@ cairo_status_t cp_surface_emit(cairo_surface_t *surf, const char *out) {
     return st;
 }
 
-static void set_col(cairo_t *cr, Col c) { cairo_set_source_rgb(cr, c.r, c.g, c.b); }
+static void set_col(cairo_t *cr, Col c) {
+    if (c.t > 0) cairo_set_source_rgba(cr, c.r, c.g, c.b, 1 - c.t);
+    else cairo_set_source_rgb(cr, c.r, c.g, c.b);
+}
 
 
 /* Layer colour honouring an alpha= mapping; alpha 0 means "unset", i.e. opaque,
  * so grobs that never set it behave exactly as before. */
 static void set_col_a(cairo_t *cr, Col c, double a) {
-    if (a > 0 && a < 1) cairo_set_source_rgba(cr, c.r, c.g, c.b, a);
+    double o = (a > 0 && a < 1 ? a : 1) * (1 - c.t);   /* a colour's own alpha too */
+    if (o < 1) cairo_set_source_rgba(cr, c.r, c.g, c.b, o);
     else cairo_set_source_rgb(cr, c.r, c.g, c.b);
 }
 
@@ -499,7 +503,7 @@ void gt_render(GTable *t, cairo_t *cr) {
             }
             cairo_restore(cr);
             ideo_path(cr, xl, xr, top, bot, cyc, rad, pinch, cl, crr);   /* outline */
-            { Col oc = {0.4, 0.4, 0.4}; set_col(cr, oc); }
+            { Col oc = {0.4, 0.4, 0.4, 0}; set_col(cr, oc); }
             cairo_set_line_width(cr, lw_pt(0.5));
             cairo_stroke(cr);
             break;
@@ -683,7 +687,7 @@ void gt_render(GTable *t, cairo_t *cr) {
                 set_col_a(cr, c, g->alpha);
                 while (j < g->n && nb < BATCH
                        && g->pcol[j].r == c.r && g->pcol[j].g == c.g
-                       && g->pcol[j].b == c.b
+                       && g->pcol[j].b == c.b && g->pcol[j].t == c.t
                        && (g->pradius ? g->pradius[j] : g->radius) == rad
                        && (g->pshape ? g->pshape[j] : g->shape) == sh) {
                     cairo_new_sub_path(cr);      /* else arcs join with a line */

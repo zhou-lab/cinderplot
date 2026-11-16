@@ -398,7 +398,7 @@ static int parse_aes(P *p, PlotSpec *spec) {
      * fill= is colour). A second mapping onto an occupied slot used to win
      * silently -- aes(x=hp, xmin=wt) plotted wt -- so remember which key
      * claimed each slot and refuse the collision, naming both. */
-    const char *claimed[13] = {0};
+    const char *claimed[14] = {0};
     skip_ws(p);
     if (*p->s == ')') { p->s++; return 0; }
     for (;;) {
@@ -427,13 +427,13 @@ static int parse_aes(P *p, PlotSpec *spec) {
             }
             else if (!strcmp(key, "group")) { e = &spec->group; slot = 10; }
             else if (!strcmp(key, "linetype")) { e = &spec->linetype; slot = 11; }
-            else if (!strcmp(key, "alpha")
-                     || !strcmp(key, "weight") || !strcmp(key, "linewidth"))
+            else if (!strcmp(key, "alpha")) { e = &spec->alpha; slot = 13; }
+            else if (!strcmp(key, "weight") || !strcmp(key, "linewidth"))
                 return fail(p, "aes(%s=...) is not implemented as a mapping; a "
                             "discrete colour= groups lines and sets the legend, "
-                            "group= groups without a legend, and alpha=/"
-                            "linewidth= are per-layer constants (geom_line(linewidth=0.3))", key);
-            else return fail(p, "aes(%s=...) is not implemented; supported: x, y, xend, yend, ymin, ymax, label, size, shape, linetype, group, chrom, colour, fill", key);
+                            "group= groups without a legend, and "
+                            "linewidth= is a per-layer constant (geom_line(linewidth=0.3))", key);
+            else return fail(p, "aes(%s=...) is not implemented; supported: x, y, xend, yend, ymin, ymax, label, size, shape, linetype, group, chrom, colour, fill, alpha", key);
         } else {
             /* positional: the first unclaimed of x, y -- R's matching, so
              * aes(x=factor(g), v) puts v on y */
@@ -514,7 +514,8 @@ static int parse_labs(P *p, PlotSpec *spec) {
         else if (!strcmp(key, "shape")) spec->lab_shape = val;
         else if (!strcmp(key, "size")) spec->lab_size = val;
         else if (!strcmp(key, "linetype")) spec->lab_linetype = val;
-        else return fail(p, "labs(%s=...) is not implemented; supported: title, subtitle, caption, x, y, colour, fill, shape, size, linetype", key);
+        else if (!strcmp(key, "alpha")) spec->lab_alpha = val;
+        else return fail(p, "labs(%s=...) is not implemented; supported: title, subtitle, caption, x, y, colour, fill, shape, size, linetype, alpha", key);
         free(key);
         skip_ws(p);
         if (*p->s == ',') { p->s++; continue; }
@@ -1248,7 +1249,7 @@ static int parse_hm_args(P *p, HMObj *o, int want_data) {
                     if (!strcmp(v, "on") || !strcmp(v, "true") || !strcmp(v, "TRUE")
                         || !strcmp(v, "T") || !strcmp(v, "1")) {
                         o->box = 1;
-                        Col grey = {0.4, 0.4, 0.4};   /* as matrix() tracks frame theirs */
+                        Col grey = {0.4, 0.4, 0.4, 0};   /* as matrix() tracks frame theirs */
                         o->box_col = grey;
                     }
                     else if (!strcmp(v, "none") || !strcmp(v, "off")
@@ -1272,7 +1273,7 @@ static int parse_hm_args(P *p, HMObj *o, int want_data) {
                     if (!strcmp(v, "on") || !strcmp(v, "true") || !strcmp(v, "TRUE")
                         || !strcmp(v, "T") || !strcmp(v, "1")) {
                         o->grid = 1;
-                        Col grey = {0.702, 0.702, 0.702};   /* grey70: dim on white, legible on fills */
+                        Col grey = {0.702, 0.702, 0.702, 0};   /* grey70: dim on white, legible on fills */
                         o->grid_col = grey;
                     }
                     else if (!strcmp(v, "none") || !strcmp(v, "off")
@@ -2615,7 +2616,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                         "highlight(\"boxes.tsv\") has no cap)", "");
         CellHighlight *h = &spec->hls[spec->nhls];
         memset(h, 0, sizeof *h);
-        Col red = {1, 0, 0};
+        Col red = {1, 0, 0, 0};
         h->color = red;
         skip_ws(p);
         if (is_quote(p)) {                     /* positional: cell form or file form */
@@ -3157,6 +3158,33 @@ static int parse_term(P *p, PlotSpec *spec) {
         }
         return expect(p, ')');
     }
+    if (!strcmp(name, "scale_alpha") || !strcmp(name, "scale_alpha_continuous")) {
+        /* the opacity range a continuous aes(alpha=) maps onto; ggplot2's
+         * default is c(0.1, 1) */
+        skip_ws(p);
+        while (*p->s != ')') {
+            char *key = ident(p);
+            if (!key || expect(p, '=')) return fail(p, "bad %s() argument", name);
+            if (strcmp(key, "range"))
+                return fail(p, "scale_alpha option `%s` not implemented; supported: "
+                            "range=c(lo, hi) (opacities in 0..1)", key);
+            skip_ws(p);
+            if (p->s[0] == 'c' && p->s[1] == '(') p->s += 2;
+            else return fail(p, "range= expects c(lo, hi)%s", "");
+            double a = strtod(p->s, (char **)&p->s);
+            skip_ws(p); if (*p->s == ',') p->s++;
+            double b = strtod(p->s, (char **)&p->s);
+            skip_ws(p);
+            if (*p->s != ')' || !(a >= 0 && a <= 1) || !(b >= 0 && b <= 1))
+                return fail(p, "range= expects c(lo, hi), both in 0..1%s", "");
+            p->s++;
+            spec->alpha_lo = a; spec->alpha_hi = b;
+            spec->has_alpha_range = 1;
+            skip_ws(p);
+            if (*p->s == ',') { p->s++; skip_ws(p); }
+        }
+        return expect(p, ')');
+    }
     if (!strcmp(name, "coord_fixed") || !strcmp(name, "coord_equal")) {
         /* a fixed aspect: ratio= (or a bare first number) is y units per x
          * unit, default 1; expand=FALSE as coord_cartesian() */
@@ -3553,6 +3581,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                     free(v);
                     spec->no_legend = spec->no_legend_size = spec->no_legend_shape = 1;
                     spec->no_legend_linetype = spec->no_legend_fill = spec->no_legend_colour = 1;
+                    spec->no_legend_alpha = 1;
                     skip_ws(p);
                     if (*p->s == ',') { p->s++; skip_ws(p); }
                     continue;
@@ -3842,9 +3871,9 @@ static int parse_term(P *p, PlotSpec *spec) {
              * them all, and guide_legend() options only reach the colour one */
             int is_col = !strcmp(key, "colour") || !strcmp(key, "color") || !strcmp(key, "fill");
             int is_size = !strcmp(key, "size"), is_shape = !strcmp(key, "shape");
-            int is_lt = !strcmp(key, "linetype");
-            if (!is_col && !is_size && !is_shape && !is_lt) {
-                fail(p, "guides() supports colour=, color=, fill=, size=, shape=, linetype=", "");
+            int is_lt = !strcmp(key, "linetype"), is_alpha = !strcmp(key, "alpha");
+            if (!is_col && !is_size && !is_shape && !is_lt && !is_alpha) {
+                fail(p, "guides() supports colour=, color=, fill=, size=, shape=, linetype=, alpha=", "");
                 free(key); return -1;
             }
             skip_ws(p);
@@ -3956,6 +3985,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                     else spec->no_legend_colour = 1;
                 }
                 else if (is_size) spec->no_legend_size = 1;
+                else if (is_alpha) spec->no_legend_alpha = 1;
                 else if (is_lt) spec->no_legend_linetype = 1;
                 else spec->no_legend_shape = 1;
             } else {

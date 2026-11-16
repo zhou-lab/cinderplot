@@ -161,9 +161,9 @@ int render_upset(const PlotSpec *spec, const char *data, const char *out,
         if (cp_discrete_palette(spec, flev, nflev, pal, err)) return -1;
         if (!(klab = cp_key_labels(spec, flev, nflev, err))) return -1;
     }
-    Col bar_default = {0.2, 0.2, 0.2};
-    Col dot_on = {0.2, 0.2, 0.2}, dot_off = {0.85, 0.85, 0.85};
-    Col shade = {0.95, 0.95, 0.95}, muted = {0.3, 0.3, 0.3};
+    Col bar_default = {0.2, 0.2, 0.2, 0};
+    Col dot_on = {0.2, 0.2, 0.2, 0}, dot_off = {0.85, 0.85, 0.85, 0};
+    Col shade = {0.95, 0.95, 0.95, 0}, muted = {0.3, 0.3, 0.3, 0};
 
     /* ---- measure ---- */
     cairo_surface_t *ms = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 8, 8);

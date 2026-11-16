@@ -212,6 +212,14 @@ and ignored (the output path is a command-line argument here).
   xmax=))` draws the horizontal bar too (ggplot >= 3.5 infers the
   orientation); `height=`/`width=` sets its vertical cap (default 0.9 of the
   y resolution). The layer ranges train the axes like ymin=/ymax= do.
+- **`aes(alpha=col)`** maps a numeric column to opacity over
+  `scale_alpha(range=c(lo, hi))` (ggplot2's default `c(0.1, 1)`; `c(0, 1)`
+  makes the lowest value invisible, the expression-overlay idiom), with its
+  own legend (`labs(alpha=)`, `guides(alpha="none")`). Rows with no value
+  are not drawn. Implemented on `geom_point/jitter/tile/raster/hex/rect`; a
+  discrete alpha column errors. Colours also take R's `"transparent"` and
+  `#RRGGBBAA` / `#RGBA` wherever a colour is accepted (`scale_*_manual`
+  values, layer constants, gradients).
 - **layer options**: `size=`, `alpha=`, `linetype="solid"|"dashed"|"dotted"`
   (a constant per layer — `geom_segment(data="median.tsv", linetype="dashed")`
   is the dashed-median idiom),

@@ -32,7 +32,7 @@ static void col_missing(char *err, const DataFrame *df, const char *name) {
                       df->header ? df->header[j] : df->cols[j].name);
 }
 
-static const Col C_BAR = {0.349, 0.349, 0.349};   /* grey35, ggplot bar fill */
+static const Col C_BAR = {0.349, 0.349, 0.349, 0};   /* grey35, ggplot bar fill */
 
 static double text_w(cairo_t *cr, double size, const char *s) {
     cairo_text_extents_t e;
@@ -353,6 +353,35 @@ static GTable *build_size_legend(cairo_t *cr, const Theme *th, const char *title
         g = gt_add(t, G_TEXT, r, 2, r, 2);
         g->str = labs[i]; g->size = SZ_LEGEND_TEXT; g->col = th->title;
         g->tx = 0; g->ty = 0.5; g->hj = 0; g->va = V_INKCENTER;
+    }
+    return t;
+}
+
+/* aes(alpha=): a colour at opacity a, on top of any transparency it has */
+static Col col_alpha(Col c, double a) { c.t = 1 - (1 - c.t) * a; return c; }
+
+/* alpha legend: the breaks as grey20 keys at their mapped opacity -- filled
+ * squares for area geoms, points for geom_point, as ggplot2 draws them */
+static GTable *build_alpha_legend(cairo_t *cr, const Theme *th, const char *title,
+                                  const double *br, const double *op, int nb, int dec,
+                                  int point_key) {
+    double r0[16];
+    for (int i = 0; i < nb && i < 16; i++) r0[i] = PT_RADIUS;
+    GTable *t = build_size_legend(cr, th, title, br, r0, nb, dec);
+    /* rows 2, 4, ...: recolour each key (the points build_size_legend drew),
+     * or swap it for a filled square */
+    int k = 0;
+    for (int gi = 0; gi < t->ngrobs; gi++) {
+        Grob *g = &t->grobs[gi];
+        if (g->type != G_POINTS || k >= nb) continue;
+        Col *c = cp_xmalloc(sizeof(Col));
+        *c = col_alpha((Col){0.2, 0.2, 0.2, 0}, op[k]);
+        if (point_key) g->pcol = c;
+        else {
+            g->type = G_RECT; g->col = *c;
+            g->x0 = 0.1; g->x1 = 0.9; g->y0 = 0.1; g->y1 = 0.9;
+        }
+        k++;
     }
     return t;
 }
@@ -1871,6 +1900,39 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             return -1;
         }
     }
+    /* aes(alpha=): numeric -> opacity over scale_alpha(range=), ggplot2's
+     * default c(0.1, 1); a row with no value is not drawn (na.value = NA) */
+    const Column *alc = NULL;
+    double almin = INFINITY, almax = -INFINITY;
+    double alo = spec->has_alpha_range ? spec->alpha_lo : 0.1;
+    double ahi = spec->has_alpha_range ? spec->alpha_hi : 1.0;
+    if (spec->alpha.col) {
+        alc = df_col(df, spec->alpha.col);
+        if (!alc) { col_missing(err, df, spec->alpha.col); return -1; }
+        if (alc->type != COL_NUM || spec->alpha.is_factor) {
+            snprintf(err, CP_ERRLEN, "aes(alpha=) needs a numeric column; `%s` is not "
+                     "numeric (alpha for a discrete variable is not implemented)",
+                     spec->alpha.col);
+            return -1;
+        }
+        for (int i = 0; i < spec->nlayers; i++) {
+            GeomType t = spec->layers[i].type;
+            int ok = t == GEOM_POINT || t == GEOM_JITTER || t == GEOM_TILE
+                  || t == GEOM_RECT || ((t == GEOM_HLINE || t == GEOM_VLINE
+                      || t == GEOM_ABLINE) && !spec->layers[i].data);
+            if (!ok) {
+                snprintf(err, CP_ERRLEN, "aes(alpha=) is implemented for geom_point/"
+                         "jitter/tile/raster/hex/rect so far; give the other layers a "
+                         "constant alpha= instead");
+                return -1;
+            }
+        }
+    }
+#define ALPHA_SKIP(r) (alc && !isfinite(alc->num[r]))
+#define ALPHA_OF(r) (almax > almin ? alo + (alc->num[r] - almin) / (almax - almin) \
+                                     * (ahi - alo) : ahi)
+#define WITH_ALPHA(c, r) (alc ? col_alpha((c), ALPHA_OF(r)) : (c))
+
     /* One level per PANEL. facet_wrap gets the facet column's factor straight;
      * facet_grid gets a synthetic row-major one whose levels are every (row,
      * col) pair, so the combinations the data never uses still own a panel and
@@ -2075,6 +2137,12 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         }
     }
 #define CCOL(r) fill_map_value(&cscale, colc->num[r], cdmin, cdmax)
+    for (int r = 0; alc && r < df->nrow; r++) {   /* the alpha scale's range */
+        double v = alc->num[r];
+        if (!use[r] || !isfinite(v)) continue;
+        if (v < almin) almin = v;
+        if (v > almax) almax = v;
+    }
 
     /* size domain (data range over the used rows) */
     double szmin = 0, szmax = 1;
@@ -3913,6 +3981,17 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         const char *sz_title = spec->lab_size ? spec->lab_size : spec->size.expr;
         guides[nguide++] = build_size_legend(cr, th, sz_title, sbr, srad, nf, sdec);
     }
+    if (alc && !spec->no_legend_alpha && almax >= almin) {   /* alpha legend */
+        double abr[16]; int nab = extended_breaks(almin, almax, 5, abr, 16), na2 = 0;
+        for (int i = 0; i < nab; i++) if (abr[i] >= almin && abr[i] <= almax) abr[na2++] = abr[i];
+        if (na2 == 0) { abr[0] = almin; abr[1] = almax; na2 = almax > almin ? 2 : 1; }
+        double aop[16];
+        for (int i = 0; i < na2; i++)
+            aop[i] = almax > almin ? alo + (abr[i] - almin) / (almax - almin) * (ahi - alo) : ahi;
+        const char *al_title = spec->lab_alpha ? spec->lab_alpha : spec->alpha.expr;
+        guides[nguide++] = build_alpha_legend(cr, th, al_title, abr, aop, na2,
+                                              axis_decimals(abr, na2), haspoint);
+    }
     if (ltf && !lt_merge && !spec->no_legend_linetype && ltf->nlev > 0) {
         /* a linetype key: black lines in each level's dash pattern */
         Col *lpal = cp_xmalloc(ltf->nlev * sizeof(Col));
@@ -4653,7 +4732,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     py[2] = cy + ey[e] / panelh_pt;
                     g = gt_add(T, G_POLYLINE, R, C, R, C);
                     g->n = 3; g->px = px; g->py = py;
-                    g->col = (Col){0.45, 0.45, 0.45}; g->lw = lw_pt(0.3);
+                    g->col = (Col){0.45, 0.45, 0.45, 0}; g->lw = lw_pt(0.3);
                     g = gt_add(T, G_TEXT, R, C, R, C);
                     g->str = et[e] >= 0 ? (char *)xd_label(spec, xlev[et[e]], et[e])
                                         : glev[-1 - et[e]];
@@ -4744,12 +4823,12 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 }
                 g = gt_add(T, G_POLYLINE, R, C, R, C);
                 g->n = NC2; g->px = px; g->py = py;
-                g->col = (Col){0.6, 0.6, 0.6};
+                g->col = (Col){0.6, 0.6, 0.6, 0};
                 g->lw = lw_pt(th->grid_major_lw > 0 ? th->grid_major_lw : 0.5);
                 g->dash = 1; g->clip = 1;
                 g = gt_add(T, G_TEXT, R, C, R, C);   /* ring value */
                 g->str = ylabs[i]; g->size = SZ_AXIS_TEXT * 0.85;
-                g->col = (Col){0.45, 0.45, 0.45};
+                g->col = (Col){0.45, 0.45, 0.45, 0};
                 g->tx = cx - 3.0 / panelw_pt;
                 g->ty = cy + (rmax * rr) / panelh_pt;
                 g->hj = 1; g->va = V_INKCENTER;
@@ -4759,7 +4838,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 double ang = spec->polar_start + TAU * l / k;
                 double sx2 = sin(ang), cy2 = cos(ang);
                 g = gt_add(T, G_LINE, R, C, R, C);
-                g->col = (Col){0.8, 0.8, 0.8};
+                g->col = (Col){0.8, 0.8, 0.8, 0};
                 g->lw = lw_pt(0.5) * cp_line_scale; g->clip = 1;
                 g->x0 = cx; g->y0 = cy;
                 g->x1 = cx + rmax * sx2 / panelw_pt;
@@ -5044,14 +5123,16 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         jx += (u1 * 2 - 1) * jw;
                         jy += (u2 * 2 - 1) * jh;
                     }
+                    if (ALPHA_SKIP(r)) continue;
                     px[np] = NPCX(jx); py[np] = NPCY(jy);
                     if (filled) {
-                        pcol[np] = JL->has_color && !JL->color_is_fill ? JL->color
-                                 : cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BLACK;
-                        if (pfil) pfil[np] = fill_const ? JL->fill_c : fpal[pff->idx[r]];
+                        pcol[np] = WITH_ALPHA(JL->has_color && !JL->color_is_fill ? JL->color
+                                 : cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BLACK, r);
+                        if (pfil) pfil[np] = WITH_ALPHA(fill_const ? JL->fill_c
+                                                        : fpal[pff->idx[r]], r);
                     } else
-                    pcol[np] = spec->layers[li].has_color ? spec->layers[li].color
-                             : cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BLACK;
+                    pcol[np] = WITH_ALPHA(spec->layers[li].has_color ? spec->layers[li].color
+                             : cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BLACK, r);
                     if (prad) prad[np] = size_to_radius(szc->num[r], szmin, szmax);
                     if (pshp) pshp[np] = shape_glyph_of(spec, shf, shf->idx[r]);
                     np++;
@@ -5416,6 +5497,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         if (!use[r] || (ff && ff->idx[r] != p)) continue;
                         double cx = TXR(r), cy = TY(yc->num[r]);
                         if (isnan(cx) || isnan(cy)) continue;
+                        if (ALPHA_SKIP(r)) continue;
                         if (L->hex_offset && ((long)llround((cy - ymin) / wy)) % 2)
                             cx += wx / 2;
                         double *px = hx + 6 * k, *py = hy + 6 * k;
@@ -5426,7 +5508,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         }
                         g = gt_add(T, G_POLYGON, R, C, R, C);
                         g->n = 6; g->px = px; g->py = py; g->sub = 1; g->clip = 1;
-                        g->col = cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BAR;
+                        g->col = WITH_ALPHA(cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BAR, r);
                         if (L->has_color) {                  /* colour= is the border */
                             g->poly_fill_set = 1; g->poly_fill = g->col;
                             g->col = L->color; g->stroke = 1;
@@ -5441,8 +5523,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     /* the body takes the MAPPED fill; a layer colour= is the
                      * BORDER, as in ggplot2 -- it used to take over the fill,
                      * so geom_tile(colour="white") blanked every cell */
+                    if (ALPHA_SKIP(r)) continue;
                     g = gt_add(T, G_RECT, R, C, R, C);
-                    g->col = cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BAR;
+                    g->col = WITH_ALPHA(cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BAR, r);
                     g->sub = 1; g->clip = 1;
                     g->x0 = NPCX(cx - wx / 2); g->x1 = NPCX(cx + wx / 2);
                     g->y0 = NPCY(cy - wy / 2); g->y1 = NPCY(cy + wy / 2);
@@ -5512,7 +5595,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     }
                 }
                 Col fixed = L->has_color ? L->color
-                          : corner4 ? C_BAR : (Col){0.85, 0.85, 0.85};
+                          : corner4 ? C_BAR : (Col){0.85, 0.85, 0.85, 0};
                 for (int r2 = 0; r2 < d2->nrow; r2++) {
                     if (lpan && lpan[r2] != p) continue;
                     double off = genome_x ? genome_off(gs, c_chr->str[r2]) : 0;
@@ -5563,9 +5646,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     double b = NPCX(genome_x ? GX(r, xec->num[r])
                                   : cp_logt(spec->log_x, xec->num[r]));
                     double c0 = NPCY(TY(yc->num[r])), d = NPCY(TY(yec->num[r]));
+                    if (ALPHA_SKIP(r)) continue;
                     g = gt_add(T, G_RECT, R, C, R, C);
-                    g->col = spec->layers[li].has_color ? fixed
-                           : cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : fixed;
+                    g->col = WITH_ALPHA(spec->layers[li].has_color ? fixed
+                           : cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : fixed, r);
                     g->sub = 1; g->clip = 1;
                     g->x0 = fmin(a, b); g->x1 = fmax(a, b);
                     g->y0 = fmin(c0, d); g->y1 = fmax(c0, d);
@@ -5815,7 +5899,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                             double fy = fabs(ey) > 1e-6 ? rl[i].hh / fabs(ey) : 1e9;
                             double f = fmin(fmin(fx, fy), 1.0);
                             g = gt_add(T, G_LINE, R, C, R, C);
-                            g->col = (Col){0.6, 0.6, 0.6}; g->lw = lw_pt(0.3); g->clip = 1;
+                            g->col = (Col){0.6, 0.6, 0.6, 0}; g->lw = lw_pt(0.3); g->clip = 1;
                             g->x0 = px[i] / panelw_pt; g->y0 = py[i] / panelh_pt;
                             g->x1 = (rl[i].cx - ex * f) / panelw_pt;
                             g->y1 = (rl[i].cy - ey * f) / panelh_pt;
@@ -5917,7 +6001,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 g->x1 = NPCX(genome_x ? an->xend : cp_logt(spec->log_x, an->xend));
                 g->y1 = NPCY(TY(an->yend));
             } else {                       /* ANNO_RECT */
-                Col grey = {0.85, 0.85, 0.85};
+                Col grey = {0.85, 0.85, 0.85, 0};
                 g = gt_add(T, G_RECT, R, C, R, C);
                 g->col = an->has_color ? an->color : grey;
                 g->sub = 1; g->clip = 1;

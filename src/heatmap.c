@@ -2003,7 +2003,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                     int e = k + 1;
                     while (e < r->ann_n) {
                         Col d = r->ann_col[r->ann_ord[e]];
-                        if (d.r != c.r || d.g != c.g || d.b != c.b) break;
+                        if (d.r != c.r || d.g != c.g || d.b != c.b || d.t != c.t) break;
                         e++;
                     }
                     g = gt_add(T, G_RECT, CR, CC, CR, CC);
@@ -2319,7 +2319,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                 const char *lab = cell_text(m, v, buf, sizeof buf);
                 Col f = hm_cell_col(m, hm_pal, &spec->fill, v, dmin, dmax);
                 double lum = 0.299 * f.r + 0.587 * f.g + 0.114 * f.b;
-                Col dark = {0.1, 0.1, 0.1};
+                Col dark = {0.1, 0.1, 0.1, 0};
                 g = gt_add(T, G_TEXT, CR, CC, CR, CC);
                 g->str = cp_xstrdup(lab); g->size = sz;
                 g->col = lum < 0.5 ? C_WHITE : dark;

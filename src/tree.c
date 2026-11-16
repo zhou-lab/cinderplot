@@ -991,7 +991,7 @@ int render_tree(const PlotSpec *spec, const char *out,
         }
         pb[4 * npb] = bx - bw / 2; pb[4 * npb + 1] = by - bh / 2;
         pb[4 * npb + 2] = bx + bw / 2; pb[4 * npb + 3] = by + bh / 2; npb++;
-        Col fc = (Col){0.85, 0.85, 0.85};
+        Col fc = (Col){0.85, 0.85, 0.85, 0};
         if (clf && clf->idx[r] >= 0) fc = clpal[clf->idx[r]];
         Grob *g = gt_add(T, G_POLYGON, R, C, R, C);
         double *qx = cp_xmalloc(4 * sizeof(double)), *qy = cp_xmalloc(4 * sizeof(double));

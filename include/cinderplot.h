@@ -46,7 +46,10 @@ static inline char *cp_xstrdup(const char *s) {
     char *p = strdup(s);   if (!p) cp_oom();   return p;
 }
 
-typedef struct { double r, g, b; } Col;
+/* t is TRANSPARENCY (0 = opaque, 1 = invisible), not alpha, so every
+ * existing {r, g, b} initialiser stays opaque; "transparent" and #RRGGBBAA
+ * set it (palette.c), and gtable's set_col honours it. */
+typedef struct { double r, g, b, t; } Col;
 
 /* ---------- base style constants (ggplot2 theme_gray, base_size 11, units:
  * PDF pt). theme_gray is the DEFAULT; see THEMES[] below for the others. ---- */
@@ -96,14 +99,14 @@ extern const char *cp_font_family;
  * elements, axis ticks and frames — never to data strokes. */
 extern double cp_line_scale;
 
-static const Col C_PANEL  = {0.922, 0.922, 0.922};   /* grey92 */
-static const Col C_WHITE  = {1, 1, 1};
-static const Col C_AXTXT  = {0.302, 0.302, 0.302};   /* grey30 */
-static const Col C_TICK   = {0.2, 0.2, 0.2};         /* grey20 */
-static const Col C_BLACK  = {0, 0, 0};
-static const Col C_KEYBG  = {0.949, 0.949, 0.949};   /* grey95 */
-static const Col C_STRIP  = {0.851, 0.851, 0.851};   /* grey85 */
-static const Col C_STRIPTXT = {0.102, 0.102, 0.102}; /* grey10 */
+static const Col C_PANEL  = {0.922, 0.922, 0.922, 0};   /* grey92 */
+static const Col C_WHITE  = {1, 1, 1, 0};
+static const Col C_AXTXT  = {0.302, 0.302, 0.302, 0};   /* grey30 */
+static const Col C_TICK   = {0.2, 0.2, 0.2, 0};         /* grey20 */
+static const Col C_BLACK  = {0, 0, 0, 0};
+static const Col C_KEYBG  = {0.949, 0.949, 0.949, 0};   /* grey95 */
+static const Col C_STRIP  = {0.851, 0.851, 0.851, 0};   /* grey85 */
+static const Col C_STRIPTXT = {0.102, 0.102, 0.102, 0}; /* grey10 */
 
 /* ---------- selectable themes (ggplot2 / ggthemes / ggpubr) --------------
  * A theme is pure data: colours + on/off flags + raw ggplot linewidth units
@@ -127,7 +130,7 @@ typedef struct {
 typedef enum { THEME_GRAY, THEME_BW, THEME_MINIMAL, THEME_CLASSIC, THEME_VOID,
                THEME_LINEDRAW, THEME_LIGHT, THEME_DARK, THEME_FEW } ThemeType;
 
-#define GY(v) {v, v, v}
+#define GY(v) {v, v, v, 0}
 /* fields: panel,on | gridMaj,lw,on | gridMin,lw,on | border,lw,on |
  *         axisLine,lw,on | tick,on | axisText,on | axisTitle,on | title |
  *         strip,on,stripText | key,on   (greyNN = NN/100) */
@@ -200,7 +203,7 @@ int brewer_lookup(const char *name, Col *stops, int *nstops, int *is_qual);
 Col fill_map_value(const FillScale *fs, double v, double dmin, double dmax);
 int parse_color(const char *s, Col *out);        /* names + #RRGGBB; 0 = ok */
 Col stain_color(const char *s);                  /* cytoband gieStain -> colour */
-static const Col C_NA = {0.753, 0.753, 0.753};   /* #C0C0C0, wheatmap na.color */
+static const Col C_NA = {0.753, 0.753, 0.753, 0};   /* #C0C0C0, wheatmap na.color */
 
 /* ---------- csv.c: data frame ---------- */
 typedef enum { COL_NUM, COL_STR } ColType;
@@ -672,6 +675,10 @@ typedef struct {
     AesEntry size;                  /* geom_point size: numeric -> point area */
     AesEntry shape;                 /* geom_point shape: discrete -> point glyph */
     AesEntry linetype;              /* line/smooth/segment: discrete -> dash pattern */
+    AesEntry alpha;                 /* aes(alpha=): numeric -> opacity over
+                                     * scale_alpha(range=), default c(0.1, 1) */
+    double alpha_lo, alpha_hi;      /* scale_alpha(range=c(lo, hi)) */
+    int has_alpha_range;            /* else ggplot2's c(0.1, 1) */
     AesEntry group;                 /* geom_line/geom_smooth series key: discrete,
                                      * no legend; crossed with a discrete colour */
     AesEntry chrom;                 /* genome scale: chromosome column */
@@ -770,6 +777,7 @@ typedef struct {
                                      * are two aesthetics (filled points) */
     int manual_fill;                /* the scale_*_manual() was spelled fill: with two
                                      * aesthetics it keys the fill, else the colour */
+    int no_legend_alpha;            /* guides(alpha="none") */
     int no_legend_size, no_legend_shape;   /* guides(size="none") / guides(shape="none"):
                                      * the size and shape guides are separate builders
                                      * in render.c and are dropped separately */
@@ -812,6 +820,7 @@ typedef struct {
     double tree_lw;                               /* geom_tree(linewidth=): branch stroke,
                                                    * ggplot units; 0 = the 0.5 default */
     char *lab_title, *lab_x, *lab_y, *lab_colour, *lab_fill;
+    char *lab_alpha;                /* labs(alpha=): the alpha legend title */
     char *lab_shape, *lab_size, *lab_linetype;   /* labs(shape=/size=/linetype=): those legend titles */
     char *lab_subtitle, *lab_caption;             /* labs(subtitle=, caption=) */
     /* scale_colour/fill_manual(values=): discrete palette override. 64 slots:

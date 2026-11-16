@@ -466,6 +466,7 @@ int main(int argc, char **argv) {
     if (no_legend)                          /* --no-legend: every guide */
         spec.no_legend = spec.no_legend_size = spec.no_legend_shape = 1;
     if (no_legend) spec.no_legend_linetype = spec.no_legend_fill = spec.no_legend_colour = 1;
+    if (no_legend) spec.no_legend_alpha = 1;
     /* base font size: a spec-level theme_*(base_size=) beats the --font-size flag
      * (which has already set cp_base_size), exactly as base_line_size beats the
      * env var. Set here, before any mode dispatch, so all seven modes see it. */
@@ -542,7 +543,7 @@ int main(int argc, char **argv) {
     const AesEntry *aes[] = { &spec.x, &spec.y, &spec.colour, &spec.xend,
                               &spec.yend, &spec.ymin, &spec.label, &spec.size,
                               &spec.shape, &spec.chrom, &spec.group,
-                              &spec.linetype };
+                              &spec.linetype, &spec.alpha };
     for (size_t i = 0; i < sizeof aes / sizeof *aes; i++)
         if (aes[i]->col) needed[nneeded++] = aes[i]->col;
     if (spec.pfill.col) needed[nneeded++] = spec.pfill.col;

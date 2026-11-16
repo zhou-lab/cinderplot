@@ -19,10 +19,10 @@
 #define TRK_FLO (spec->has_fill && spec->fill.has_limits ? spec->fill.lim_lo : 0.0)
 #define TRK_FHI (spec->has_fill && spec->fill.has_limits ? spec->fill.lim_hi : 1.0)
 
-static const Col C_TGRID = {0.898, 0.898, 0.898};   /* faint track gridline */
-static const Col C_COV   = {0.271, 0.459, 0.706};   /* steelblue coverage */
-static const Col C_IVAL  = {0.35, 0.35, 0.35};      /* grey interval box */
-static const Col C_ARC   = {0.5, 0.3, 0.6};         /* purple arc */
+static const Col C_TGRID = {0.898, 0.898, 0.898, 0};   /* faint track gridline */
+static const Col C_COV   = {0.271, 0.459, 0.706, 0};   /* steelblue coverage */
+static const Col C_IVAL  = {0.35, 0.35, 0.35, 0};      /* grey interval box */
+static const Col C_ARC   = {0.5, 0.3, 0.6, 0};         /* purple arc */
 
 static int cmp_iv(const void *a, const void *b) {
     long d = ((const Interval *)a)->start - ((const Interval *)b)->start;
@@ -1817,7 +1817,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
                 }
             }
             Col col = t->has_color ? t->color : C_IVAL;
-            Col cds_col = {0.77, 0.20, 0.16};                /* coding regions (red) */
+            Col cds_col = {0.77, 0.20, 0.16, 0};                /* coding regions (red) */
             double lh = 1.0 / nlanes, utr = 0.30 * lh, cds = 0.62 * lh;
             for (int k = 0; k < ng; k++) {
                 double yc = 1 - (lane[k] + 0.5) * lh;
@@ -1978,13 +1978,13 @@ int render_tracks(const PlotSpec *spec, const char *out,
                 double a = bs->num[r2] / clen, b = be->num[r2] / clen;
                 const char *s = bt->str[r2];
                 Col c;
-                if      (!strcmp(s, "acen"))    c = (Col){0.55, 0.78, 0.52};   /* light green */
-                else if (!strcmp(s, "gneg"))    c = (Col){0.96, 0.96, 0.96};   /* near-white */
-                else if (!strcmp(s, "gpos25"))  c = (Col){0.82, 0.82, 0.82};
-                else if (!strcmp(s, "gpos50"))  c = (Col){0.62, 0.62, 0.62};
-                else if (!strcmp(s, "gpos75"))  c = (Col){0.42, 0.42, 0.42};
-                else if (!strcmp(s, "gpos100")) c = (Col){0.20, 0.20, 0.20};
-                else                            c = (Col){0.75, 0.75, 0.75};   /* gvar/stalk */
+                if      (!strcmp(s, "acen"))    c = (Col){0.55, 0.78, 0.52, 0};   /* light green */
+                else if (!strcmp(s, "gneg"))    c = (Col){0.96, 0.96, 0.96, 0};   /* near-white */
+                else if (!strcmp(s, "gpos25"))  c = (Col){0.82, 0.82, 0.82, 0};
+                else if (!strcmp(s, "gpos50"))  c = (Col){0.62, 0.62, 0.62, 0};
+                else if (!strcmp(s, "gpos75"))  c = (Col){0.42, 0.42, 0.42, 0};
+                else if (!strcmp(s, "gpos100")) c = (Col){0.20, 0.20, 0.20, 0};
+                else                            c = (Col){0.75, 0.75, 0.75, 0};   /* gvar/stalk */
                 if (!strcmp(s, "acen")) { if (a < cen_lo) cen_lo = a; if (b > cen_hi) cen_hi = b; }
                 bst[nb2] = a; ben[nb2] = b; bcol[nb2] = c; nb2++;
             }
@@ -1992,7 +1992,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
             g->n = nb2; g->px = bst; g->py = ben; g->pcol = bcol;
             g->x0 = cen_hi > cen_lo ? cen_lo : 0; g->x1 = cen_hi > cen_lo ? cen_hi : 0;
             g = gt_add(T, G_LINE, R, CC, R, CC);              /* red region marker */
-            Col red = {0.85, 0, 0};
+            Col red = {0.85, 0, 0, 0};
             g->col = red; g->lw = lw_pt(1.3); g->clip = 1;
             g->x0 = g->x1 = (rstart + rend) / 2.0 / clen;
             g->y0 = 0.12; g->y1 = 0.88;
@@ -2122,7 +2122,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
             }
 #undef CELL_COL
             g = gt_add(T, G_RECT, R, CC, R, CC);             /* heatmap bounding box */
-            Col bbh = {0.4, 0.4, 0.4};
+            Col bbh = {0.4, 0.4, 0.4, 0};
             g->col = bbh; g->sub = 1; g->stroke = 1; g->lw = lw_pt(0.5) * cp_line_scale; g->clip = 1;
             g->x0 = 0; g->x1 = 1; g->y0 = lblband; g->y1 = hmtop;
             /* highlight() boxes: the sample's row band over the probe columns
@@ -2183,7 +2183,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
                 g->str = xlab[b]; g->size = SZ_TRACK; g->col = C_AXTXT;
                 g->tx = xtxt[b]; g->ty = axline + txtoff; g->hj = 0.5; g->va = V_BOTTOM;
             }
-            Col mapc = {0.45, 0.45, 0.45};
+            Col mapc = {0.45, 0.45, 0.45, 0};
             const int NB = 24;
             if (gx_mode) goto gx_no_fan;   /* nothing to lead to: cells sit at their own x */                                /* map lines: cubic-bezier
                 * flow from the probe's genomic position to its column, with vertical
@@ -2355,7 +2355,7 @@ gx_no_fan:
             }
             free(pts); free(sx); free(sy);
             g = gt_add(T, G_RECT, R, CC, R, CC);           /* panel frame, like the matrix box */
-            { Col bbh = {0.4, 0.4, 0.4};
+            { Col bbh = {0.4, 0.4, 0.4, 0};
               g->col = bbh; g->sub = 1; g->stroke = 1; g->lw = lw_pt(0.5) * cp_line_scale; g->clip = 1;
               g->x0 = 0; g->x1 = 1; g->y0 = 0; g->y1 = 1; }
             draw_row_gutter(T, cr, R, CC, t, rcs[i], nrcs[i], ann[i], d->stripname, ident, ns,

@@ -146,7 +146,7 @@ static int venn3(const PlotSpec *spec, VItem *it, int nit, const char **setn,
     double RGAP = 0.8 * DXS, PAD = 0.5 * FS;
     double TSZ = 1.33 * FS, SSZ = 0.875 * FS, CSZ = 0.8 * FS;
     double KSZ = cp_legend_text_sz ? SZ_LEGEND_TEXT : CSZ * 1.1;   /* key labels; theme(legend.text=) */
-    Col muted = {0.4, 0.4, 0.4};
+    Col muted = {0.4, 0.4, 0.4, 0};
 
     /* region contents: mask 1..7 */
     int *reg[8], nreg[8] = {0};
@@ -457,9 +457,9 @@ int render_venn(const PlotSpec *spec, const char *data, const char *out,
     }
 
     /* #3465a8 #3a7d3a #b5532b */
-    Col scol[3] = { {0.204, 0.396, 0.659}, {0.227, 0.490, 0.227}, {0.710, 0.325, 0.169} };
+    Col scol[3] = { {0.204, 0.396, 0.659, 0}, {0.227, 0.490, 0.227, 0}, {0.710, 0.325, 0.169, 0} };
     for (int s = 0; s < nset && s < spec->n_venn_set_cols; s++) scol[s] = spec->venn_set_cols[s];
-    Col muted = {0.4, 0.4, 0.4};
+    Col muted = {0.4, 0.4, 0.4, 0};
     if (nset == 3) {
         int rc = venn3(spec, it, nit, setn, scol, cnt, tot, cn != NULL, out, w_pt, h_pt, err);
         return rc;
