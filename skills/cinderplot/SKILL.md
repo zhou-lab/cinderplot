@@ -63,7 +63,10 @@ giving that file's columns; substitute your own file.
   way before). `theme_*(base_size=PT)` is ggplot2's own spelling and, when
   given, overrides the flag — exactly as `theme_*(base_line_size=)` overrides
   the chrome line-width default. In grammar/heatmap/tree/chord modes the size
-  hierarchy (axis title 1.2x, axis text 0.8x of the base) scales from it; **in
+  hierarchy (axis title 1.2x, axis text 0.8x of the base) scales from it --
+  `theme(axis.text=element_text(size=10), plot.title=element_text(size=12))`
+  pins the tick labels and the title in pt (or `size=rel(r)` of the base),
+  as ggplot2 does, for a house style of 12 pt titles over 10 pt ticks; **in
   track mode every label is one size** (see below).
 - `--editable-svg` (with an `.svg` output) writes every label as its own
   `<text>` element with a single x/y — svglite-style, retypable in Inkscape/
@@ -199,6 +202,12 @@ and ignored (the output path is a command-line argument here).
   the others is dropped with a stderr warning ("N unlabeled data points (too
   many overlaps)"), as ggrepel does, never drawn on top of another.
   Up to 8 layers.
+- `geom_ribbon()` draws the band `aes(ymin=, ymax=)` over x, one per
+  `colour=`/`group=` level, filled (grey20 by default, as ggplot2) with no
+  outline -- the shaded CI: `aes(x, y, ymin=lo, ymax=hi, colour=g) +
+  geom_ribbon(alpha=0.2) + geom_line()`. A mapped colour fills the band
+  (the one-slot colour/fill rule of every area geom); its key is the
+  translucent band under the line.
 - `geom_errorbar([width=])` / `geom_linerange()` draw `aes(ymin=, ymax=)`
   intervals — the mean-and-CI bar chart is `aes(x=factor(g), y=m, ymin=lo,
   ymax=hi) + geom_col() + geom_errorbar(width=0.4)`. `width=` is the cap in
@@ -399,7 +408,10 @@ for.
   **deterministic**, keyed off the row, so a figure regenerates identically.
   `seed=` picks a different arrangement.
 - **scales**: `scale_x_log10()` `scale_y_log10()` `scale_x_log2()` `scale_y_log2()`
-  (each takes `limits=c(lo,hi)` in data space. Reach for log2 when the variable
+  (each takes `limits=c(lo,hi)` in data space, and `breaks=c(...)` /
+  `labels=c(...)` / `expand=` as the continuous scale does: breaks are data
+  values, `breaks=c(100, 1000), labels=c("100", "1k")`; given breaks drop the
+  2..9 log tick marks. Reach for log2 when the variable
   was *sampled* at powers of two — a coverage or subsampling ladder: log10 spaces
   those points correctly but its 10^k ticks land between the rungs you measured.)
   `scale_*_continuous(labels=percent,
@@ -507,7 +519,10 @@ titles when they would duplicate the strips, and
 `theme(legend.position="inside", legend.position.inside=c(x, y))` anchors
 each block inside its own panel at those npc coordinates (default lower
 right) — no legend row at all, the manuscript ladder-panel look. The same
-theme() pair places a single unfaceted legend inside its panel; every other
+theme() pair places a single unfaceted legend inside its panel;
+`theme(legend.position="bottom")` puts every guide in one row under the x
+title, each title left of its keys and a colourbar horizontal, as ggplot2
+lays it out (`"right"` is the default); every other
 theme() key still errors (presets only) except the legend key cell:
 `theme(legend.key.size=unit(10, "pt"))` (or `legend.key.height=`/
 `legend.key.width=`; units pt, mm, cm, in, lines) and

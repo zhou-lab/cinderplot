@@ -1763,6 +1763,7 @@ static int parse_term(P *p, PlotSpec *spec) {
     else if (!strcmp(name, "geom_segment")) gt = GEOM_SEGMENT;
     else if (!strcmp(name, "geom_errorbar") || !strcmp(name, "geom_errorbarh")) gt = GEOM_ERRORBAR;
     else if (!strcmp(name, "geom_linerange")) gt = GEOM_LINERANGE;
+    else if (!strcmp(name, "geom_ribbon")) gt = GEOM_RIBBON;
     else if (!strcmp(name, "geom_rect")) gt = GEOM_RECT;
     else if (!strcmp(name, "geom_density")) gt = GEOM_DENSITY;
     else if (!strcmp(name, "geom_hline")) gt = GEOM_HLINE;
@@ -2334,28 +2335,16 @@ static int parse_term(P *p, PlotSpec *spec) {
                         : "geom_vline() needs xintercept=%s", "");
         return 0;
     }
-    if (!strcmp(name, "scale_x_log10") || !strcmp(name, "scale_y_log10") ||
-        !strcmp(name, "scale_x_log2")  || !strcmp(name, "scale_y_log2")) {
-        int isx = (name[6] == 'x');
+    int log_scale = !strcmp(name, "scale_x_log10") || !strcmp(name, "scale_y_log10")
+                 || !strcmp(name, "scale_x_log2") || !strcmp(name, "scale_y_log2");
+    if (log_scale) {
+        /* a log axis takes the continuous scale's arguments (limits=,
+         * breaks=, labels=, expand=, ...); breaks= are data values, placed at
+         * their logs -- axis_breaks() does the rest */
         int base = name[strlen(name) - 1] == '2' ? 2 : 10;
-        if (isx) spec->log_x = base; else spec->log_y = base;
-        skip_ws(p);
-        while (*p->s != ')') {                        /* optional limits=c(lo, hi) */
-            char *key = ident(p);
-            if (!key || expect(p, '=')) return fail(p, "bad scale_*_log argument", "");
-            skip_ws(p);
-            if (strcmp(key, "limits")) return fail(p, "scale_*_log option `%s` not implemented (only limits=)", key);
-            if (!(p->s[0] == 'c' && p->s[1] == '(')) return fail(p, "limits= expects c(lo, hi)", "");
-            double lo, hi;
-            if (parse_lim_pair(p, "limits=", &lo, &hi)) return -1;
-            if (isx) { spec->xlim_lo = lo; spec->xlim_hi = hi; spec->has_xlim = 1; }
-            else     { spec->ylim_lo = lo; spec->ylim_hi = hi; spec->has_ylim = 1; }
-            skip_ws(p);
-            if (*p->s == ',') { p->s++; skip_ws(p); }
-        }
-        return expect(p, ')');
+        if (name[6] == 'x') spec->log_x = base; else spec->log_y = base;
     }
-    if (!strcmp(name, "scale_x_continuous") || !strcmp(name, "scale_y_continuous")) {
+    if (log_scale || !strcmp(name, "scale_x_continuous") || !strcmp(name, "scale_y_continuous")) {
         int isx = (name[6] == 'x');
         skip_ws(p);
         while (*p->s != ')') {                        /* labels=percent, limits=c(lo,hi) */
@@ -3586,16 +3575,30 @@ static int parse_term(P *p, PlotSpec *spec) {
                     if (*p->s == ',') { p->s++; skip_ws(p); }
                     continue;
                 }
+                if (!strcmp(v, "bottom")) {
+                    free(v);
+                    spec->legend_bottom = 1; spec->legend_inside = 0;
+                    skip_ws(p);
+                    if (*p->s == ',') { p->s++; skip_ws(p); }
+                    continue;
+                }
+                if (!strcmp(v, "right")) {         /* the default */
+                    free(v);
+                    spec->legend_bottom = spec->legend_inside = 0;
+                    skip_ws(p);
+                    if (*p->s == ',') { p->s++; skip_ws(p); }
+                    continue;
+                }
                 if (strcmp(v, "inside")) {
                     char msg[CP_ERRLEN];
                     snprintf(msg, sizeof msg, "theme(legend.position=\"%s\") is not "
-                             "implemented: only \"inside\" and \"none\" are (the legend "
-                             "sits in the right margin otherwise); to drop one guide use "
+                             "implemented: \"right\" (the default), \"bottom\", "
+                             "\"inside\" and \"none\" are; to drop one guide use "
                              "guides(colour=\"none\") or --no-legend", v);
                     return fail(p, "%s", msg);
                 }
                 free(v);
-                spec->legend_inside = 1;
+                spec->legend_inside = 1; spec->legend_bottom = 0;
                 if (spec->leg_ix == 0 && spec->leg_iy == 0) {
                     spec->leg_ix = 0.85; spec->leg_iy = 0.15;   /* lower right */
                 }
@@ -3629,10 +3632,27 @@ static int parse_term(P *p, PlotSpec *spec) {
                         char *k = ident(p);
                         if (!k || expect(p, '=')) { free(k);
                             return fail(p, "element_text() takes key=value arguments%s", ""); }
+                        if (!strcmp(k, "size")) {
+                            /* the tick labels: pt, or rel() of base_size */
+                            free(k);
+                            skip_ws(p);
+                            int rel = !strncmp(p->s, "rel(", 4);
+                            if (rel) p->s += 4;
+                            char *end;
+                            double v = strtod(p->s, &end);
+                            if (end == p->s || !(v > 0))
+                                return fail(p, "element_text(size=) expects a number > 0 or rel(r)%s", "");
+                            p->s = end;
+                            if (rel && expect(p, ')')) return -1;
+                            spec->axis_text_sz = rel ? -v : v;
+                            skip_ws(p);
+                            if (*p->s == ',') { p->s++; skip_ws(p); }
+                            continue;
+                        }
                         if (strcmp(k, "colour") && strcmp(k, "color")) {
                             char msg[CP_ERRLEN];
                             snprintf(msg, sizeof msg, "theme(axis.text=element_text(%s=)) is "
-                                     "not implemented; colour= is", k);
+                                     "not implemented; colour= and size= are", k);
                             free(k);
                             return fail(p, "%s", msg);
                         }
@@ -3647,11 +3667,12 @@ static int parse_term(P *p, PlotSpec *spec) {
                     p->s++;
                 } else {
                     free(f);
-                    return fail(p, "theme(axis.text=) takes element_text(colour=) or "
+                    return fail(p, "theme(axis.text=) takes element_text(colour=, size=) or "
                                 "element_blank()%s", "");
                 }
             } else if (!strcmp(key, "strip.text") || !strcmp(key, "strip.text.x")
-                       || !strcmp(key, "strip.text.y") || !strcmp(key, "legend.text")) {
+                       || !strcmp(key, "strip.text.y") || !strcmp(key, "legend.text")
+                       || !strcmp(key, "plot.title")) {
                 /* element_text(size=N) in pt, or size=rel(r) of base_size;
                  * ggplot's default is rel(0.8). .x is the top strips, .y
                  * facet_grid's row strips. */
@@ -3719,6 +3740,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                 if (v == 0 && !got) return fail(p, "theme(%s=element_text()) needs size=", key);
                 if (v == 0) { /* face=/colour= only: sizes stay as they were */ }
                 else if (!strcmp(key, "legend.text")) spec->legend_text_sz = v;
+                else if (!strcmp(key, "plot.title")) spec->title_sz = v;
                 else {
                     if (strcmp(key, "strip.text.y")) spec->strip_x_sz = v;
                     if (strcmp(key, "strip.text.x")) spec->strip_y_sz = v;
@@ -3743,7 +3765,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                                "the rest — supported here: legend.position, "
                                "legend.position.inside, legend.key.size, "
                                "legend.key.height, legend.key.width, "
-                               "legend.key.spacing.y, legend.text, strip.text[.x|.y], axis.text", key);
+                               "legend.key.spacing.y, legend.text, strip.text[.x|.y], axis.text, plot.title", key);
             skip_ws(p);
             if (*p->s == ',') { p->s++; skip_ws(p); }
         }
@@ -4000,12 +4022,12 @@ static int parse_term(P *p, PlotSpec *spec) {
     }
     /* a few near-misses get a pointer instead of the whole menu */
     if (!strcmp(name, "geom_path") || !strcmp(name, "geom_step") || !strcmp(name, "geom_area")
-        || !strcmp(name, "geom_ribbon") || !strcmp(name, "geom_violin") || !strcmp(name, "geom_crossbar")
+        || !strcmp(name, "geom_violin") || !strcmp(name, "geom_crossbar")
         || !strcmp(name, "geom_pointrange") || !strcmp(name, "geom_bin2d")
         || !strcmp(name, "geom_polygon") || !strcmp(name, "geom_dotplot") || !strcmp(name, "geom_rug")
         || !strcmp(name, "geom_freqpoly") || !strcmp(name, "geom_curve") || !strcmp(name, "geom_count"))
         return fail(p, "%s() is not implemented; the geoms are "
-                    "geom_point/jitter/line/smooth/col/bar/histogram/boxplot/density/tile/raster/hex/segment/rect/hline/vline/abline/errorbar/linerange/text/label/text_repel/label_repel()", name);
+                    "geom_point/jitter/line/smooth/col/bar/histogram/boxplot/density/tile/raster/hex/segment/rect/hline/vline/abline/errorbar/linerange/ribbon/text/label/text_repel/label_repel()", name);
     if (!strcmp(name, "scale_colour_gradientn") || !strcmp(name, "scale_color_gradientn")
         || !strcmp(name, "scale_fill_gradientn"))
         return fail(p, "%s() is not implemented; use gradient2() (three stops) or a "
@@ -4016,7 +4038,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                     "`data + aes() + geom_*()` and the output is the CLI argument", name);
     return fail(p, "`%s()` is not implemented; supported: "
                    "aes(), ggplot(), ggsave(); geom_point/jitter/line/smooth/col/bar/histogram/"
-                   "boxplot/density/tile/raster/hex/segment/rect/hline/vline/abline/errorbar/linerange/"
+                   "boxplot/density/tile/raster/hex/segment/rect/hline/vline/abline/errorbar/linerange/ribbon/"
                    "text/label/text_repel/label_repel(), annotate(); labs()/xlab()/ylab()/ggtitle(); "
                    "facet_wrap(~var), facet_grid(row ~ col); coord_flip/polar/cartesian/fixed(); scale_x|y_log10/log2/continuous/"
                    "discrete(), xlim(), ylim(), scale_x_genome(); scale_colour|fill_manual/brewer/"
@@ -4128,13 +4150,13 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
     int nrange = 0, nother = 0;
     for (int i = 0; i < spec->nlayers; i++) {
         GeomType t = spec->layers[i].type;
-        if (t == GEOM_ERRORBAR || t == GEOM_LINERANGE) nrange++;
+        if (t == GEOM_ERRORBAR || t == GEOM_LINERANGE || t == GEOM_RIBBON) nrange++;
         else if (t != GEOM_HLINE && t != GEOM_VLINE && t != GEOM_ABLINE) nother++;
     }
     if (!spec->y.col && spec->ymin.col) {
         if (nrange && !nother) spec->y = spec->ymin;
         else if (nrange)
-            return fail(&p, "geom_errorbar()/geom_linerange() beside another geom "
+            return fail(&p, "geom_errorbar()/geom_linerange()/geom_ribbon() beside another geom "
                         "need aes(y=) for that geom (aes(x, y=mean, ymin=lo, ymax=hi))", "");
         else {
             spec->y = spec->ymin;
@@ -4437,7 +4459,7 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
                 || t == GEOM_TEXT || t == GEOM_LABEL || t == GEOM_SEGMENT
                 || t == GEOM_ERRORBAR || t == GEOM_LINERANGE || t == GEOM_DENSITY) stroke++;
             else if (t == GEOM_COL || t == GEOM_BAR || t == GEOM_HISTOGRAM
-                     || t == GEOM_TILE || t == GEOM_RECT) area++;
+                     || t == GEOM_TILE || t == GEOM_RECT || t == GEOM_RIBBON) area++;
         }
         const char *g0 = NULL;
         for (int i = 0; i < spec->nlayers && !g0; i++) {
@@ -4451,7 +4473,7 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
                : t == GEOM_COL ? "geom_col" : t == GEOM_BAR ? "geom_bar"
                : t == GEOM_HISTOGRAM ? "geom_histogram"
                : t == GEOM_TILE ? (spec->layers[i].hex ? "geom_hex" : "geom_tile")
-               : t == GEOM_RECT ? "geom_rect" : NULL;
+               : t == GEOM_RECT ? "geom_rect" : t == GEOM_RIBBON ? "geom_ribbon" : NULL;
         }
         if (g0 && spec->colour.is_fill && stroke && !area)
             fprintf(stderr, "cinderplot: warning: aes(fill=) on %s() is drawn as "

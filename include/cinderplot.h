@@ -65,7 +65,15 @@ static inline double lw_pt(double u) { return u * 2.845276 * 72.0 / 96.0; }
 extern double cp_base_size;
 #define SZ_BASE      cp_base_size
 #define SZ_AXIS_TEXT (0.8 * cp_base_size)
-#define SZ_TITLE     (1.2 * cp_base_size)
+/* theme(plot.title=element_text(size=)) / theme(axis.text=element_text(size=)):
+ * pt if > 0, rel() of base_size if < 0, 0 = ggplot's rel(1.2) / rel(0.8).
+ * SZ_TICK is the tick labels only; SZ_AXIS_TEXT stays the 0.8 x base that
+ * strips, legends and captions inherit, as ggplot2's `text` does. */
+extern double cp_title_sz, cp_axis_text_sz;
+#define SZ_TITLE     (cp_title_sz > 0 ? cp_title_sz \
+                      : cp_title_sz < 0 ? -cp_title_sz * cp_base_size : 1.2 * cp_base_size)
+#define SZ_TICK      (cp_axis_text_sz > 0 ? cp_axis_text_sz \
+                      : cp_axis_text_sz < 0 ? -cp_axis_text_sz * cp_base_size : SZ_AXIS_TEXT)
 /* track mode uses ONE flat label size (no title/axis/row hierarchy): 9pt at
  * the default base, scaling with --font-size / base_size like the rest. */
 #define SZ_TRACK     (cp_base_size * 9.0 / 11.0)
@@ -350,7 +358,7 @@ enum { RF_MEAN, RF_MEDIAN, RF_SUM, RF_LENGTH, RF_MAX, RF_MIN };
 typedef enum { GEOM_POINT, GEOM_JITTER, GEOM_LINE, GEOM_COL, GEOM_HISTOGRAM, GEOM_BOXPLOT, GEOM_BAR,
                GEOM_SEGMENT, GEOM_RECT, GEOM_DENSITY, GEOM_SMOOTH, GEOM_TILE,
                GEOM_HLINE, GEOM_VLINE, GEOM_ABLINE, GEOM_TEXT, GEOM_LABEL,
-               GEOM_ERRORBAR, GEOM_LINERANGE } GeomType;
+               GEOM_ERRORBAR, GEOM_LINERANGE, GEOM_RIBBON } GeomType;
 typedef struct {
     GeomType type;
     int bins;
@@ -850,6 +858,7 @@ typedef struct {
                                      * pt if > 0, rel() of base_size if < 0,
                                      * 0 = ggplot's rel(0.8) */
     double legend_text_sz;          /* theme(legend.text=element_text(size=)), same coding */
+    double title_sz, axis_text_sz;  /* theme(plot.title= / axis.text=element_text(size=)), same coding */
     /* theme(strip.text=element_text(face=, colour=)): facet strips, and the
      * coord_polar() ring plot's wedge names (the polar analogue of facets) */
     int strip_bold; Col strip_col; int has_strip_col;
@@ -867,6 +876,8 @@ typedef struct {
     double base_size;               /* theme_*(base_size=): base font size in pt,
                                      * 0 = unset (--font-size or the 11.0 default);
                                      * a spec value overrides the CLI flag */
+    int legend_bottom;              /* theme(legend.position="bottom"): guides in one
+                                     * row under the x title, titles to the left */
     int legend_inside;              /* theme(legend.position="inside"): draw the
                                      * legend block(s) INSIDE the panel(s) at
                                      * (leg_ix, leg_iy) npc instead of reserving

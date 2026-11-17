@@ -34,6 +34,7 @@ double cp_line_scale = 1.0;
 double cp_base_size = 11.0;
 double cp_key_w = 17.3, cp_key_h = 17.3, cp_key_gap = HALF_LINE * 0.4;
 double cp_legend_text_sz = 0;
+double cp_title_sz = 0, cp_axis_text_sz = 0;
 
 static const char *USAGE =
     "usage: cinderplot [DSL-expr | flags] [data] out.{pdf,svg,png}\n"
@@ -475,6 +476,8 @@ int main(int argc, char **argv) {
     if (spec.key_h > 0) cp_key_h = spec.key_h;
     if (spec.has_key_gap) cp_key_gap = spec.key_gap;
     if (spec.legend_text_sz) cp_legend_text_sz = spec.legend_text_sz;   /* theme(legend.text=) */
+    if (spec.title_sz) cp_title_sz = spec.title_sz;                     /* theme(plot.title=) */
+    if (spec.axis_text_sz) cp_axis_text_sz = spec.axis_text_sz;         /* theme(axis.text=) */
 
     /* 0 = auto-fit: track & heatmap modes size themselves from content;
      * grammar mode keeps the classic 6x4in default. */

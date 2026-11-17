@@ -70,6 +70,9 @@ static double leg_est_w(cairo_t *cr, char **lv, int k, int nc) {
     return total;
 }
 
+/* a geom_ribbon(alpha=) key is the translucent band, as ggplot2 draws it,
+ * so the line drawn through it stays visible; 0 = opaque (every other key) */
+static double g_key_area_alpha;
 static GTable *build_legend(cairo_t *cr, const Theme *th, const char *title, const Factor *f,
                             const Col *pal, int haspoint, int hasline, int hasbox, int hastext,
                             const int *shapes, int ncol, int reverse, const int *dashes,
@@ -137,7 +140,7 @@ static GTable *build_legend(cairo_t *cr, const Theme *th, const char *title, con
         if (th->key_bg_on) { g = gt_add(t, G_RECT, r, kc, r, kc); g->col = th->key_bg; }
         if (hasbox) {
             g = gt_add(t, G_RECT, r, kc, r, kc);
-            g->col = pal[i]; g->sub = 1;
+            g->col = pal[i]; g->sub = 1; g->alpha = g_key_area_alpha;
             g->x0 = 0.15; g->x1 = 0.85; g->y0 = 0.15; g->y1 = 0.85;
         }
         if (hasline) {
@@ -402,6 +405,52 @@ static GTable *stack_guides(GTable **gs, int n) {
     }
     for (int i = 0; i < n; i++) {
         Grob *g = gt_add(c, G_TABLE, 2 * i, 0, 2 * i, 0);
+        g->child = gs[i];
+    }
+    return c;
+}
+
+/* legend.position="bottom": a guide's title moves to the LEFT of its keys,
+ * vertically centred, as ggplot2 lays out a horizontal legend. Every guide
+ * builder puts the title in row 0 over a gap row 1; those collapse. */
+static GTable *guide_title_left(cairo_t *cr, GTable *t) {
+    Grob *tg = NULL;
+    for (int i = 0; i < t->ngrobs && !tg; i++)
+        if (t->grobs[i].type == G_TEXT && t->grobs[i].r0 == 0 && t->grobs[i].r1 == 0)
+            tg = &t->grobs[i];
+    if (!tg || !tg->str || !*tg->str) return t;
+    const char *title = tg->str;
+    double sz = tg->size; Col col = tg->col; int bold = tg->bold;
+    tg->str = "";
+    t->rowh[0] = upt(0); t->rowh[1] = upt(0);
+    GTable *w = cp_xcalloc(1, sizeof(GTable));
+    w->ncol = 3;
+    w->colw[0] = upt(text_w(cr, sz, title));
+    w->colw[1] = upt(HALF_LINE);
+    w->colw[2] = upt(gt_fixed_w(t));
+    w->nrow = 1;
+    w->rowh[0] = upt(fmax(gt_fixed_h(t), font_h(cr, sz)));
+    Grob *g = gt_add(w, G_TEXT, 0, 0, 0, 0);
+    g->str = title; g->size = sz; g->col = col; g->bold = bold;
+    g->tx = 0; g->ty = 0.5; g->hj = 0; g->va = V_INKCENTER;
+    g = gt_add(w, G_TABLE, 0, 2, 0, 2);
+    g->child = t;
+    return w;
+}
+
+/* bottom legends sit side by side, legend.spacing.x (2 half-lines) apart,
+ * each centred on the tallest */
+static GTable *stack_guides_h(GTable **gs, int n) {
+    if (n == 1) return gs[0];
+    GTable *c = cp_xcalloc(1, sizeof(GTable));
+    double h = 0;
+    for (int i = 0; i < n; i++) h = fmax(h, gt_fixed_h(gs[i]));
+    c->nrow = 1; c->rowh[0] = upt(h);
+    c->ncol = 2 * n - 1;
+    for (int i = 0; i < n; i++) {
+        c->colw[2 * i] = upt(gt_fixed_w(gs[i]));
+        if (i < n - 1) c->colw[2 * i + 1] = upt(2 * HALF_LINE);
+        Grob *g = gt_add(c, G_TABLE, 0, 2 * i, 0, 2 * i);
         g->child = gs[i];
     }
     return c;
@@ -1545,7 +1594,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         GeomType t = spec->layers[i].type;
         if (!spec->layers[i].data
             && (t == GEOM_SEGMENT || t == GEOM_RECT || t == GEOM_ERRORBAR
-                || t == GEOM_LINERANGE)) main_ends = 1;
+                || t == GEOM_LINERANGE || t == GEOM_RIBBON)) main_ends = 1;
     }
     const Column *xec = NULL, *yec = NULL;
     if (spec->xend.col) {
@@ -1572,7 +1621,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     /* a range layer's own aes(xmin=, xmax=) / aes(ymin=, ymax=) columns */
     const Column *eb_lo_c[MAX_LAYERS] = {0}, *eb_hi_c[MAX_LAYERS] = {0};
     g_nextra_x = g_nextra_y = 0;
-    g_cbar_horiz = spec->cbar_horiz; g_cbar_w = spec->cbar_w; g_cbar_h = spec->cbar_h;
+    g_cbar_horiz = spec->cbar_horiz || spec->legend_bottom;
+    g_cbar_w = spec->cbar_w; g_cbar_h = spec->cbar_h;
     for (int i = 0; i < spec->nlayers; i++) {
         const Layer *L = &spec->layers[i];
         if (L->type != GEOM_ERRORBAR || !L->eb_lo) continue;
@@ -1589,6 +1639,17 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             if (L->eb_horiz) g_extra_x[g_nextra_x++] = c;
             else g_extra_y[g_nextra_y++] = c;
         }
+    }
+    int hasribbon = 0;
+    g_key_area_alpha = 0;
+    for (int i = 0; i < spec->nlayers; i++)
+        if (spec->layers[i].type == GEOM_RIBBON) {
+            hasribbon = 1;
+            if (spec->layers[i].alpha > 0) g_key_area_alpha = spec->layers[i].alpha;
+        }
+    if (hasribbon && (!yminc || !yec)) {
+        snprintf(err, CP_ERRLEN, "geom_ribbon() needs aes(ymin=, ymax=)");
+        return -1;
     }
     if (hasrange && (!yminc || !spec->yend.col)) {
         snprintf(err, CP_ERRLEN, "geom_errorbar()/geom_linerange() need "
@@ -2984,11 +3045,12 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     /* log tick marks drawn INSIDE the panel from the axis edge inward. */
     double xlt_pos[80], xlt_len[80]; int xlt_n = 0;
     double ylt_pos[80], ylt_len[80]; int ylt_n = 0;
-    if (spec->log_x) {
+    /* explicit breaks= take the axis over: no 2..9 marks between them */
+    if (spec->log_x && !spec->n_x_breaks) {
         xlt_n = log_tick_marks(spec->log_x, x0, x1, xlt_pos, xlt_len, 80);
         for (int i = 0; i < xlt_n; i++) xlt_pos[i] = NPCX(xlt_pos[i]);
     }
-    if (spec->log_y) {
+    if (spec->log_y && !spec->n_y_breaks) {
         ylt_n = log_tick_marks(spec->log_y, y0, y1, ylt_pos, ylt_len, 80);
         for (int i = 0; i < ylt_n; i++) ylt_pos[i] = NPCY(ylt_pos[i]);
     }
@@ -3231,7 +3293,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                          : spec->log_x ? log_minors(spec->log_x, S->x0, S->x1, S->xmin_br, 32)
                          : make_minors(S->xbr, S->nxbr, S->x0, S->x1, S->xmin_br);
                 S->xlt_n = 0;
-                if (spec->log_x) {
+                if (spec->log_x && !spec->n_x_breaks) {
                     S->xlt_pos = cp_xmalloc(80 * sizeof(double));
                     S->xlt_len = cp_xmalloc(80 * sizeof(double));
                     S->xlt_n = log_tick_marks(spec->log_x, S->x0, S->x1,
@@ -3266,7 +3328,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                          : spec->log_y ? log_minors(spec->log_y, S->y0, S->y1, S->ymin_br, 32)
                          : make_minors(S->ybr, S->nybr, S->y0, S->y1, S->ymin_br);
                 S->ylt_n = 0;
-                if (spec->log_y) {
+                if (spec->log_y && !spec->n_y_breaks) {
                     S->ylt_pos = cp_xmalloc(80 * sizeof(double));
                     S->ylt_len = cp_xmalloc(80 * sizeof(double));
                     S->ylt_n = log_tick_marks(spec->log_y, S->y0, S->y1,
@@ -3395,17 +3457,17 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             int n = flip ? S->nxbr : S->nybr;
             char **lb = flip ? S->xlabs : S->ylabs;
             for (int i = 0; i < n; i++) {
-                double w = cp_label_w(cr, SZ_AXIS_TEXT, lb[i]);
+                double w = cp_label_w(cr, SZ_TICK, lb[i]);
                 if (w > ylab_w) ylab_w = w;
             }
         }
     } else {
         for (int i = 0; i < lax_n; i++) {
-            double w = cp_label_w(cr, SZ_AXIS_TEXT, lax_lab[i]);   /* superscript-aware */
+            double w = cp_label_w(cr, SZ_TICK, lax_lab[i]);   /* superscript-aware */
             if (w > ylab_w) ylab_w = w;
         }
     }
-    double labh = font_h(cr, SZ_AXIS_TEXT), baseh = font_h(cr, SZ_BASE);
+    double labh = font_h(cr, SZ_TICK), baseh = font_h(cr, SZ_BASE);
     /* strip text: ggplot's rel(0.8) of base, or theme(strip.text=) */
     double stx_sz = spec->strip_x_sz > 0 ? spec->strip_x_sz
                   : spec->strip_x_sz < 0 ? -spec->strip_x_sz * SZ_BASE : SZ_AXIS_TEXT;
@@ -3824,7 +3886,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     if (pff && !spec->no_legend_fill) {   /* the filled glyphs' body key */
         const char *ft = spec->lab_fill ? spec->lab_fill : spec->pfill.expr;
         int nc2 = spec->legend_ncol ? spec->legend_ncol
-                : spec->legend_nrow ? (pff->nlev + spec->legend_nrow - 1) / spec->legend_nrow : 1;
+                : spec->legend_nrow ? (pff->nlev + spec->legend_nrow - 1) / spec->legend_nrow
+                : spec->legend_bottom ? pff->nlev : 1;
         GTable *lg = build_legend(cr, th, ft, pff, fpal, 1, 0, 0, 0, NULL, nc2,
                                   spec->legend_reverse, NULL, err);
         if (!lg) return -1;
@@ -3921,7 +3984,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                                : ff->levels[p];
                 GTable *lg = build_legend(cr, th, bt, &pf, pc2,
                                    haspoint, hasline || hasseg || hasdens || hasrange,
-                                   hasbox || hasbar || hascol || hasrect || hastile,
+                                   hasbox || hasbar || hascol || hasrect || hastile || hasribbon,
                                    hastext, NULL, nc2, spec->legend_reverse, NULL, err);
                 if (!lg) return -1;
                 /* inside the panels every block has its own panel to sit
@@ -3933,8 +3996,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         } else if (!no_col_leg && !spec->identity_scale) {
             int nc2 = spec->legend_ncol ? spec->legend_ncol
                     : spec->legend_nrow
-                    ? (cf->nlev + spec->legend_nrow - 1) / spec->legend_nrow : 1;
-            if (!spec->legend_ncol && !spec->legend_nrow && h_pt <= 0) {
+                    ? (cf->nlev + spec->legend_nrow - 1) / spec->legend_nrow
+                    : spec->legend_bottom ? cf->nlev : 1;
+            if (!spec->legend_ncol && !spec->legend_nrow && h_pt <= 0
+                && !spec->legend_bottom) {
                 /* auto-fit: a legend up to a quarter taller than the figure
                  * stretches it (a few extra rows read better than a second
                  * column); past that it folds into as many columns as the
@@ -3952,7 +4017,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             }
             GTable *lg = build_legend(cr, th, col_title, cf, pal, haspoint,
                                hasline || hasseg || hasdens || hasrange,
-                               hasbox || hasbar || hascol || hasrect || hastile,
+                               hasbox || hasbar || hascol || hasrect || hastile || hasribbon,
                                hastext, NULL, nc2, spec->legend_reverse,
                                lt_merge ? lt_keys : NULL, err);
             if (!lg) return -1;
@@ -3998,8 +4063,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         int *ldash = cp_xmalloc(ltf->nlev * sizeof(int));
         for (int i = 0; i < ltf->nlev; i++) { lpal[i] = C_BLACK; ldash[i] = LT_DASH[i]; }
         const char *lt_title = spec->lab_linetype ? spec->lab_linetype : spec->linetype.expr;
-        GTable *lg = build_legend(cr, th, lt_title, ltf, lpal, 0, 1, 0, 0, NULL, 1, 0,
-                                  ldash, err);
+        GTable *lg = build_legend(cr, th, lt_title, ltf, lpal, 0, 1, 0, 0, NULL,
+                                  spec->legend_bottom ? ltf->nlev : 1, 0, ldash, err);
         if (!lg) return -1;
         guides[nguide++] = lg;
     }
@@ -4010,18 +4075,26 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         int *sidx = cp_xmalloc(shf->nlev * sizeof(int));
         for (int i = 0; i < shf->nlev; i++) { spal[i] = C_BLACK; sidx[i] = shape_glyph_of(spec, shf, i); }
         const char *sh_title = spec->lab_shape ? spec->lab_shape : spec->shape.expr;
-        GTable *lg = build_legend(cr, th, sh_title, shf, spal, 1, 0, 0, 0, sidx, 1, 0, NULL, err);
+        GTable *lg = build_legend(cr, th, sh_title, shf, spal, 1, 0, 0, 0, sidx,
+                                  spec->legend_bottom ? shf->nlev : 1, 0, NULL, err);
         if (!lg) return -1;
         guides[nguide++] = lg;
     }
     for (int a = 0; a < nann; a++)               /* annotation band keys */
         if (!spec->no_legend && !anns[a].nolegend) {
             GTable *lg = build_legend(cr, th, anns[a].title, anns[a].f,
-                                      anns[a].apal, 0, 0, 1, 0, NULL, 1, 0, NULL, err);
+                                      anns[a].apal, 0, 0, 1, 0, NULL,
+                                      spec->legend_bottom ? anns[a].f->nlev : 1, 0, NULL, err);
             if (!lg) return -1;
             guides[nguide++] = lg;
         }
-    if (nguide) leg = stack_guides(guides, nguide);
+    GTable *bleg = NULL;             /* legend.position="bottom" */
+    if (nguide && spec->legend_bottom) {
+        for (int i = 0; i < nguide; i++) guides[i] = guide_title_left(cr, guides[i]);
+        bleg = stack_guides_h(guides, nguide);
+    } else if (nguide) leg = stack_guides(guides, nguide);
+    /* the bottom row: legend.box.spacing (2 half-lines) above the guides */
+    double bleg_h = bleg ? gt_fixed_h(bleg) + 2 * HALF_LINE : 0;
     GTable *inside_leg = NULL;
     if (spec->legend_inside && leg) {
         if (npan > 1) {
@@ -4075,7 +4148,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     int n = flip ? S->nxbr : S->nybr;
                     char **lb = flip ? S->xlabs : S->ylabs;
                     for (int i = 0; i < n; i++) {
-                        double w = cp_label_w(cr, SZ_AXIS_TEXT, lb[i]);
+                        double w = cp_label_w(cr, SZ_TICK, lb[i]);
                         if (w > wmax) wmax = w;
                     }
                 }
@@ -4089,7 +4162,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     T->colw[T->ncol - 2] = upt(leg ? gt_fixed_w(leg) : 0);
     T->colw[T->ncol - 1] = upt(MARGIN);
 
-    T->nrow = 4 * nrowp + 6 + (fc_leg_h > 0 ? 1 : 0);
+    T->nrow = 4 * nrowp + 6 + (fc_leg_h > 0 ? 1 : 0) + (bleg ? 1 : 0);
     T->rowh[0] = upt(MARGIN);
     T->rowh[1] = upt(spec->lab_title ? font_h(cr, SZ_TITLE) : 0);
     T->rowh[2] = upt(spec->lab_subtitle ? font_h(cr, SZ_BASE)
@@ -4129,7 +4202,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         if (sc > 0) { pw *= sc; ph *= sc; }
         if (w_pt <= 0) w_pt = fmax(1.0 * 72, chrome_w + ncolp * pw);
         if (h_pt <= 0) {
-            h_pt = chrome_h + nrowp * ph + fc_leg_h;
+            h_pt = chrome_h + nrowp * ph + fc_leg_h + bleg_h;
             if (leg) h_pt = fmax(h_pt, gt_fixed_h(leg) + leg_chrome_h);
             h_pt = fmax(1.0 * 72, h_pt);
         }
@@ -4145,6 +4218,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                           + striph_side       /* facet_grid row strips */
                           + (leg ? gt_fixed_w(leg) + 2 * HALF_LINE : 0);
             w_pt = chrome + ncolp * panelw + (ncolp - 1) * PANEL_SPACE;
+            /* a bottom legend wider than the panels widens the figure */
+            if (bleg) w_pt = fmax(w_pt, chrome + gt_fixed_w(bleg));
             w_pt = fmin(30.0 * 72, fmax(6.0 * 72, w_pt));
         }
         if (h_pt <= 0) {
@@ -4155,6 +4230,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
              * the margins left the title clipped off the top */
             if (leg) h_pt = fmax(h_pt, gt_fixed_h(leg) + leg_chrome_h);
             h_pt += fc_leg_h;        /* per-panel legend row (free_colour) */
+            h_pt += bleg_h;          /* legend.position="bottom" */
             h_pt = fmin(30.0 * 72, fmax(4.0 * 72, h_pt));
         }
     }
@@ -4226,7 +4302,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 char **lb = flip ? S->ylabs : S->xlabs;
                 double sum = 0;
                 for (int i = 0; i < n; i++)
-                    sum += cp_label_w(cr, SZ_AXIS_TEXT, lb[i]) + TXT_GAP;
+                    sum += cp_label_w(cr, SZ_TICK, lb[i]) + TXT_GAP;
                 if (spec->space_x) {        /* compare per panel: widths differ */
                     if (sum > panel_w && bang < 90) bang = sum > panel_w * 1.6 ? 90 : 45;
                 } else if (sum > need) need = sum;
@@ -4245,7 +4321,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             int n = flip ? S->nybr : S->nxbr;
             char **lb = flip ? S->ylabs : S->xlabs;
             for (int i = 0; i < n; i++) {
-                double w = cp_label_w(cr, SZ_AXIS_TEXT, lb[i]);
+                double w = cp_label_w(cr, SZ_TICK, lb[i]);
                 if (w > wmax) wmax = w;
             }
         }
@@ -4291,7 +4367,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                                              : PANEL_SPACE);
     }
     int r_axis = 4 * nrowp + 2;
-    int r_last = r_axis + 3 + (fc_leg_h > 0 ? 1 : 0);   /* caption/margin row */
+    int r_bleg = r_axis + 3 + (fc_leg_h > 0 ? 1 : 0);   /* bottom legend row */
+    int r_last = r_bleg + (bleg ? 1 : 0);                /* caption/margin row */
+    if (bleg) T->rowh[r_bleg] = upt(bleg_h);
     T->rowh[r_axis]     = upt(polar_tiles ? 0 : TICK_LEN + TXT_GAP + blab_h);
     T->rowh[r_axis + 1] = upt(HALF_LINE / 2);
     T->rowh[r_axis + 2] = upt(polar_tiles ? 0 : baseh);
@@ -4326,6 +4404,11 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     if (leg) {
         g = gt_add(T, G_TABLE, SR(0), T->ncol - 2, PR(nrowp - 1), T->ncol - 2);
         g->child = leg;
+    }
+    if (bleg) {                  /* centred under the panels, below the x title */
+        g = gt_add(T, G_TABLE, r_bleg, PC(0), r_bleg, PC(ncolp - 1));
+        g->child = bleg; g->n = 1;
+        g->tx = 0.5; g->ty = 1 - (2 * HALF_LINE + gt_fixed_h(bleg) / 2) / bleg_h;
     }
     for (int p = 0; p < npan && p < 12; p++)
         if (fc_leg[p] && !spec->legend_inside) {
@@ -4551,7 +4634,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             Col gcol = spec->has_strip_col ? spec->strip_col : th->axis_text;
             /* label room: spoke names (radial past 24 spokes) and wedge names */
             int show_x = th->axis_text_on;
-            double xls = SZ_AXIS_TEXT * (k > 24 ? 0.7 : 1), maxw = 0, gw = 0;
+            double xls = SZ_TICK * (k > 24 ? 0.7 : 1), maxw = 0, gw = 0;
             for (int l = 0; show_x && l < k; l++) {
                 const char *lb = xd_label(spec, xlev[l], l);
                 double w = lb ? text_w(cr, xls, lb) : 0;
@@ -4784,13 +4867,13 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 double a = PANG(0);
                 /* the name must fit the gap's chord at its radius, or it
                  * covers the first spokes: say what gap= would hold it */
-                double w = text_w(cr, SZ_AXIS_TEXT * 0.75, ylev[j]) + 2;
+                double w = text_w(cr, SZ_TICK * 0.75, ylev[j]) + 2;
                 if (w > 2 * rr * sin(gap0 / 2)) {
                     double d = w >= 2 * rr ? 180 : 2 * asin(w / (2 * rr)) * 180 / M_PI;
                     if (d > need_deg) need_deg = d;
                 }
                 g = gt_add(T, G_TEXT, R, C, R, C);
-                g->str = ylev[j]; g->size = SZ_AXIS_TEXT * 0.75;
+                g->str = ylev[j]; g->size = SZ_TICK * 0.75;
                 g->col = th->axis_text;
                 g->tx = cx + rr * sin(a) / panelw_pt; g->ty = cy + rr * cos(a) / panelh_pt;
                 g->hj = 0.5; g->va = V_INKCENTER;
@@ -4827,7 +4910,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 g->lw = lw_pt(th->grid_major_lw > 0 ? th->grid_major_lw : 0.5);
                 g->dash = 1; g->clip = 1;
                 g = gt_add(T, G_TEXT, R, C, R, C);   /* ring value */
-                g->str = ylabs[i]; g->size = SZ_AXIS_TEXT * 0.85;
+                g->str = ylabs[i]; g->size = SZ_TICK * 0.85;
                 g->col = (Col){0.45, 0.45, 0.45, 0};
                 g->tx = cx - 3.0 / panelw_pt;
                 g->ty = cy + (rmax * rr) / panelh_pt;
@@ -4844,7 +4927,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 g->x1 = cx + rmax * sx2 / panelw_pt;
                 g->y1 = cy + rmax * cy2 / panelh_pt;
                 g = gt_add(T, G_TEXT, R, C, R, C);
-                g->str = xf->levels[l]; g->size = SZ_AXIS_TEXT;
+                g->str = xf->levels[l]; g->size = SZ_TICK;
                 g->col = th->axis_text;
                 g->tx = cx + rmax * 1.06 * sx2 / panelw_pt;
                 g->ty = cy + (rmax * 1.06 * cy2 + labh * 0.55 * cy2) / panelh_pt;
@@ -5196,6 +5279,49 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     }
                     free(sx); free(sy); free(ox); free(oy);
                 }
+            } else if (gt == GEOM_RIBBON) {
+                /* ggplot2's geom_ribbon(): per group (the colour= and
+                 * group= levels), the band ymin..ymax over x, sorted by x,
+                 * filled (default grey20, as ggplot2) with no outline.
+                 * A mapped colour= fills it -- the one-slot colour/fill
+                 * convention every area geom here follows -- and alpha=
+                 * makes it the usual shaded confidence band. */
+                const Layer *RL = &spec->layers[li];
+                if (cont_col && !RL->has_color) {
+                    snprintf(err, CP_ERRLEN, "continuous colour= on geom_ribbon() "
+                             "is not implemented; use factor() or a constant fill=");
+                    return -1;
+                }
+                int ncf = cf ? cf->nlev : 1, ngf = gf ? gf->nlev : 1;
+                int *ord = cp_xmalloc((size_t)(df->nrow ? df->nrow : 1) * sizeof(int));
+                for (int k = 0; k < ncf * ngf; k++) {
+                    int ci = k / ngf, gi = k % ngf, n = 0;
+                    for (int r = 0; r < df->nrow; r++) {
+                        if (!use[r] || (ff && ff->idx[r] != p)) continue;
+                        if ((cf && cf->idx[r] != ci) || (gf && gf->idx[r] != gi)) continue;
+                        if (isnan(yminc->num[r]) || isnan(yec->num[r])) continue;
+                        ord[n++] = r;
+                    }
+                    if (n < 2) continue;
+                    for (int a = 1; a < n; a++) {     /* insertion sort by x */
+                        int v = ord[a], b = a - 1;
+                        while (b >= 0 && TXR(ord[b]) > TXR(v)) { ord[b + 1] = ord[b]; b--; }
+                        ord[b + 1] = v;
+                    }
+                    double *px = cp_xmalloc(2 * n * sizeof(double));
+                    double *py = cp_xmalloc(2 * n * sizeof(double));
+                    for (int a = 0; a < n; a++) {     /* top left to right, bottom back */
+                        px[a] = NPCX(TXR(ord[a]));
+                        py[a] = NPCY(TY(yec->num[ord[a]]));
+                        px[2 * n - 1 - a] = px[a];
+                        py[2 * n - 1 - a] = NPCY(TY(yminc->num[ord[a]]));
+                    }
+                    g = gt_add(T, G_POLYGON, R, C, R, C);
+                    g->n = 2 * n; g->px = px; g->py = py; g->sub = 1; g->clip = 1;
+                    g->col = RL->has_color ? RL->color
+                           : cf ? pal[ci] : (Col){0.2, 0.2, 0.2, 0};
+                }
+                free(ord);
             } else if (gt == GEOM_LINE) {
                 /* A continuous colour has no group to draw one line per, and
                  * a black line beside a colourbar claims a mapping it does

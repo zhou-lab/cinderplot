@@ -700,6 +700,7 @@ void gt_render(GTable *t, cairo_t *cr) {
             break;
         }
         case G_TEXT: {
+            if (!g->str || !*g->str) break;        /* nothing to set (a moved title) */
             cairo_text_extents_t e; cairo_font_extents_t fe;
             if (g->bold)
                 cairo_select_font_face(cr, cp_font_family, CAIRO_FONT_SLANT_NORMAL,
@@ -759,7 +760,7 @@ void gt_render(GTable *t, cairo_t *cr) {
             cairo_font_extents_t fe;
             /* an axis carries its own size when the mode wants one (track
              * mode's flat SZ_TRACK); otherwise the grammar's axis text size */
-            double asz = g->size > 0 ? g->size : SZ_AXIS_TEXT;
+            double asz = g->size > 0 ? g->size : SZ_TICK;
             cairo_set_font_size(cr, asz);
             cairo_font_extents(cr, &fe);
             if (!g->hide_ticks) {
@@ -800,7 +801,7 @@ void gt_render(GTable *t, cairo_t *cr) {
         }
         case G_AXIS_Y: {
             /* ticks + right-aligned labels anchored to the RIGHT edge */
-            cairo_set_font_size(cr, SZ_AXIS_TEXT);
+            cairo_set_font_size(cr, SZ_TICK);
             double right = rx + rw - g->axis_pad;   /* a y annotation band sits in the pad */
             if (!g->hide_ticks) {
                 set_col(cr, g->axis_styled ? g->tick_col : C_TICK);
@@ -823,9 +824,9 @@ void gt_render(GTable *t, cairo_t *cr) {
                 if (car) { int bl = (int)(car - s); if (bl > 31) bl = 31; memcpy(base, s, bl); base[bl] = 0; }
                 cairo_text_extents_t e;
                 cairo_text_extents(cr, car ? base : s, &e);   /* vertical metrics from the "10" part */
-                double w = cp_label_w(cr, SZ_AXIS_TEXT, s);
+                double w = cp_label_w(cr, SZ_TICK, s);
                 draw_label(cr, right - TICK_LEN - TXT_GAP - w,
-                           DY(g->py[i]) - e.height / 2 - e.y_bearing, SZ_AXIS_TEXT, s);
+                           DY(g->py[i]) - e.height / 2 - e.y_bearing, SZ_TICK, s);
             }
             break;
         }
