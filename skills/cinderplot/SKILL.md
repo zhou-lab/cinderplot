@@ -849,9 +849,12 @@ each row's clade under the branches: a sector of a circular tree (or a band
 of a rectangular one) from half way up the clade's incoming branch to
 `extend=` mm (default 1) past the clade's OWN deepest tip, as ggtree draws
 it, so a clade of short branches gets a short sector and its
-`geom_cladelab()` box sits just outside it. `scale_fill_manual(values=)` names the colours; without
-it a clade shares the hue its level has in a `geom_tippoint()`/
-`geom_nodepoint()` join, so a lineage's sector and its tips match.
+`geom_cladelab()` box sits just outside it. `scale_fill_manual(values=)` names the sector and
+box colours and `scale_colour_manual(values=)` the tip/node points, as in
+ggplot2; give one alone and it colours both, so a lineage keeps one colour
+(`Unassigned="#BDBDBD"` greys those tips). Without either, a clade shares
+the hue its level has in a `geom_tippoint()`/`geom_nodepoint()` join, so a
+lineage's sector and its tips match.
 `geom_cladelab(data=, label=col[, sublabel=col][, fill=col])` puts a filled
 box at the clade's outer edge with the label and an optional smaller second
 line ("Carcinomas" / "(e.g. colon cancers)"); boxes that would overlap are

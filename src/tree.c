@@ -636,6 +636,19 @@ static void emit(GTable *T, int R, int C, const TNode *t, const PlotSpec *spec,
 #undef TY
 }
 
+/* scale_*_manual(values=) onto one join's discrete palette: by name when
+ * the values are named, else positionally; an unnamed level keeps its hue */
+static void tree_manual(const Factor *f, Col *pal, const Col *cols,
+                        char *const *names, int n) {
+    int named = n > 0 && names[0] != NULL;
+    for (int k = 0; k < f->nlev; k++) {
+        if (named) {
+            for (int q = 0; q < n; q++)
+                if (names[q] && !strcmp(names[q], f->levels[k])) { pal[k] = cols[q]; break; }
+        } else if (k < n) pal[k] = cols[k];
+    }
+}
+
 int render_tree(const PlotSpec *spec, const char *out,
                 double w_pt, double h_pt, char *err) {
     int auto_size = w_pt <= 0 && h_pt <= 0;   /* no --size: fit the canvas to the drawing */
@@ -701,20 +714,28 @@ int render_tree(const PlotSpec *spec, const char *out,
     memset(&jhl, 0, sizeof jhl);
     if (spec->tree_hl_data
         && join_load(&jhl, spec->tree_hl_data, spec->tree_hl_col, spec, err)) return -1;
-    if (jhl.df && jhl.discrete && spec->has_manual) {
-        int named = spec->n_manual > 0 && spec->manual_names[0] != NULL;
-        for (int k = 0; k < jhl.f->nlev; k++) {
-            if (named) {
-                for (int q = 0; q < spec->n_manual; q++)
-                    if (spec->manual_names[q] && !strcmp(spec->manual_names[q], jhl.f->levels[k]))
-                        { jhl.pal[k] = spec->manual_cols[q]; break; }
-            } else if (k < spec->n_manual) jhl.pal[k] = spec->manual_cols[k];
+    /* scale_colour_manual() colours the points and tip labels, and
+     * scale_fill_manual() the sectors and clade boxes, as in ggplot2; when
+     * only one is given it colours both, so a lineage keeps one colour
+     * across tips and sectors (the points ignored it before) */
+    int has_c = spec->has_cman, has_f = spec->has_fman;
+    const Col *ccols = has_c ? spec->cman_cols : spec->fman_cols;
+    char *const *cnames = has_c ? spec->cman_names : spec->fman_names;
+    int nc = has_c ? spec->n_cman : spec->n_fman;
+    const Col *fcols = has_f ? spec->fman_cols : spec->cman_cols;
+    char *const *fnames = has_f ? spec->fman_names : spec->cman_names;
+    int nfm = has_f ? spec->n_fman : spec->n_cman;
+    int any_manual = has_c || has_f;
+    if (any_manual)
+        for (int w = 0; w < 3; w++) {
+            Join *j = w == 0 ? &jnode : w == 1 ? &jtip : &jlab;
+            if (j->df && j->discrete) tree_manual(j->f, j->pal, ccols, cnames, nc);
         }
-    }
+    if (jhl.df && jhl.discrete && any_manual) tree_manual(jhl.f, jhl.pal, fcols, fnames, nfm);
     /* one meaning, one colour: a lineage shaded and a lineage's tip points
      * take the same hue unless scale_fill_manual() says otherwise */
     const Join *jpt = jtip.df ? &jtip : jnode.df ? &jnode : NULL;
-    if (jhl.df && jhl.discrete && !spec->has_manual && jpt && jpt->discrete)
+    if (jhl.df && jhl.discrete && !any_manual && jpt && jpt->discrete)
         for (int k = 0; k < jhl.f->nlev; k++)
             for (int q = 0; q < jpt->f->nlev; q++)
                 if (!strcmp(jhl.f->levels[k], jpt->f->levels[q])) { jhl.pal[k] = jpt->pal[q]; break; }
@@ -744,9 +765,13 @@ int render_tree(const PlotSpec *spec, const char *out,
             clf = factor_make(cldf, clfill);
             clpal = cp_xmalloc((clf->nlev ? clf->nlev : 1) * sizeof(Col));
             hue_palette(clf->nlev, clpal);
+            if (any_manual) tree_manual(clf, clpal, fcols, fnames, nfm);
             for (int k = 0; k < clf->nlev; k++)     /* the hilight's colour for a shared level */
                 for (int q = 0; jhl.df && jhl.discrete && q < jhl.f->nlev; q++)
                     if (!strcmp(jhl.f->levels[q], clf->levels[k])) { clpal[k] = jhl.pal[q]; break; }
+            for (int k = 0; !any_manual && jpt && jpt->discrete && k < clf->nlev; k++)
+                for (int q = 0; q < jpt->f->nlev; q++)    /* else a tip level's hue */
+                    if (!strcmp(jpt->f->levels[q], clf->levels[k])) { clpal[k] = jpt->pal[q]; break; }
         }
         for (int r = 0; r < cldf->nrow; r++) {
             char a[256], b[256];
