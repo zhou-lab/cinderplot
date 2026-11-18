@@ -4493,6 +4493,26 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         blab_h = wmax * sin(rad) + labh * cos(rad);
     }
     if (spec->axis_text_blank_x) blab_h = 0;   /* theme(axis.text.x=element_blank()) */
+    /* a freed bottom axis is drawn under every row, and each row's axis
+     * holds only that row's labels: size it from them, as ggplot2's gtable
+     * does, not from the longest label anywhere (a row of short labels kept
+     * a blank band the height of the longest) */
+    double *blab_row = cp_xcalloc((size_t)nrowp, sizeof(double));
+    for (int r = 0; r < nrowp; r++) {
+        double wmax = 0;
+        for (int p = r * ncolp; bang > 0 && p < npan && p < (r + 1) * ncolp; p++) {
+            const PanelScale *S = &ps[p];
+            int n = flip ? S->nybr : S->nxbr;
+            char **lb = flip ? S->ylabs : S->xlabs;
+            for (int i = 0; i < n; i++) {
+                double w = cp_label_w(cr, SZ_TICK, lb[i]);
+                if (w > wmax) wmax = w;
+            }
+        }
+        double rad = bang * M_PI / 180.0;
+        blab_row[r] = bang > 0 ? wmax * sin(rad) + labh * cos(rad) : labh;
+        if (spec->axis_text_blank_x) blab_row[r] = 0;
+    }
     /* Cheap clipping warnings (no wrapping is attempted): a long title runs
      * off the canvas edge, and leaned-over category labels can eat the panel
      * they label. Both render silently otherwise. */
@@ -4528,14 +4548,18 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         T->rowh[PR(r)] = unull(spec->space_y ? space_weight(ps, npan, ncolp, r, 0, flip) : 1);
         T->rowh[PR(r) + 1] = upt(band_h);        /* annotation bands (0 = none) */
         if (r < nrowp - 1)
-            T->rowh[PR(r) + 2] = upt(bfree_l ? TICK_LEN + TXT_GAP + blab_h + PANEL_SPACE
+            T->rowh[PR(r) + 2] = upt(bfree_l ? TICK_LEN + TXT_GAP + blab_row[r] + PANEL_SPACE
                                              : PANEL_SPACE);
     }
     int r_axis = 4 * nrowp + 2;
     int r_bleg = r_axis + 3 + (fc_leg_h > 0 ? 1 : 0);   /* bottom legend row */
     int r_last = r_bleg + (bleg ? 1 : 0);                /* caption/margin row */
     if (bleg) T->rowh[r_bleg] = upt(bleg_h);
-    T->rowh[r_axis]     = upt(polar_tiles ? 0 : TICK_LEN + TXT_GAP + blab_h);
+    /* the bottom row's axis: under free scales that row's own labels (a
+     * short last row's staircase axes sit in the row above, sized by it),
+     * else the shared axis's */
+    T->rowh[r_axis]     = upt(polar_tiles ? 0 : TICK_LEN + TXT_GAP
+                              + (bfree_l ? blab_row[nrowp - 1] : blab_h));
     T->rowh[r_axis + 1] = upt(HALF_LINE / 2);
     T->rowh[r_axis + 2] = upt(polar_tiles ? 0 : axth);
     if (fc_leg_h > 0) T->rowh[r_axis + 3] = upt(fc_leg_h);

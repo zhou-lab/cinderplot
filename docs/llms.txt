@@ -624,7 +624,9 @@ gets the same width. It changes nothing unless the matching axis is also freed
 ROW's panels by their own ranges, so a 2x3 wrap can be 11:4, 11:4 and 12:12
 (panels in different rows then no longer line up in columns -- under free
 scales every panel has its own axes anyway). facet_grid keeps aligned columns,
-as in ggplot2. A multi-row `free_y` sizes rows by their tallest panel. Under `coord_flip()` `free_x` follows the horizontal
+as in ggplot2. A multi-row `free_y` sizes rows by their tallest panel. A freed x axis is drawn under every
+row and each row's axis takes the height of its own labels (rotated or
+not), so a row of short labels does not keep the longest's band. Under `coord_flip()` `free_x` follows the horizontal
 axis.
 
 Crowded discrete tick labels **rotate automatically** (45°, then 90°) when the
