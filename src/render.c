@@ -4785,9 +4785,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     }
                     g = gt_add(T, G_POLYGON, R, C, R, C);
                     g->n = 2 * na; g->px = px; g->py = py; g->clip = 1;
-                    g->col = dt[t].col;
+                    g->col = L->has_fill_c ? L->fill_c : dt[t].col;   /* fill= paints the cell */
                     g->alpha = L->alpha;
-                    if (L->has_color) {                      /* colour= is the border */
+                    if (L->has_color && !L->color_is_fill) {  /* colour= is the border */
                         g->poly_fill_set = 1; g->poly_fill = g->col;
                         g->col = L->color; g->stroke = 1;
                         g->lw = lw_pt(L->tile_lw > 0 ? L->tile_lw : 0.1);
@@ -5797,8 +5797,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         }
                         g = gt_add(T, G_POLYGON, R, C, R, C);
                         g->n = 6; g->px = px; g->py = py; g->sub = 1; g->clip = 1;
-                        g->col = WITH_ALPHA(cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BAR, r);
-                        if (L->has_color) {                  /* colour= is the border */
+                        g->col = WITH_ALPHA(L->has_fill_c ? L->fill_c   /* fill= paints the cell */
+                               : cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BAR, r);
+                        if (L->has_color && !L->color_is_fill) {  /* colour= is the border */
                             g->poly_fill_set = 1; g->poly_fill = g->col;
                             g->col = L->color; g->stroke = 1;
                             g->lw = lw_pt(L->tile_lw > 0 ? L->tile_lw : 0.1);
@@ -5809,16 +5810,19 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     if (!use[r] || (ff && ff->idx[r] != p)) continue;
                     double cx = TXR(r), cy = disc_y ? YVAL(r) : TY(yc->num[r]);
                     if (isnan(cx) || isnan(cy)) continue;
-                    /* the body takes the MAPPED fill; a layer colour= is the
-                     * BORDER, as in ggplot2 -- it used to take over the fill,
-                     * so geom_tile(colour="white") blanked every cell */
+                    /* the body takes a constant fill=, else the MAPPED fill;
+                     * a layer colour= is the BORDER, as in ggplot2 -- it used
+                     * to take over the fill, so geom_tile(colour="white")
+                     * blanked every cell, and fill="red" drew red borders */
                     if (ALPHA_SKIP(r)) continue;
+                    const Layer *TL = &spec->layers[li];
                     g = gt_add(T, G_RECT, R, C, R, C);
-                    g->col = WITH_ALPHA(cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BAR, r);
+                    g->col = WITH_ALPHA(TL->has_fill_c ? TL->fill_c
+                           : cf ? pal[cf->idx[r]] : cont_col ? CCOL(r) : C_BAR, r);
                     g->sub = 1; g->clip = 1;
                     g->x0 = NPCX(cx - wx / 2); g->x1 = NPCX(cx + wx / 2);
                     g->y0 = NPCY(cy - wy / 2); g->y1 = NPCY(cy + wy / 2);
-                    if (spec->layers[li].has_color) {
+                    if (TL->has_color && !TL->color_is_fill) {
                         double bw2 = spec->layers[li].tile_lw > 0
                                    ? spec->layers[li].tile_lw : 0.1;
                         g = gt_add(T, G_RECT, R, C, R, C);

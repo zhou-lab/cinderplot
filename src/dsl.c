@@ -2092,10 +2092,11 @@ static int parse_term(P *p, PlotSpec *spec) {
                         return fail(p, "bad colour for `%s`", key);
                     int is_f = key[0] == 'f';
                     if (is_f) { l->fill_c = cv; l->has_fill_c = 1; }
-                    /* on a point, fill= and colour= are the body and the
-                     * outline of a filled glyph: a fill= never overwrites a
-                     * colour= given before it (elsewhere the last one wins) */
-                    int pt = gt == GEOM_POINT || gt == GEOM_JITTER;
+                    /* on a point or a tile, fill= and colour= are the body and
+                     * the outline: a fill= never overwrites a colour= given
+                     * before it (elsewhere the last one wins) */
+                    int pt = gt == GEOM_POINT || gt == GEOM_JITTER
+                          || gt == GEOM_TILE;    /* a tile's colour= is its border */
                     if (!(pt && is_f && l->has_color && !l->color_is_fill)) {
                         l->color = cv; l->has_color = 1; l->color_is_fill = is_f;
                     }

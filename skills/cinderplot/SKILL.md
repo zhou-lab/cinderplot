@@ -284,7 +284,9 @@ and ignored (the output path is a command-line argument here).
   panel's axis trains on its own lines -- the decision line at 0 in one facet
   of several.
 - `geom_tile(colour="white"[, linewidth=])` strokes each cell's border over
-  the mapped fill, as in ggplot2 — the thin white separators of a manuscript
+  the mapped fill, and a constant `fill="red"` paints the cells (beating a
+  mapped fill), in either order with colour=, as in ggplot2 — the same on
+  `geom_hex()` — the thin white separators of a manuscript
   heatmap; linewidth defaults to 0.1. Pair with
   `scale_x_discrete(expand=c(0,0)) + scale_y_discrete(expand=c(0,0))` — or
   the shorthand `coord_cartesian(expand=FALSE)` — to make the panel frame
