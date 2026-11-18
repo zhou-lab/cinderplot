@@ -94,6 +94,7 @@ static void print_help(void) {
     printf("    %s-o%s FILE %sor%s FILE  output %s(required)%s — format from the extension (%s.pdf .svg .png%s)\n", G, R, D, R, D, R, K, R);
     printf("    %s--size%s WxH     inches; a partial %sWx%s or %sxH%s auto-fits the other axis %s(omit = auto)%s\n", G, R, K, R, K, R, D, R);
     printf("    %s--dpi%s N        raster density for %s.png%s %s(default 96)%s\n", G, R, K, R, D, R);
+    printf("    %s--tight%s        crop the page to what is drawn, no empty margin %s(--size stays the layout budget)%s\n", G, R, D, R);
     printf("    %s--font%s FAMILY  figure font, all modes %s(default Arial; warns if not found)%s\n", G, R, D, R);
     printf("    %s--font-size%s PT  base label size in pt %s(1..100, default 11; theme_*(base_size=) overrides)%s\n", G, R, D, R);
     printf("    %s--editable-svg%s labels as %s<text>%s elements (svglite-style, retypable in Inkscape;\n", G, R, K, R);
@@ -276,6 +277,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--editable-svg")) editable_svg = 1;
         else if (!strcmp(a, "--outline-svg")) outline_svg = 1;
         else if (!strcmp(a, "--transparent")) cp_set_transparent(1);
+        else if (!strcmp(a, "--tight")) cp_set_tight(1);
         else if (!strcmp(a, "--dump-spec")) dump = 1;
         else if (!strcmp(a, "--no-header") || !strcmp(a, "-H")) cp_set_no_header(1);
         else if (!strcmp(a, "--no-legend")) no_legend = 1;

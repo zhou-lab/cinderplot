@@ -340,6 +340,7 @@ cairo_surface_t *cp_surface_create(const char *out, double w_pt, double h_pt);
 void cp_set_svg_text(int on);
 void cp_set_dpi(double dpi);                        /* PNG raster resolution (default 96) */
 void cp_set_transparent(int on);                   /* --transparent: no white ground */
+void cp_set_tight(int on);    /* --tight: crop the page to the drawn ink, no margin */
 /* Emit the finished surface: write_to_png for image surfaces, surface_finish
  * for vector ones. Returns the resulting cairo status. */
 cairo_status_t cp_surface_emit(cairo_surface_t *surf, const char *out);

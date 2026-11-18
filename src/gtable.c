@@ -3,6 +3,9 @@
 #include "cinderplot.h"
 #include <cairo-pdf.h>
 #include <cairo-svg.h>
+#if CAIRO_HAS_TEE_SURFACE
+#include <cairo-tee.h>    /* --tight SVG: draw and measure at once */
+#endif
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -35,8 +38,14 @@ static int svg_text_on = 0;
  * optimizeSpeed fallback older renderers keep) onto exactly the <image>
  * elements that asked for nearest, matching by draw order. */
 static unsigned char *svg_imgs; static int nsvg_imgs, csvg_imgs;
+static int g_tight, g_tight_svg;     /* --tight; and the page it records is SVG */
+static double g_tb[4] = {1e300, 1e300, -1e300, -1e300};   /* editable text's box */
+void cp_set_tight(int on) { g_tight = on; }
 static void svg_note_image(cairo_t *cr, int nearest) {
-    if (cairo_surface_get_type(cairo_get_target(cr)) != CAIRO_SURFACE_TYPE_SVG)
+    cairo_surface_type_t ty = cairo_surface_get_type(cairo_get_target(cr));
+    if (ty != CAIRO_SURFACE_TYPE_SVG
+        && !((ty == CAIRO_SURFACE_TYPE_RECORDING || ty == CAIRO_SURFACE_TYPE_TEE)
+             && g_tight_svg))
         return;
     if (nsvg_imgs == csvg_imgs) {
         csvg_imgs = csvg_imgs ? 2 * csvg_imgs : 16;
@@ -60,6 +69,22 @@ static int svg_show(cairo_t *cr, double x, double y, double size, const char *s)
     if (nsvgt == csvgt) {
         csvgt = csvgt ? 2 * csvgt : 64;
         svgt = cp_xrealloc(svgt, csvgt * sizeof *svgt);
+    }
+    if (g_tight) {          /* the label is not drawn: its box joins the ink */
+        cairo_text_extents_t e;
+        cairo_text_extents(cr, s, &e);
+        double cx[4] = {x + e.x_bearing, x + e.x_bearing + e.width, x + e.x_bearing,
+                        x + e.x_bearing + e.width};
+        double cy[4] = {y + e.y_bearing, y + e.y_bearing, y + e.y_bearing + e.height,
+                        y + e.y_bearing + e.height};
+        for (int k = 0; k < 4; k++) {
+            double dx = cx[k], dy = cy[k];
+            cairo_user_to_device(cr, &dx, &dy);
+            if (dx < g_tb[0]) g_tb[0] = dx;
+            if (dy < g_tb[1]) g_tb[1] = dy;
+            if (dx > g_tb[2]) g_tb[2] = dx;
+            if (dy > g_tb[3]) g_tb[3] = dy;
+        }
     }
     SvgTxt *t = &svgt[nsvgt++];
     t->x = x; t->y = y; t->size = size;
@@ -174,7 +199,86 @@ static cairo_status_t outbuf_write(void *closure, const unsigned char *data, uns
     return CAIRO_STATUS_SUCCESS;
 }
 
+static cairo_surface_t *surface_create_page(const char *out, double w_pt, double h_pt);
+static cairo_surface_t *g_tee_page, *g_tee_rec;   /* --tight SVG: drawn and measured */
+/* the ink box of a --tight recording, editable labels included; 0 = empty */
+static int tight_box(cairo_surface_t *rec, double b[4]) {
+    double x, y, w, h;
+    cairo_recording_surface_ink_extents(rec, &x, &y, &w, &h);
+    b[0] = x; b[1] = y; b[2] = x + w; b[3] = y + h;
+    if (!(w > 0 && h > 0)) { b[0] = b[1] = 1e300; b[2] = b[3] = -1e300; }
+    if (g_tb[2] > g_tb[0]) {                   /* editable labels, never drawn */
+        if (g_tb[0] < b[0]) b[0] = g_tb[0];
+        if (g_tb[1] < b[1]) b[1] = g_tb[1];
+        if (g_tb[2] > b[2]) b[2] = g_tb[2];
+        if (g_tb[3] > b[3]) b[3] = g_tb[3];
+    }
+    return b[2] > b[0] && b[3] > b[1];
+}
+#if CAIRO_HAS_TEE_SURFACE
+/* crop a written SVG to the box: its width, height and viewBox */
+static int svg_set_viewbox(const char *out, const double b[4]) {
+    FILE *f = fopen(out, "rb");
+    if (!f) return -1;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    char *buf = cp_xmalloc(n + 1);
+    if (fread(buf, 1, n, f) != (size_t)n) { fclose(f); free(buf); return -1; }
+    fclose(f);
+    buf[n] = 0;
+    char *tag = strstr(buf, "<svg "), *end = tag ? strchr(tag, '>') : NULL;
+    if (!end) { free(buf); return -1; }
+    f = fopen(out, "wb");
+    if (!f) { free(buf); return -1; }
+    fwrite(buf, 1, tag - buf, f);
+    /* keep the namespaces; replace the size attributes */
+    fputs("<svg", f);
+    for (const char *a = tag + 4; a < end;) {
+        while (a < end && *a == ' ') a++;
+        const char *q = a;
+        while (q < end && *q != '=') q++;
+        if (q >= end) break;
+        const char *v1 = strchr(q, '"'), *v2 = v1 ? strchr(v1 + 1, '"') : NULL;
+        if (!v2 || v2 > end) break;
+        size_t kl = (size_t)(q - a);
+        int size_attr = (kl == 5 && !strncmp(a, "width", 5)) || (kl == 6 && !strncmp(a, "height", 6))
+                     || (kl == 7 && !strncmp(a, "viewBox", 7));
+        if (!size_attr) { fputc(' ', f); fwrite(a, 1, v2 + 1 - a, f); }
+        a = v2 + 1;
+    }
+    fprintf(f, " width=\"%.2f\" height=\"%.2f\" viewBox=\"%.2f %.2f %.2f %.2f\"",
+            b[2] - b[0], b[3] - b[1], b[0], b[1], b[2] - b[0], b[3] - b[1]);
+    fputs(end, f);
+    fclose(f);
+    free(buf);
+    return 0;
+}
+#endif
+/* --tight: lay out at the asked size but draw into a recording; emit crops
+ * the page to the ink (and the editable labels' boxes) and replays it */
 cairo_surface_t *cp_surface_create(const char *out, double w_pt, double h_pt) {
+    if (g_tight) {
+        const char *dot = strrchr(out, '.');
+        g_tight_svg = dot && strcasecmp(dot, ".svg") == 0;
+        cairo_rectangle_t ext = {0, 0, w_pt, h_pt};
+        cairo_surface_t *rec = cairo_recording_surface_create(CAIRO_CONTENT_COLOR_ALPHA, &ext);
+#if CAIRO_HAS_TEE_SURFACE
+        /* an SVG is drawn as usual and cropped by its viewBox, so the file
+         * keeps plain editable elements; the recording only measures */
+        if (g_tight_svg) {
+            cairo_surface_t *page = surface_create_page(out, w_pt, h_pt);
+            cairo_surface_t *tee = cairo_tee_surface_create(page);
+            cairo_tee_surface_add(tee, rec);
+            g_tee_page = page; g_tee_rec = rec;
+            return tee;
+        }
+#endif
+        return rec;
+    }
+    return surface_create_page(out, w_pt, h_pt);
+}
+static cairo_surface_t *surface_create_page(const char *out, double w_pt, double h_pt) {
     g_out.n = 0;                                /* one live file surface per run */
     const char *dot = strrchr(out, '.');
     if (dot && strcasecmp(dot, ".svg") == 0) {
@@ -201,6 +305,39 @@ cairo_surface_t *cp_surface_create(const char *out, double w_pt, double h_pt) {
 }
 
 cairo_status_t cp_surface_emit(cairo_surface_t *surf, const char *out) {
+#if CAIRO_HAS_TEE_SURFACE
+    if (cairo_surface_get_type(surf) == CAIRO_SURFACE_TYPE_TEE && g_tee_page) {
+        double b[4];
+        int ok = tight_box(g_tee_rec, b);
+        cairo_surface_finish(surf);
+        cairo_surface_destroy(surf);
+        cairo_surface_destroy(g_tee_rec);
+        cairo_surface_t *page = g_tee_page;
+        g_tee_page = g_tee_rec = NULL;
+        cairo_status_t st = cp_surface_emit(page, out);
+        if (st == CAIRO_STATUS_SUCCESS && ok && svg_set_viewbox(out, b))
+            return CAIRO_STATUS_WRITE_ERROR;
+        return st;
+    }
+#endif
+    if (cairo_surface_get_type(surf) == CAIRO_SURFACE_TYPE_RECORDING) {
+        double bx[4];
+        if (!tight_box(surf, bx)) return CAIRO_STATUS_INVALID_SIZE;
+        double x0 = bx[0], y0 = bx[1], x1 = bx[2], y1 = bx[3];
+        cairo_surface_t *page = surface_create_page(out, x1 - x0, y1 - y0);
+        cairo_t *c = cairo_create(page);
+        cairo_set_source_surface(c, surf, -x0, -y0);
+        cairo_paint(c);
+        cairo_destroy(c);
+        cairo_surface_destroy(surf);
+        for (int i = 0; i < nsvgt; i++) {      /* the labels move with the page */
+            SvgTxt *t = &svgt[i];
+            if (t->has_m) { t->m[4] -= x0; t->m[5] -= y0; }
+            else { t->x -= x0; t->y -= y0; }
+        }
+        cairo_status_t st = cairo_surface_status(page);
+        return st == CAIRO_STATUS_SUCCESS ? cp_surface_emit(page, out) : st;
+    }
     if (cairo_surface_get_type(surf) == CAIRO_SURFACE_TYPE_IMAGE) {
         cairo_surface_flush(surf);
         return cairo_surface_write_to_png(surf, out);
