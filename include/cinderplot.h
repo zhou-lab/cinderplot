@@ -285,6 +285,8 @@ typedef struct {
     double alpha;                              /* 0 = opaque (unset); else 0..1 fill/stroke alpha */
     double axis_pad;                           /* G_AXIS_Y: pt between the ticks and the cell's right edge */
     int poly_nofill;                           /* G_POLYGON: stroke the outline only */
+    int keep_alpha;                            /* the layer alpha= stamp skips it (a
+                                                * density's outline: alpha is the fill's) */
     int arrow; double arrow_len, arrow_angle;  /* G_LINE/G_POLYLINE: heads (1 last, 2 first,
                                                 * 3 both), length pt, half-angle deg */
     int arrow_closed;                          /* filled head (grid's type="closed") */
@@ -358,7 +360,7 @@ enum { RF_MEAN, RF_MEDIAN, RF_SUM, RF_LENGTH, RF_MAX, RF_MIN };
 typedef enum { GEOM_POINT, GEOM_JITTER, GEOM_LINE, GEOM_COL, GEOM_HISTOGRAM, GEOM_BOXPLOT, GEOM_BAR,
                GEOM_SEGMENT, GEOM_RECT, GEOM_DENSITY, GEOM_SMOOTH, GEOM_TILE,
                GEOM_HLINE, GEOM_VLINE, GEOM_ABLINE, GEOM_TEXT, GEOM_LABEL,
-               GEOM_ERRORBAR, GEOM_LINERANGE, GEOM_RIBBON } GeomType;
+               GEOM_ERRORBAR, GEOM_LINERANGE, GEOM_RIBBON, GEOM_RIDGES } GeomType;
 typedef struct {
     GeomType type;
     int bins;
@@ -368,6 +370,8 @@ typedef struct {
     int color_is_fill;          /* ... written as fill= (geom_boxplot draws
                                  * fill= on the body, colour= on the chrome) */
     double bw, adjust;          /* geom_density: bandwidth (0 = nrd0) x adjust */
+    double ridge_scale;         /* geom_density_ridges(scale=): ridge height over the
+                                 * row spacing (1 = the tallest touches the next) */
     int trim;                   /* geom_density(trim=TRUE): each curve over its own
                                  * group's range, not the x scale's (ggplot2) */
     double span;                /* geom_smooth: loess span (0 = ggplot's 0.75) */
@@ -791,6 +795,9 @@ typedef struct {
                                      * in render.c and are dropped separately */
     char *facet_var;
     char **facet_levels; int n_facet_levels;      /* facet_wrap(~v, levels=c(...)) */
+    char **facet_row_levels, **facet_col_levels;   /* facet_grid(factor(r, levels=c(...)) ~
+                                                   * factor(c, levels=...)) */
+    int n_facet_row_levels, n_facet_col_levels;
     int free_x, free_y;                           /* facet_wrap(scales=): per-panel ranges */
     int free_colour;                              /* scales="free_colour": each facet builds
                                                    * its own colour scale + legend block */
@@ -865,6 +872,8 @@ typedef struct {
     /* theme(axis.text=element_text(colour=)) / element_blank(): the axis
      * label colour (and the ring plot's spoke, ring and wedge names) */
     Col axis_text_col; int has_axis_text_col, axis_text_blank, axis_text_show;
+    int axis_text_blank_x, axis_text_blank_y;   /* theme(axis.text.x|y=element_blank()):
+                                     * the bottom / left axis's labels, and no room for them */
     /* scale_x_discrete(breaks=c(...), labels=c(...)): which x levels are
      * labelled, and what they read (labels named by level, or positional
      * over breaks); the ring plot's spoke names */

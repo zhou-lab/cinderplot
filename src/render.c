@@ -1449,7 +1449,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 double w_pt, double h_pt, char *err) {
     /* ---- layer summary ---- */
     int haspoint = 0, hasline = 0, hascol = 0, nhist = 0, hasbox = 0, hasbar = 0, hasdens = 0, hastext = 0;
-    int hastile = 0;
+    int dens_filled = 0;            /* geom_density() with a fill: an area, keyed as one */
+    int hastile = 0, hasridge = 0, ridge_li = -1;   /* geom_density_ridges() */
     for (int i = 0; i < spec->nlayers; i++) {
         if (spec->layers[i].type == GEOM_POINT
             || spec->layers[i].type == GEOM_JITTER) haspoint = 1;
@@ -1457,10 +1458,16 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             || spec->layers[i].type == GEOM_SMOOTH) hasline = 1;
         if (spec->layers[i].type == GEOM_COL) hascol = 1;
         if (spec->layers[i].type == GEOM_TILE) hastile = 1;
+        if (spec->layers[i].type == GEOM_RIDGES) { hasridge = 1; ridge_li = i; }
         if (spec->layers[i].type == GEOM_HISTOGRAM) nhist++;
         if (spec->layers[i].type == GEOM_BOXPLOT) hasbox = 1;
         if (spec->layers[i].type == GEOM_BAR) hasbar = 1;
-        if (spec->layers[i].type == GEOM_DENSITY) hasdens = 1;
+        if (spec->layers[i].type == GEOM_DENSITY) {
+            hasdens = 1;
+            /* fill= mapped, or a constant fill=: the area is filled */
+            if ((spec->colour.col && spec->colour.is_fill) || spec->layers[i].has_fill_c)
+                dens_filled = 1;
+        }
         if (spec->layers[i].type == GEOM_TEXT || spec->layers[i].type == GEOM_LABEL) hastext = 1;
     }
     int flip = spec->coord_flip;   /* coord_flip(): x and y axes swapped */
@@ -1524,7 +1531,12 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
          * a category has no arithmetic. So discrete y is accepted with
          * geom_tile() and refused elsewhere, naming the alternative. */
         disc_y = (yc->type == COL_STR) || spec->y.is_factor;
-        if (disc_y && !hastile) {
+        if (hasridge && !disc_y) {
+            snprintf(err, CP_ERRLEN, "geom_density_ridges() needs a discrete y (one "
+                     "ridge per level); `%s` is numeric -- use factor()", spec->y.col);
+            return -1;
+        }
+        if (disc_y && !hastile && !hasridge) {
             snprintf(err, CP_ERRLEN, "a discrete y is supported only with "
                      "geom_tile(); for a category-vs-value chart put the "
                      "category on x and add coord_flip()");
@@ -1647,6 +1659,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             hasribbon = 1;
             if (spec->layers[i].alpha > 0) g_key_area_alpha = spec->layers[i].alpha;
         }
+        else if (spec->layers[i].type == GEOM_DENSITY && dens_filled
+                 && spec->layers[i].alpha > 0) g_key_area_alpha = spec->layers[i].alpha;
+        else if (spec->layers[i].type == GEOM_RIDGES && spec->layers[i].alpha > 0)
+            g_key_area_alpha = spec->layers[i].alpha;
     if (hasribbon && (!yminc || !yec)) {
         snprintf(err, CP_ERRLEN, "geom_ribbon() needs aes(ymin=, ymax=)");
         return -1;
@@ -2007,6 +2023,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             const Column *rc = df_col(df, spec->facet_rowvar);
             if (!rc) { col_missing(err, df, spec->facet_rowvar); return -1; }
             rowf = factor_make(df, rc);
+            if (spec->n_facet_row_levels
+                && factor_relevel(rowf, df->nrow, spec->facet_row_levels,
+                                  spec->n_facet_row_levels, "facet_grid() rows", err)) return -1;
             if (rowf->nlev < 1) {
                 snprintf(err, CP_ERRLEN, "facet_grid() row column `%s` has no values",
                          spec->facet_rowvar);
@@ -2017,6 +2036,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             const Column *cc2 = df_col(df, spec->facet_colvar);
             if (!cc2) { col_missing(err, df, spec->facet_colvar); return -1; }
             colf = factor_make(df, cc2);
+            if (spec->n_facet_col_levels
+                && factor_relevel(colf, df->nrow, spec->facet_col_levels,
+                                  spec->n_facet_col_levels, "facet_grid() columns", err)) return -1;
             if (colf->nlev < 1) {
                 snprintf(err, CP_ERRLEN, "facet_grid() column column `%s` has no values",
                          spec->facet_colvar);
@@ -2924,6 +2946,84 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     "(clipped to the panel)\n", nout, nout == 1 ? "" : "s");
     }
 
+    /* geom_density_ridges(), as ggridges: one joint bandwidth (the mean of
+     * every ridge's bw.nrd0), each ridge's density over the data range
+     * +- 3 bandwidths (R's cut=3), heights scaled so the panel's tallest is
+     * scale= (default 1.8) row spacings, the top ridge stretching the y
+     * range. Computed here so the x and y ranges can train on it. */
+    const int RIDGE_N = 512;
+    int rng = cf ? cf->nlev : 1, rnl = disc_y && yf ? yf->nlev : 0;
+    double *ridge_h = NULL, ridge_xlo = 0, ridge_xhi = 0, ridge_top = 0;
+    if (hasridge && rnl > 0) {
+        const Layer *RL = &spec->layers[ridge_li];
+        double rscale = RL->ridge_scale > 0 ? RL->ridge_scale : 1.8;
+        double *buf = cp_xmalloc((size_t)(df->nrow ? df->nrow : 1) * sizeof(double));
+        double bwsum = 0, dlo = INFINITY, dhi = -INFINITY;
+        int nbw = 0;
+        for (int p = 0; p < npan; p++)
+            for (int l = 0; l < rnl; l++)
+                for (int gg = 0; gg < rng; gg++) {
+                    int n = 0;
+                    for (int r = 0; r < df->nrow; r++)
+                        if (use[r] && (!ff || ff->idx[r] == p) && yf->idx[r] == l
+                            && (!cf || cf->idx[r] == gg)) buf[n++] = TXR(r);
+                    for (int i = 0; i < n; i++) {
+                        if (buf[i] < dlo) dlo = buf[i];
+                        if (buf[i] > dhi) dhi = buf[i];
+                    }
+                    if (n < 2) continue;
+                    double mean = 0, var = 0;
+                    for (int i = 0; i < n; i++) mean += buf[i];
+                    mean /= n;
+                    for (int i = 0; i < n; i++) var += (buf[i] - mean) * (buf[i] - mean);
+                    double sd = sqrt(var / (n - 1));
+                    qsort(buf, n, sizeof(double), cmp_double);
+                    double iqr = quantile7(buf, n, 0.75) - quantile7(buf, n, 0.25);
+                    double lo = fmin(sd, iqr / 1.34);
+                    if (lo <= 0) lo = sd > 0 ? sd : (fabs(buf[0]) > 0 ? fabs(buf[0]) : 1);
+                    bwsum += 0.9 * lo * pow((double)n, -0.2); nbw++;
+                }
+        double bw = (RL->bw > 0 ? RL->bw : nbw ? bwsum / nbw : 1) * RL->adjust;
+        if (!(bw > 0)) bw = 1e-6;
+        ridge_xlo = dlo - 3 * bw; ridge_xhi = dhi + 3 * bw;
+        ridge_h = cp_xcalloc((size_t)npan * rnl * rng * RIDGE_N, sizeof(double));
+        for (int p = 0; p < npan; p++) {
+            double pmax = 0;
+            for (int l = 0; l < rnl; l++)
+                for (int gg = 0; gg < rng; gg++) {
+                    int n = 0;
+                    for (int r = 0; r < df->nrow; r++)
+                        if (use[r] && (!ff || ff->idx[r] == p) && yf->idx[r] == l
+                            && (!cf || cf->idx[r] == gg)) buf[n++] = TXR(r);
+                    if (n < 2) continue;
+                    double *h = ridge_h + (((size_t)p * rnl + l) * rng + gg) * RIDGE_N;
+                    double inv = 1.0 / ((double)n * bw * sqrt(2 * M_PI));
+                    for (int j = 0; j < RIDGE_N; j++) {
+                        double xj = ridge_xlo + (ridge_xhi - ridge_xlo) * j / (RIDGE_N - 1);
+                        double sum = 0;
+                        for (int i = 0; i < n; i++) {
+                            double u = (xj - buf[i]) / bw;
+                            sum += exp(-0.5 * u * u);
+                        }
+                        h[j] = sum * inv;
+                        if (h[j] > pmax) pmax = h[j];
+                    }
+                }
+            for (int l = 0; l < rnl; l++)            /* density -> row spacings */
+                for (int gg = 0; gg < rng; gg++) {
+                    double *h = ridge_h + (((size_t)p * rnl + l) * rng + gg) * RIDGE_N;
+                    for (int j = 0; j < RIDGE_N; j++) {
+                        h[j] = pmax > 0 ? h[j] / pmax * rscale : 0;
+                        if (l + 1 + h[j] > ridge_top) ridge_top = l + 1 + h[j];
+                    }
+                }
+        }
+        free(buf);
+        if (!spec->has_xlim) {
+            if (ridge_xlo < txmin) txmin = ridge_xlo;
+            if (ridge_xhi > txmax) txmax = ridge_xhi;
+        }
+    }
     /* geom_hex(): train the range on the hexagons, not their centres (as
      * ggplot2 does), so expand=FALSE hugs the outer cells instead of
      * halving them; xlim()/ylim() still win */
@@ -2963,6 +3063,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     if (disc_y) {
         double e = ym2 < 0 ? 0.1 : ym2 * (yf->nlev - 1) + ya2;
         y0 = 0.5 - e; y1 = yf->nlev + 0.5 + e;   /* from the tile edge, as x */
+        if (hasridge && ridge_top > y1) y1 = ridge_top;   /* the top ridge, unexpanded */
     }
     else {
         double e = ym2 < 0 ? 0.05 * (tymax - tymin)
@@ -3467,6 +3568,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             if (w > ylab_w) ylab_w = w;
         }
     }
+    if (spec->axis_text_blank_y) ylab_w = 0;   /* theme(axis.text.y=element_blank()) */
     double labh = font_h(cr, SZ_TICK), baseh = font_h(cr, SZ_BASE);
     /* strip text: ggplot's rel(0.8) of base, or theme(strip.text=) */
     double stx_sz = spec->strip_x_sz > 0 ? spec->strip_x_sz
@@ -3699,6 +3801,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
      * then drive the panel HEIGHT; sizing the width from them left 40 bars
      * overprinting in a 4in-tall panel */
     int hcats = flip ? maxy : maxx, vcats = flip ? maxx : maxy;
+    /* an axis with no labels needs no readable pitch: hundreds of unlabelled
+     * probe IDs do not stretch the canvas */
+    if (spec->axis_text_blank_x) hcats = 0;
+    if (spec->axis_text_blank_y) vcats = 0;
     double auto_panelw = hcats ? hcats * catpitch : 4.0 * 72;
     double auto_panelh = vcats ? vcats * catpitch : 2.6 * 72;
     double auto_h_raw = MARGIN * 2 + labh + TICK_LEN + TXT_GAP + baseh
@@ -3983,8 +4089,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 const char *bt = spec->lab_colour ? spec->lab_colour
                                : ff->levels[p];
                 GTable *lg = build_legend(cr, th, bt, &pf, pc2,
-                                   haspoint, hasline || hasseg || hasdens || hasrange,
-                                   hasbox || hasbar || hascol || hasrect || hastile || hasribbon,
+                                   haspoint, hasline || hasseg || (hasdens && !dens_filled) || hasrange,
+                                   hasbox || hasbar || hascol || hasrect || hastile || hasribbon || dens_filled || hasridge,
                                    hastext, NULL, nc2, spec->legend_reverse, NULL, err);
                 if (!lg) return -1;
                 /* inside the panels every block has its own panel to sit
@@ -4016,8 +4122,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 }
             }
             GTable *lg = build_legend(cr, th, col_title, cf, pal, haspoint,
-                               hasline || hasseg || hasdens || hasrange,
-                               hasbox || hasbar || hascol || hasrect || hastile || hasribbon,
+                               hasline || hasseg || (hasdens && !dens_filled) || hasrange,
+                               hasbox || hasbar || hascol || hasrect || hastile || hasribbon || dens_filled || hasridge,
                                hastext, NULL, nc2, spec->legend_reverse,
                                lt_merge ? lt_keys : NULL, err);
             if (!lg) return -1;
@@ -4328,6 +4434,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         double rad = bang * M_PI / 180.0;
         blab_h = wmax * sin(rad) + labh * cos(rad);
     }
+    if (spec->axis_text_blank_x) blab_h = 0;   /* theme(axis.text.x=element_blank()) */
     /* Cheap clipping warnings (no wrapping is attempted): a long title runs
      * off the canvas edge, and leaned-over category labels can eat the panel
      * they label. Both render silently otherwise. */
@@ -5019,11 +5126,29 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         px[j] = NPCX(dens_x[bse+j]);
                         py[j] = NPCY(dens_y[bse+j]);
                     }
+                    const Layer *DL = &spec->layers[li];
+                    if (dens_filled) {
+                        /* ggplot2's filled density: the area down to 0 in the
+                         * fill colour, alpha= on the fill alone, and the
+                         * upper curve stroked in colour= (black by default) */
+                        double *qx = cp_xmalloc((DENS_N + 2) * sizeof(double));
+                        double *qy = cp_xmalloc((DENS_N + 2) * sizeof(double));
+                        memcpy(qx, px, DENS_N * sizeof(double));
+                        memcpy(qy, py, DENS_N * sizeof(double));
+                        qx[DENS_N] = px[DENS_N - 1]; qx[DENS_N + 1] = px[0];
+                        qy[DENS_N] = qy[DENS_N + 1] = NPCY(0.0);
+                        Col fc = DL->has_fill_c ? DL->fill_c : cf ? pal[gg] : C_BAR;
+                        if (DL->alpha > 0) fc = col_alpha(fc, DL->alpha);
+                        g = gt_add(T, G_POLYGON, R, C, R, C);
+                        g->n = DENS_N + 2; g->px = qx; g->py = qy;
+                        g->col = fc; g->clip = 1; g->keep_alpha = 1;
+                    }
                     g = gt_add(T, G_POLYLINE, R, C, R, C);
                     g->n = DENS_N; g->px = px; g->py = py;
-                    g->col = spec->layers[li].has_color ? spec->layers[li].color
-                           : cf ? pal[gg] : C_BLACK;
-                    g->lw = lw_pt(0.5); g->clip = 1;
+                    g->col = dens_filled
+                           ? (DL->has_color && !DL->color_is_fill ? DL->color : C_BLACK)
+                           : DL->has_color ? DL->color : cf ? pal[gg] : C_BLACK;
+                    g->lw = lw_pt(0.5); g->clip = 1; g->keep_alpha = dens_filled;
                 }
             } else if (gt == GEOM_COL && colsum) {
                 /* stacked by fill group, as geom_bar: values summed per
@@ -5278,6 +5403,43 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         g->alpha = SL->alpha; g->clip = 1;
                     }
                     free(sx); free(sy); free(ox); free(oy);
+                }
+            } else if (gt == GEOM_RIDGES) {
+                /* back to front: the top row first, so a lower ridge
+                 * overlaps the one behind it; filled (grey70 unmapped, as
+                 * ggridges), alpha= on the fill, the ridgeline in colour=
+                 * (black) */
+                const Layer *RL = &spec->layers[li];
+                int filled = !(spec->colour.col && !spec->colour.is_fill);
+                for (int l = rnl - 1; l >= 0 && ridge_h; l--) {
+                    int slot = ymap ? ymap[l] : l;
+                    if (slot < 0) continue;
+                    double base = slot + 1;
+                    for (int gg = 0; gg < rng; gg++) {
+                        const double *h = ridge_h + (((size_t)p * rnl + l) * rng + gg) * RIDGE_N;
+                        int any = 0;
+                        for (int j = 0; j < RIDGE_N && !any; j++) any = h[j] > 0;
+                        if (!any) continue;
+                        double *qx = cp_xmalloc((RIDGE_N + 2) * sizeof(double));
+                        double *qy = cp_xmalloc((RIDGE_N + 2) * sizeof(double));
+                        for (int j = 0; j < RIDGE_N; j++) {
+                            qx[j] = NPCX(ridge_xlo + (ridge_xhi - ridge_xlo) * j / (RIDGE_N - 1));
+                            qy[j] = NPCY(base + h[j]);
+                        }
+                        qx[RIDGE_N] = qx[RIDGE_N - 1]; qx[RIDGE_N + 1] = qx[0];
+                        qy[RIDGE_N] = qy[RIDGE_N + 1] = NPCY(base);
+                        Col fc = RL->has_fill_c ? RL->fill_c
+                               : cf && filled ? pal[gg] : (Col){0.702, 0.702, 0.702, 0};
+                        if (RL->alpha > 0) fc = col_alpha(fc, RL->alpha);
+                        g = gt_add(T, G_POLYGON, R, C, R, C);
+                        g->n = RIDGE_N + 2; g->px = qx; g->py = qy;
+                        g->col = fc; g->clip = 1; g->keep_alpha = 1;
+                        g = gt_add(T, G_POLYLINE, R, C, R, C);
+                        g->n = RIDGE_N; g->px = qx; g->py = qy;
+                        g->col = RL->has_color && !RL->color_is_fill ? RL->color
+                               : cf && !filled ? pal[gg] : C_BLACK;
+                        g->lw = lw_pt(0.5); g->clip = 1; g->keep_alpha = 1;
+                    }
                 }
             } else if (gt == GEOM_RIBBON) {
                 /* ggplot2's geom_ribbon(): per group (the colour= and
@@ -6061,7 +6223,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
              * when the layer has one; a mapped dash set above survives */
             if (spec->layers[li].alpha > 0 || spec->layers[li].dash) {
                 for (int gi = grob0; gi < T->ngrobs; gi++) {
-                    T->grobs[gi].alpha = spec->layers[li].alpha;
+                    if (!T->grobs[gi].keep_alpha) T->grobs[gi].alpha = spec->layers[li].alpha;
                     if (spec->layers[li].dash)
                         T->grobs[gi].dash = spec->layers[li].dash;
                 }
@@ -6153,7 +6315,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             g->py = flip ? S->xnpc : S->ynpc;
             g->labels = flip ? S->xlabs : S->ylabs;
             g->axis_styled = 1; g->tick_col = th->tick; g->hide_ticks = !th->tick_on;
-            g->text_col = th->axis_text; g->hide_text = !th->axis_text_on;
+            g->text_col = th->axis_text;
+            g->hide_text = !th->axis_text_on || spec->axis_text_blank_y;
             if (pc == 0) g->axis_pad = band_wl;
         }
         /* annotation(axis="y") bands beside the panel row: one chip per y
@@ -6217,7 +6380,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             g->labels = flip ? S->ylabs : S->xlabs;
             g->label_angle = bang;
             g->axis_styled = 1; g->tick_col = th->tick; g->hide_ticks = !th->tick_on;
-            g->text_col = th->axis_text; g->hide_text = !th->axis_text_on;
+            g->text_col = th->axis_text;
+            g->hide_text = !th->axis_text_on || spec->axis_text_blank_x;
         }
     }
 
@@ -6245,7 +6409,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             g->label_angle = bang;
         }
         g->axis_styled = 1; g->tick_col = th->tick; g->hide_ticks = !th->tick_on;
-        g->text_col = th->axis_text; g->hide_text = !th->axis_text_on;
+        g->text_col = th->axis_text;
+        g->hide_text = !th->axis_text_on || spec->axis_text_blank_x;
     }
 
     /* inside legends go in LAST, over the panel content they sit on */

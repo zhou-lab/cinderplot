@@ -203,6 +203,17 @@ and ignored (the output path is a command-line argument here).
   the others is dropped with a stderr warning ("N unlabeled data points (too
   many overlaps)"), as ggrepel does, never drawn on top of another.
   Up to 8 layers.
+- `geom_density()` with `aes(fill=g)` (or a constant `fill=`) is a filled
+  area, as ggplot2 draws it: the fill under the curve, `alpha=` on the fill
+  alone, the curve in `colour=` (black). `aes(colour=g)` stays outlines.
+- `geom_density_ridges([scale=1.8][, bw=, adjust=])` is ggridges'
+  ridgeline plot: `aes(x, y=group, fill=Type)` with a DISCRETE y, one
+  density per y level (and fill group), stacked on the y rows and
+  overlapping by `scale` (1 = the tallest touches the row above). As
+  ggridges: one joint bandwidth (the mean of each ridge's bw.nrd0), each
+  ridge over the data range +- 3 bandwidths, heights scaled to the panel's
+  tallest, grey70 fill when unmapped, the top row drawn first. Ridge heights
+  match ggridges 0.5 `layer_data()`.
 - `geom_ribbon()` draws the band `aes(ymin=, ymax=)` over x, one per
   `colour=`/`group=` level, filled (grey20 by default, as ggplot2) with no
   outline -- the shaded CI: `aes(x, y, ymin=lo, ymax=hi, colour=g) +
@@ -383,7 +394,10 @@ cinderplot 'dart.csv + aes(x=factor(sp), y=factor(ring), fill=v, group=grp)
   already auto-rotate; `scale_x_discrete(breaks=c(...), labels=c(...))`
   labels only the named levels and renames them, and
   `theme(axis.text=element_text(colour="black"))` recolours the axis text
-  (`element_blank()` drops it). Marks take
+  (`element_blank()` drops it; `axis.text.x=` / `axis.text.y=element_blank()`
+  drop one axis's labels -- the bottom / left axis as drawn, also under
+  coord_flip -- and the room they took, so hundreds of unlabelled probe IDs
+  do not stretch an auto canvas). Marks take
   part in scale training, work on log axes and under coord_flip, repeat the
   verb for several, and draw OVER the geoms (a shading rect behind points is
   not expressible yet). The usual use: labelling a geom_hline() reference.
@@ -448,7 +462,9 @@ for.
   endpoints,
   `scale_x_genome("seqinfo.tsv.gz")`, `ideogram("cytoband.tsv.gz")`.
 - **also**: `facet_wrap(~v[, levels=][, scales=][, space=][, ncol=][, nrow=])`,
-  `facet_grid(row ~ col[, scales=][, space=])`, `coord_flip()`,
+  `facet_grid(row ~ col[, scales=][, space=])` (order a side in the formula,
+  as R does: `facet_grid(factor(Cancer, levels=c(...)) ~ factor(Type,
+  levels=c(...)))`), `coord_flip()`,
   `coord_fixed([ratio=1][, expand=FALSE])` / `coord_equal()` (one y unit =
   ratio x units on the page, e.g. square spatial-map tiles; the auto canvas
   fits the panel, a `--size` of another shape centres it; fixed scales only),
@@ -1278,7 +1294,7 @@ statistical transformations beyond binning, density and loess.
    legend, as `geom_rect()` has). `geom_histogram()` still requires its fill
    constant per panel; `geom_bar()` refuses a continuous fill (it counts rows
    itself); dodging is not implemented.
-4. **`geom_histogram()`/`geom_bar()`/`geom_density()` compute y themselves** —
+4. **`geom_histogram()`/`geom_bar()`/`geom_density()` compute y themselves** (`geom_density_ridges()` maps a discrete y) —
    do not map `y`, and do not combine them with other data geoms.
 5. **Factor level order is sorted, R-style.** Impose an order with `levels=`:
    `facet_wrap(~panel, levels=c("b","a"))` or `aes(colour=factor(m, levels=c("B","A")))`,

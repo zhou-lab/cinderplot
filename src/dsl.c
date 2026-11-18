@@ -216,6 +216,30 @@ static int parse_levels(P *p, char ***out, int *n) {
     return 0;
 }
 
+/* one side of a facet_grid() formula: a column, ".", or factor(col,
+ * levels=c(...)) -- the level order a TSV cannot carry, as in R */
+static char *grid_side(P *p, char ***lev, int *nlev) {
+    skip_ws(p);
+    if (strncmp(p->s, "factor(", 7)) return colname(p);
+    p->s += 7;
+    char *c = colname(p);
+    if (!c) return NULL;
+    skip_ws(p);
+    if (*p->s == ',') {
+        p->s++;
+        char *key = ident(p);
+        if (!key || strcmp(key, "levels") || expect(p, '=')) {
+            free(key); free(c);
+            fail(p, "factor() supports only levels=c(...)%s", "");
+            return NULL;
+        }
+        free(key);
+        if (parse_levels(p, lev, nlev)) { free(c); return NULL; }
+    }
+    if (expect(p, ')')) { free(c); return NULL; }
+    return c;
+}
+
 /* c("a"="A", "b"="B") or c("A", "B"): names NULL where none was given */
 static int parse_named_strs(P *p, char ***names, char ***vals, int *n, const char *what) {
     skip_ws(p);
@@ -1764,6 +1788,7 @@ static int parse_term(P *p, PlotSpec *spec) {
     else if (!strcmp(name, "geom_errorbar") || !strcmp(name, "geom_errorbarh")) gt = GEOM_ERRORBAR;
     else if (!strcmp(name, "geom_linerange")) gt = GEOM_LINERANGE;
     else if (!strcmp(name, "geom_ribbon")) gt = GEOM_RIBBON;
+    else if (!strcmp(name, "geom_density_ridges")) gt = GEOM_RIDGES;   /* ggridges */
     else if (!strcmp(name, "geom_rect")) gt = GEOM_RECT;
     else if (!strcmp(name, "geom_density")) gt = GEOM_DENSITY;
     else if (!strcmp(name, "geom_hline")) gt = GEOM_HLINE;
@@ -2099,13 +2124,21 @@ static int parse_term(P *p, PlotSpec *spec) {
                                     "the confidence ribbon is missing, not hidden; "
                                     "pass se=FALSE for the fitted line alone", "");
                     l->se_given = 1;
-                } else if (gt == GEOM_DENSITY && !strcmp(key, "bw")) {
+                } else if (gt == GEOM_RIDGES && !strcmp(key, "scale")) {
+                    skip_ws(p);
+                    char *end;
+                    double v = strtod(p->s, &end);
+                    if (end == p->s || !(v > 0) || !isfinite(v))
+                        return fail(p, "geom_density_ridges(scale=) expects a number > 0%s", "");
+                    p->s = end;
+                    l->ridge_scale = v;
+                } else if ((gt == GEOM_DENSITY || gt == GEOM_RIDGES) && !strcmp(key, "bw")) {
                     l->bw = strtod(p->s, (char **)&p->s);
                     if (!(l->bw > 0) || !isfinite(l->bw)) return fail(p, "geom_density(bw=...) must be > 0", "");
                 } else if (gt == GEOM_DENSITY && !strcmp(key, "trim")) {
                     if (parse_bool(p, &l->trim))
                         return fail(p, "geom_density(trim=) expects TRUE or FALSE", "");
-                } else if (gt == GEOM_DENSITY && !strcmp(key, "adjust")) {
+                } else if ((gt == GEOM_DENSITY || gt == GEOM_RIDGES) && !strcmp(key, "adjust")) {
                     l->adjust = strtod(p->s, (char **)&p->s);
                     if (!(l->adjust > 0) || !isfinite(l->adjust)) return fail(p, "geom_density(adjust=...) must be > 0", "");
                 } else if ((gt == GEOM_HLINE && !strcmp(key, "yintercept"))
@@ -3463,14 +3496,14 @@ static int parse_term(P *p, PlotSpec *spec) {
                            "or facet_grid(rowvar ~ .)";
         skip_ws(p);
         if (*p->s == '~') return fail(p, form, "");
-        char *rv = colname(p);
+        char *rv = grid_side(p, &spec->facet_row_levels, &spec->n_facet_row_levels);
         if (!rv) return *p->err ? -1 : fail(p, form, "");
         skip_ws(p);
         if (*p->s == '+') return fail(p, "facet_grid() takes one variable per "
                                       "side; rowvar + rowvar2 ~ colvar is not "
                                       "implemented", "");
         if (expect(p, '~')) return fail(p, form, "");
-        char *cv = colname(p);
+        char *cv = grid_side(p, &spec->facet_col_levels, &spec->n_facet_col_levels);
         if (!cv) return *p->err ? -1 : fail(p, form, "");
         skip_ws(p);
         if (*p->s == '+') return fail(p, "facet_grid() takes one variable per "
@@ -3518,9 +3551,9 @@ static int parse_term(P *p, PlotSpec *spec) {
                 if (parse_space(p, spec)) { free(key); return -1; }
             } else if (!strcmp(key, "levels")) {
                 free(key);
-                return fail(p, "facet_grid() option `levels=` is not implemented "
-                            "(the row and column orders are the factor orders); "
-                            "facet_wrap(~var, levels=c(...)) takes it", "");
+                return fail(p, "facet_grid() option `levels=` is not implemented; "
+                            "order a side in the formula: facet_grid(factor(row, "
+                            "levels=c(...)) ~ factor(col, levels=c(...)))", "");
             } else if (!strcmp(key, "ncol") || !strcmp(key, "nrow")) {
                 char msg[CP_ERRLEN];
                 snprintf(msg, sizeof msg, "facet_grid() option `%s=` is not "
@@ -3615,6 +3648,20 @@ static int parse_term(P *p, PlotSpec *spec) {
                                 "coordinates in [0, 1]", "");
                 spec->leg_ix = x2; spec->leg_iy = y2;
                 spec->legend_inside = 1;
+            } else if (!strcmp(key, "axis.text.x") || !strcmp(key, "axis.text.y")) {
+                /* one axis's labels, as ggplot2 names them by the drawn axis:
+                 * .x the bottom, .y the left (also under coord_flip) */
+                char *f = ident(p);
+                int isx = key[10] == 'x';
+                if (f && !strcmp(f, "element_blank")) {
+                    free(f);
+                    if (expect(p, '(') || expect(p, ')')) return -1;
+                    if (isx) spec->axis_text_blank_x = 1; else spec->axis_text_blank_y = 1;
+                } else {
+                    free(f);
+                    return fail(p, "theme(%s=) takes element_blank(); style both axes "
+                                "with axis.text=element_text(colour=, size=)", key);
+                }
             } else if (!strcmp(key, "axis.text")) {
                 /* element_text(colour=) recolours the axis labels -- the ring
                  * plot's spoke, ring and wedge names too; element_blank()
@@ -3765,7 +3812,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                                "the rest — supported here: legend.position, "
                                "legend.position.inside, legend.key.size, "
                                "legend.key.height, legend.key.width, "
-                               "legend.key.spacing.y, legend.text, strip.text[.x|.y], axis.text, plot.title", key);
+                               "legend.key.spacing.y, legend.text, strip.text[.x|.y], axis.text[.x|.y], plot.title", key);
             skip_ws(p);
             if (*p->s == ',') { p->s++; skip_ws(p); }
         }
@@ -4027,7 +4074,7 @@ static int parse_term(P *p, PlotSpec *spec) {
         || !strcmp(name, "geom_polygon") || !strcmp(name, "geom_dotplot") || !strcmp(name, "geom_rug")
         || !strcmp(name, "geom_freqpoly") || !strcmp(name, "geom_curve") || !strcmp(name, "geom_count"))
         return fail(p, "%s() is not implemented; the geoms are "
-                    "geom_point/jitter/line/smooth/col/bar/histogram/boxplot/density/tile/raster/hex/segment/rect/hline/vline/abline/errorbar/linerange/ribbon/text/label/text_repel/label_repel()", name);
+                    "geom_point/jitter/line/smooth/col/bar/histogram/boxplot/density/tile/raster/hex/segment/rect/hline/vline/abline/errorbar/linerange/ribbon/density_ridges/text/label/text_repel/label_repel()", name);
     if (!strcmp(name, "scale_colour_gradientn") || !strcmp(name, "scale_color_gradientn")
         || !strcmp(name, "scale_fill_gradientn"))
         return fail(p, "%s() is not implemented; use gradient2() (three stops) or a "
@@ -4038,7 +4085,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                     "`data + aes() + geom_*()` and the output is the CLI argument", name);
     return fail(p, "`%s()` is not implemented; supported: "
                    "aes(), ggplot(), ggsave(); geom_point/jitter/line/smooth/col/bar/histogram/"
-                   "boxplot/density/tile/raster/hex/segment/rect/hline/vline/abline/errorbar/linerange/ribbon/"
+                   "boxplot/density/density_ridges/tile/raster/hex/segment/rect/hline/vline/abline/errorbar/linerange/ribbon/"
                    "text/label/text_repel/label_repel(), annotate(); labs()/xlab()/ylab()/ggtitle(); "
                    "facet_wrap(~var), facet_grid(row ~ col); coord_flip/polar/cartesian/fixed(); scale_x|y_log10/log2/continuous/"
                    "discrete(), xlim(), ylim(), scale_x_genome(); scale_colour|fill_manual/brewer/"
@@ -4457,9 +4504,10 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
             GeomType t = spec->layers[i].type;
             if (t == GEOM_POINT || t == GEOM_JITTER || t == GEOM_LINE || t == GEOM_SMOOTH
                 || t == GEOM_TEXT || t == GEOM_LABEL || t == GEOM_SEGMENT
-                || t == GEOM_ERRORBAR || t == GEOM_LINERANGE || t == GEOM_DENSITY) stroke++;
+                || t == GEOM_ERRORBAR || t == GEOM_LINERANGE) stroke++;
             else if (t == GEOM_COL || t == GEOM_BAR || t == GEOM_HISTOGRAM
-                     || t == GEOM_TILE || t == GEOM_RECT || t == GEOM_RIBBON) area++;
+                     || t == GEOM_TILE || t == GEOM_RECT || t == GEOM_RIBBON
+                     || t == GEOM_RIDGES) area++;
         }
         const char *g0 = NULL;
         for (int i = 0; i < spec->nlayers && !g0; i++) {
@@ -4473,7 +4521,8 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
                : t == GEOM_COL ? "geom_col" : t == GEOM_BAR ? "geom_bar"
                : t == GEOM_HISTOGRAM ? "geom_histogram"
                : t == GEOM_TILE ? (spec->layers[i].hex ? "geom_hex" : "geom_tile")
-               : t == GEOM_RECT ? "geom_rect" : t == GEOM_RIBBON ? "geom_ribbon" : NULL;
+               : t == GEOM_RECT ? "geom_rect" : t == GEOM_RIBBON ? "geom_ribbon"
+               : t == GEOM_RIDGES ? "geom_density_ridges" : NULL;
         }
         if (g0 && spec->colour.is_fill && stroke && !area)
             fprintf(stderr, "cinderplot: warning: aes(fill=) on %s() is drawn as "
