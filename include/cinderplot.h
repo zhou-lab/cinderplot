@@ -72,7 +72,8 @@ extern double cp_base_size;
 extern double cp_title_sz, cp_axis_text_sz, cp_axis_title_sz;
 /* theme(axis.title=element_text(size=)): the axis titles, and the heatmap's
  * annotation titles and group labels and the track's group labels -- each
- * mode's own default when unset (base in plot mode, 0.8 x base elsewhere) */
+ * mode's own default when unset (base in plot and heatmap mode, SZ_TRACK in
+ * track mode) */
 #define SZ_AXTITLE(dflt) (cp_axis_title_sz > 0 ? cp_axis_title_sz \
                           : cp_axis_title_sz < 0 ? -cp_axis_title_sz * cp_base_size : (dflt))
 #define SZ_TITLE     (cp_title_sz > 0 ? cp_title_sz \

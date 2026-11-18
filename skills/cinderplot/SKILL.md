@@ -70,7 +70,8 @@ giving that file's columns; substitute your own file.
   `axis.title=element_text(size=)` sets the axis titles. The same three
   reach the other modes: in **heatmap mode** `axis.text=` sizes the row and
   column names, `axis.title=` the annotation titles and data labels
-  (default 0.8 x base), `legend.text=` the keys and colourbar numbers;
+  (default base_size, like the legend titles), `legend.text=` the keys and
+  colourbar numbers;
   in **track mode** (where every label is otherwise one flat size)
   `axis.text=` sets the row names -- as given, no longer fitted to the row
   height -- and the axis numbers, `axis.title=` the track names and
