@@ -204,7 +204,9 @@ static cairo_status_t outbuf_write(void *closure, const unsigned char *data, uns
 }
 
 static cairo_surface_t *surface_create_page(const char *out, double w_pt, double h_pt);
+#if CAIRO_HAS_TEE_SURFACE
 static cairo_surface_t *g_tee_page, *g_tee_rec;   /* --tight SVG: drawn and measured */
+#endif
 /* the ink box of a --tight recording, editable labels included; 0 = empty */
 static int tight_box(cairo_surface_t *rec, double b[4]) {
     double x, y, w, h;
@@ -313,14 +315,17 @@ static cairo_surface_t *surface_create_page(const char *out, double w_pt, double
 cairo_status_t cp_surface_emit(cairo_surface_t *surf, const char *out) {
 #if CAIRO_HAS_TEE_SURFACE
     if (cairo_surface_get_type(surf) == CAIRO_SURFACE_TYPE_TEE && g_tee_page) {
+        /* measure, write the page, and only then let the tee go: finishing
+         * a tee may finish the page under it (cairo version dependent) */
         double b[4];
+        cairo_surface_flush(surf);
         int ok = tight_box(g_tee_rec, b);
-        cairo_surface_finish(surf);
+        cairo_surface_t *page = g_tee_page;
+        g_tee_page = NULL;
+        cairo_status_t st = cp_surface_emit(page, out);
         cairo_surface_destroy(surf);
         cairo_surface_destroy(g_tee_rec);
-        cairo_surface_t *page = g_tee_page;
-        g_tee_page = g_tee_rec = NULL;
-        cairo_status_t st = cp_surface_emit(page, out);
+        g_tee_rec = NULL;
         if (st == CAIRO_STATUS_SUCCESS && ok && svg_set_viewbox(out, b))
             return CAIRO_STATUS_WRITE_ERROR;
         return st;
