@@ -71,12 +71,16 @@ static int svg_show(cairo_t *cr, double x, double y, double size, const char *s)
         svgt = cp_xrealloc(svgt, csvgt * sizeof *svgt);
     }
     if (g_tight) {          /* the label is not drawn: its box joins the ink */
-        cairo_text_extents_t e;
+        /* the whole advance box from the origin, ascent to descent: a
+         * viewer's own font (real Arial vs cairo's) may set the ink a
+         * fraction of a point outside cairo's glyph box */
+        cairo_text_extents_t e; cairo_font_extents_t fe;
         cairo_text_extents(cr, s, &e);
-        double cx[4] = {x + e.x_bearing, x + e.x_bearing + e.width, x + e.x_bearing,
-                        x + e.x_bearing + e.width};
-        double cy[4] = {y + e.y_bearing, y + e.y_bearing, y + e.y_bearing + e.height,
-                        y + e.y_bearing + e.height};
+        cairo_font_extents(cr, &fe);
+        double l = x + fmin(0, e.x_bearing), r = x + fmax(e.x_advance, e.x_bearing + e.width);
+        double t = y - fmax(fe.ascent, -e.y_bearing), b = y + fmax(fe.descent, e.y_bearing + e.height);
+        double cx[4] = {l, r, l, r};
+        double cy[4] = {t, t, b, b};
         for (int k = 0; k < 4; k++) {
             double dx = cx[k], dy = cy[k];
             cairo_user_to_device(cr, &dx, &dy);
@@ -213,6 +217,8 @@ static int tight_box(cairo_surface_t *rec, double b[4]) {
         if (g_tb[2] > b[2]) b[2] = g_tb[2];
         if (g_tb[3] > b[3]) b[3] = g_tb[3];
     }
+    /* whole points, rounded outward: the crop never cuts into a glyph */
+    b[0] = floor(b[0]); b[1] = floor(b[1]); b[2] = ceil(b[2]); b[3] = ceil(b[3]);
     return b[2] > b[0] && b[3] > b[1];
 }
 #if CAIRO_HAS_TEE_SURFACE

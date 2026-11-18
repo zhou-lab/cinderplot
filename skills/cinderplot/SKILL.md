@@ -97,8 +97,10 @@ giving that file's columns; substitute your own file.
   no empty margin, in every mode, so a panel drops into a composite without
   hand cropping (`--size` stays the layout budget; the page comes out
   smaller). An SVG keeps its elements and is cropped by its `viewBox`; PDF
-  and PNG are replayed onto the cropped page. Cairo's ink box is whole
-  points, so up to 1 pt may remain on a side.
+  and PNG are replayed onto the cropped page. The box is rounded outward to
+  whole points and an editable label counts from its origin over its
+  ascent and descent, so a viewer's own font never loses a glyph; up to
+  ~1 pt may remain on a side.
 - `--dump-spec` prints the desugared expression. It renders as well only when
   the output is given as `-o FILE`; a trailing positional filename is not
   taken as the output, so nothing is written.
