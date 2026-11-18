@@ -571,6 +571,8 @@ typedef struct {
     AnnoKind kind;
     double x, y, xend, yend;       /* rect also spells these xmin/xmax/ymin/ymax */
     int has_x, has_y, has_xend, has_yend;
+    char *x_level, *y_level;       /* x="HCC" / y="HCC": a level of a discrete axis,
+                                    * placed at its slot (the value is then unused) */
     char *label;                   /* text */
     Col color; int has_color;      /* text/segment default black; rect grey85 */
     double size;                   /* text size in pt (0 = axis-text default) */

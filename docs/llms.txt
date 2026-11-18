@@ -224,6 +224,12 @@ and ignored (the output path is a command-line argument here).
 - `geom_density()` with `aes(fill=g)` (or a constant `fill=`) is a filled
   area, as ggplot2 draws it: the fill under the curve, `alpha=` on the fill
   alone, the curve in `colour=` (black). `aes(colour=g)` stays outlines.
+- A `geom_text(data="stars.tsv")` (or point/label) layer on a **discrete
+  y** places each row at its y level's slot -- the file's y column names
+  the levels -- and `nudge_y=` lifts it in rows, so per-row stars stand
+  level with ridge or tile rows. Under a `fill=` mapping a text layer needs
+  no fill column and adds no glyph to the fill key (ggplot2 draws text
+  black).
 - `geom_density_ridges([scale=1.8][, bw=, adjust=])` is ggridges'
   ridgeline plot: `aes(x, y=group, fill=Type)` with a DISCRETE y, one
   density per y level (and fill group), stacked on the y rows and
@@ -398,7 +404,11 @@ cinderplot 'dart.csv + aes(x=factor(sp), y=factor(ring), fill=v, group=grp)
   + scale_fill_viridis()' -o dart.svg --size 5x4
 ```
 - `annotate("text", x=, y=, label=[, colour=][, size=][, hjust=][, vjust=])`
-  places one literal mark, ggplot2's verb — also `"segment"` (x/y/xend/yend)
+  places one literal mark, ggplot2's verb. On a discrete axis `x=`/`y=`
+  take a level name: `annotate("text", x=1.1, y="HCC", label="***")` sits on
+  the HCC row. Text `size=` here is in **pt** (default the axis-text size),
+  unlike `geom_text(size=)`, which reads ggplot2's mm (3.88 default; 3.5 mm
+  = 10 pt). Also `"segment"` (x/y/xend/yend)
   and `"rect"` (xmin/xmax/ymin/ymax; colour= sets the fill, default grey85),
   and `"point"` (x/y only; a filled dot, `size=` in geom_point units, default
   1.5 — the operating point on a ROC curve).

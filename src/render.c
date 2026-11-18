@@ -1261,8 +1261,8 @@ typedef struct {
 static int layer_frame_build(LayerFrame *lf, DataFrame *d2, const Layer *L,
                              const char *gname, const PlotSpec *spec,
                              const Factor *ff, const Factor *xf, int disc_x,
-                             int disc_y, const Factor *cf, int cont_col,
-                             const Factor *pff, char *err) {
+                             int disc_y, const Factor *yf, const Factor *cf,
+                             int cont_col, const Factor *pff, char *err) {
     memset(lf, 0, sizeof *lf);
     lf->n = d2->nrow;
     const char *ycol = L->ycol ? L->ycol : spec->y.col;
@@ -1275,9 +1275,31 @@ static int layer_frame_build(LayerFrame *lf, DataFrame *d2, const Layer *L,
         return -1;
     }
     if (disc_y) {
-        snprintf(err, CP_ERRLEN, "%s(data=) on a discrete y axis is not "
-                 "implemented; the layer file's rows have no slot to sit in", gname);
-        return -1;
+        /* the layer's y names a level of the main data's y: the row sits at
+         * that level's slot (1..k), as a ridge or tile row does, so the
+         * y columns read the same in both files; nudge_y= lifts it */
+        if (spec->free_y) {
+            snprintf(err, CP_ERRLEN, "%s(data=) on a freed discrete y is not "
+                     "implemented (each panel numbers its own levels)", gname);
+            return -1;
+        }
+        Column *slot = cp_xcalloc(1, sizeof(Column));
+        slot->name = lf->yc->name; slot->type = COL_NUM;
+        slot->num = cp_xmalloc((size_t)(lf->n ? lf->n : 1) * sizeof(double));
+        for (int r = 0; r < lf->n; r++) {
+            char lb[256];
+            cell_label(lf->yc, r, lb, sizeof lb);
+            int k = -1;
+            for (int q = 0; q < yf->nlev; q++)
+                if (!strcmp(lb, yf->levels[q])) { k = q; break; }
+            if (k < 0) {
+                snprintf(err, CP_ERRLEN, "%s(data=%s): y value \"%s\" is not a "
+                         "level of the main data's `%s`", gname, L->data, lb, ycol);
+                return -1;
+            }
+            slot->num[r] = k + 1;
+        }
+        lf->yc = slot;
     }
     if (lf->yc->type != COL_NUM) {
         snprintf(err, CP_ERRLEN, "%s(data=%s): y column `%s` must be numeric",
@@ -1317,8 +1339,12 @@ static int layer_frame_build(LayerFrame *lf, DataFrame *d2, const Layer *L,
         }
     }
     /* colour, as on geom_rect(data=): a layer colour= wins; else the mapped
-     * aes reads this file's column through the main data's scale */
-    if (!L->has_color && spec->colour.col && (cf || cont_col)) {
+     * aes reads this file's column through the main data's scale. Text
+     * takes colour=, never fill= (ggplot2 draws it black), so a fill=
+     * mapping asks nothing of a text layer's file. */
+    int txt = L->type == GEOM_TEXT || L->type == GEOM_LABEL;
+    if (!L->has_color && spec->colour.col && (cf || cont_col)
+        && !(txt && spec->colour.is_fill)) {
         const Column *c = df_col(d2, spec->colour.col);
         if (!c) {
             snprintf(err, CP_ERRLEN, "%s(data=%s): colour/fill column `%s` not in "
@@ -2356,7 +2382,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         if (!layer_df[li] && !(layer_df[li] = df_read_csv(L->data, err)))
             return -1;
         if (layer_frame_build(&layer_fr[li], layer_df[li], L, gname,
-                              spec, ff, xf, disc_x, disc_y, cf, cont_col, pff, err))
+                              spec, ff, xf, disc_x, disc_y, yf, cf, cont_col, pff, err))
             return -1;
         has_fr[li] = 1;
         layer_pan[li] = layer_fr[li].pan;     /* share the one panel index */
@@ -2529,14 +2555,45 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         }
     }
 
+    /* annotate(x="lvl"/y="lvl"): a discrete axis's level, at its slot */
+    double ann_xy[MAX_ANNOTATES][2];
+    for (int a2 = 0; a2 < spec->nannos; a2++) {
+        const Annotate *an = &spec->annos[a2];
+        ann_xy[a2][0] = an->x; ann_xy[a2][1] = an->y;
+        for (int ax2 = 0; ax2 < 2; ax2++) {
+            const char *lv = ax2 ? an->y_level : an->x_level;
+            if (!lv) continue;
+            const Factor *af = ax2 ? (disc_y ? yf : NULL) : (disc_x ? xf : NULL);
+            int k = -1;
+            for (int q = 0; af && q < af->nlev; q++)
+                if (!strcmp(af->levels[q], lv)) { k = q; break; }
+            if (k < 0) {
+                snprintf(err, CP_ERRLEN, af
+                         ? "annotate(%c=\"%s\"): not a level of the %c axis"
+                         : "annotate(%c=\"%s\"): a level name needs a discrete %c axis",
+                         ax2 ? 'y' : 'x', lv, ax2 ? 'y' : 'x');
+                return -1;
+            }
+            if (ax2 ? spec->free_y : spec->free_x) {
+                snprintf(err, CP_ERRLEN, "annotate(%c=\"%s\") on a freed axis is not "
+                         "implemented (each panel numbers its own levels)",
+                         ax2 ? 'y' : 'x', lv);
+                return -1;
+            }
+            ann_xy[a2][ax2] = k + 1;
+        }
+    }
+#define ANX(a2) ann_xy[a2][0]
+#define ANY(a2) ann_xy[a2][1]
+
     /* annotate() marks participate in scale training too (as in ggplot2) —
      * a label placed just past the data would otherwise silently clip. Rides
      * the same accumulators as the 4-corner rect layers, which only merge
      * into continuous axes. */
     for (int a2 = 0; a2 < spec->nannos; a2++) {
         const Annotate *an = &spec->annos[a2];
-        double xs[2] = { an->x, an->has_xend ? an->xend : an->x };
-        double ys2[2] = { an->y, an->has_yend ? an->yend : an->y };
+        double xs[2] = { ANX(a2), an->has_xend ? an->xend : ANX(a2) };
+        double ys2[2] = { ANY(a2), an->has_yend ? an->yend : ANY(a2) };
         for (int k = 0; k < 2; k++) {
             double t = cp_logt(spec->log_x, xs[k]), u = TY(ys2[k]);
             if (!isfinite(t) || !isfinite(u)) { d_ref++; continue; }
@@ -4092,7 +4149,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 GTable *lg = build_legend(cr, th, bt, &pf, pc2,
                                    haspoint, hasline || hasseg || (hasdens && !dens_filled) || hasrange,
                                    hasbox || hasbar || hascol || hasrect || hastile || hasribbon || dens_filled || hasridge,
-                                   hastext, NULL, nc2, spec->legend_reverse, NULL, err);
+                                   hastext && !spec->colour.is_fill, NULL, nc2, spec->legend_reverse, NULL, err);
                 if (!lg) return -1;
                 /* inside the panels every block has its own panel to sit
                  * in whatever the grid shape; only the margin placement
@@ -4125,7 +4182,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             GTable *lg = build_legend(cr, th, col_title, cf, pal, haspoint,
                                hasline || hasseg || (hasdens && !dens_filled) || hasrange,
                                hasbox || hasbar || hascol || hasrect || hastile || hasribbon || dens_filled || hasridge,
-                               hastext, NULL, nc2, spec->legend_reverse,
+                               hastext && !spec->colour.is_fill, NULL, nc2, spec->legend_reverse,
                                lt_merge ? lt_keys : NULL, err);
             if (!lg) return -1;
             guides[nguide++] = lg;
@@ -6262,8 +6319,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
          * BEFORE it; they used to follow it and stayed unflipped. */
         for (int a2 = 0; a2 < spec->nannos; a2++) {
             const Annotate *an = &spec->annos[a2];
-            double ax = NPCX(genome_x ? an->x : cp_logt(spec->log_x, an->x));
-            double ay = NPCY(TY(an->y));
+            double ax = NPCX(genome_x ? ANX(a2) : cp_logt(spec->log_x, ANX(a2)));
+            double ay = NPCY(TY(ANY(a2)));
             if (an->kind == ANNO_TEXT) {
                 g = gt_add(T, G_TEXT, R, C, R, C);
                 g->str = an->label;

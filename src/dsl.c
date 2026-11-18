@@ -2576,6 +2576,12 @@ static int parse_term(P *p, PlotSpec *spec) {
                 if (!v || parse_color(v, &a->color))
                     return fail(p, "annotate() colour invalid (use names or #RRGGBB)", "");
                 a->has_color = 1;
+            } else if ((!strcmp(key, "x") || !strcmp(key, "y")) && *p->s == '"') {
+                /* a level of a discrete axis: x="HCC" sits at that slot */
+                char *v = string_lit(p);
+                if (!v) return fail(p, "annotate() %s= expects a number or a quoted level", key);
+                if (key[0] == 'x') { a->x_level = v; a->has_x = 1; }
+                else { a->y_level = v; a->has_y = 1; }
             } else {
                 char *end;
                 double v = strtod(p->s, &end);
