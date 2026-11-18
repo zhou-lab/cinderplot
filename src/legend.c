@@ -70,7 +70,7 @@ double cp_colourbar_across_pt_fs(cairo_t *cr, const FillScale *fs, double lo, do
         double tw = text_w(cr, SZ_LEGEND_TEXT, s);
         if (tw > wmax) wmax = tw;
     }
-    return LEG_BAR + TICK_LEN + TXT_GAP + wmax;
+    return CBAR_THICK(1) + TICK_LEN + TXT_GAP + wmax;
 }
 
 double cp_colourbar_across_pt(cairo_t *cr, double lo, double hi) {
@@ -117,7 +117,7 @@ void cp_key_draw_grid(GTable *T, int r, int c, char *const *labels, const Col *p
     }
 }
 
-/* The colourbar: LEG_LEN long, LEG_BAR thick, its lower-left corner at
+/* The colourbar: LEG_LEN long, LEG_BAR thick (or guide_colourbar()'s size), its lower-left corner at
  * (bx0, by0) npc of cell (r, c). `vert` stands it up (values increase
  * upward) or lays it flat (values increase rightward); `dir` says which side
  * the ticks and labels go -- +1 right of a vertical bar or above a flat one,
@@ -127,8 +127,8 @@ void cp_key_draw_grid(GTable *T, int r, int c, char *const *labels, const Col *p
 void cp_colourbar_draw(GTable *T, int r, int c, const FillScale *fs,
                        double lo, double hi, int vert, int dir,
                        double bx0, double by0, double cw_pt, double ch_pt) {
-    double barT = vert ? LEG_BAR / cw_pt : LEG_BAR / ch_pt;
-    double barL = vert ? LEG_LEN / ch_pt : LEG_LEN / cw_pt;
+    double barT = vert ? CBAR_THICK(1) / cw_pt : CBAR_THICK(0) / ch_pt;
+    double barL = vert ? CBAR_LEN(1) / ch_pt : CBAR_LEN(0) / cw_pt;
     const int NSTEP = 64;
     Grob *g;
     for (int k = 0; k < NSTEP; k++) {

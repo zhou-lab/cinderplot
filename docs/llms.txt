@@ -536,8 +536,10 @@ takes `guides(colour=guide_colourbar(direction="horizontal", barwidth=6,
 barheight=0.5))`: flat with the labels underneath, the compact bar to put
 under a facet; barwidth=/barheight= are in lines (14.4 pt) or `unit()`, and
 size a vertical bar too (default 12 x 80 pt; horizontal 80 x 10) -- the
-`coord_polar()` ring bars as well: `guides(fill=guide_colourbar(
-barheight=unit(60, "pt"), barwidth=unit(9, "pt")))`.
+`coord_polar()` ring bars, the heatmap legend() bars and the track
+colourbar as well: `guides(fill=guide_colourbar(barheight=unit(60, "pt"),
+barwidth=unit(9, "pt")))` (a standing bar is barheight long, a flat one
+barwidth; the heatmap/track default is 28 x 4 mm).
 `guides(colour=guide_legend(ncol=N))` folds a long discrete legend
 over N columns, column-major; `nrow=N` caps the rows instead;
 `reverse=TRUE` flips the key order without touching the factor (the stacked

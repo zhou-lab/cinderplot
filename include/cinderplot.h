@@ -975,6 +975,15 @@ int render_tracks(const PlotSpec *spec, const char *out,
 #define MM       (72.0 / 25.4)
 #define LEG_BAR  (4.0 * MM)         /* colorbar thickness  */
 #define LEG_LEN  (28.0 * MM)        /* colorbar length     */
+/* guides(fill=guide_colourbar(barwidth=, barheight=)) in pt (0 = unset), for
+ * the heatmap and track colourbars as plot mode has them: on a standing bar
+ * barheight is the length and barwidth the thickness, on a flat one the
+ * other way round, as in ggplot2 */
+extern double cp_cbar_w, cp_cbar_h;
+#define CBAR_LEN(vert)   ((vert) ? (cp_cbar_h > 0 ? cp_cbar_h : LEG_LEN) \
+                                 : (cp_cbar_w > 0 ? cp_cbar_w : LEG_LEN))
+#define CBAR_THICK(vert) ((vert) ? (cp_cbar_w > 0 ? cp_cbar_w : LEG_BAR) \
+                                 : (cp_cbar_h > 0 ? cp_cbar_h : LEG_BAR))
 #define LEG_GRID (4.0 * MM)         /* discrete key square */
 #define LEG_GAP  (2.0 * MM)         /* gap between keys    */
 #define CP_LEG_MAXBR 16             /* colourbar break slots */

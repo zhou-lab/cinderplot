@@ -519,7 +519,7 @@ static double legend_block_h(const RObj *r, const RObj *tg, const char *title,
         rows = (rows + r->leg_kcols - 1) / r->leg_kcols;
     double content = r->leg_discrete
         ? rows * LEG_GRID / ch_pt + (rows - 1) * LEG_GAP / ch_pt
-        : LEG_LEN / ch_pt;
+        : CBAR_LEN(1) / ch_pt;
     return content + titleSpace;
 }
 
@@ -649,8 +649,8 @@ static void draw_one_legend(GTable *T, const RObj *r, const RObj *tg,
     } else {                                        /* continuous colorbar */
         double lo, hi; const FillScale *fs;
         legend_scale(tg, spec, dmin, dmax, &lo, &hi, &fs);
-        double barT = vert ? LPTX(LEG_BAR) : LPTY(LEG_BAR);
-        double barL = vert ? LPTY(LEG_LEN) : LPTX(LEG_LEN);
+        double barT = vert ? LPTX(CBAR_THICK(1)) : LPTY(CBAR_THICK(0));
+        double barL = vert ? LPTY(CBAR_LEN(1)) : LPTX(CBAR_LEN(0));
         double bx0, by0;
         if (vert) {
             by0 = blockTop - titleSpace - barL;
@@ -1469,7 +1469,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             legend_scale(&ro[r->target], spec, dmin, dmax, &lo, &hi, &fs);
             double barW = cp_colourbar_across_pt_fs(cr, fs, lo, hi);
             across = (pk == PL_BENEATH || pk == PL_TOP_OF)
-                   ? LEG_BAR + TICK_LEN + TXT_GAP + legH
+                   ? CBAR_THICK(0) + TICK_LEN + TXT_GAP + legH
                      + (title ? baseH + TXT_GAP : 0)                          /* height */
                    : fmax(barW, titleW);
         }

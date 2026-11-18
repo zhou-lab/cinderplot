@@ -1498,7 +1498,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
         } else {
             FillScale lfs = spec->has_fill ? spec->fill : (FillScale){0};
             leg_across = cp_colourbar_across_pt_fs(cr, &lfs, TRK_FLO, TRK_FHI);
-            leg_h = LEG_LEN;
+            leg_h = CBAR_LEN(1);
         }
         if (leg_title) {
             leg_across = fmax(leg_across, text_w(cr, SZ_TRACK, leg_title));
@@ -2404,7 +2404,7 @@ gx_no_fan:
             FillScale fs = spec->has_fill ? spec->fill : (FillScale){0};
             if (!spec->has_fill) fs.kind = FILL_PARULA;
             cp_colourbar_draw(T, R, C, &fs, TRK_FLO, TRK_FHI, 1, 1, sx,
-                              top - titleSpace - LEG_LEN / ch_pt, cw_pt, ch_pt);
+                              top - titleSpace - CBAR_LEN(1) / ch_pt, cw_pt, ch_pt);
         }
         if (leg_title) {
             g = gt_add(T, G_TEXT, R, C, R, C);
