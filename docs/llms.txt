@@ -223,7 +223,9 @@ and ignored (the output path is a command-line argument here).
   ggridges: one joint bandwidth (the mean of each ridge's bw.nrd0), each
   ridge over the data range +- 3 bandwidths, heights scaled to the panel's
   tallest, grey70 fill when unmapped, the top row drawn first. Ridge heights
-  match ggridges 0.5 `layer_data()`.
+  match ggridges 0.5 `layer_data()`. `linewidth=` (ggplot units, 0.5
+  default) and a constant `colour=` set the outline on both density geoms:
+  `geom_density_ridges(alpha=0.7, scale=1.1, colour="white", linewidth=0.3)`.
 - `geom_ribbon()` draws the band `aes(ymin=, ymax=)` over x, one per
   `colour=`/`group=` level, filled (grey20 by default, as ggplot2) with no
   outline -- the shaded CI: `aes(x, y, ymin=lo, ymax=hi, colour=g) +

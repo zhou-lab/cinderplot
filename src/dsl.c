@@ -2000,7 +2000,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                 } else if ((gt == GEOM_LINE || gt == GEOM_SMOOTH || gt == GEOM_SEGMENT
                             || gt == GEOM_HLINE || gt == GEOM_VLINE || gt == GEOM_ABLINE
                             || gt == GEOM_ERRORBAR || gt == GEOM_LINERANGE
-                            || gt == GEOM_BOXPLOT)
+                            || gt == GEOM_BOXPLOT || gt == GEOM_DENSITY || gt == GEOM_RIDGES)
                            && (!strcmp(key, "size") || !strcmp(key, "linewidth"))) {
                     /* the stroke width of a line geom, in ggplot's linewidth
                      * units (0.5 = geom_line's default, 1 = geom_smooth's).

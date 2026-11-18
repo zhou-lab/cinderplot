@@ -5149,7 +5149,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     g->col = dens_filled
                            ? (DL->has_color && !DL->color_is_fill ? DL->color : C_BLACK)
                            : DL->has_color ? DL->color : cf ? pal[gg] : C_BLACK;
-                    g->lw = lw_pt(0.5); g->clip = 1; g->keep_alpha = dens_filled;
+                    g->lw = LAYER_LW(DL, 0.5); g->clip = 1; g->keep_alpha = dens_filled;
                 }
             } else if (gt == GEOM_COL && colsum) {
                 /* stacked by fill group, as geom_bar: values summed per
@@ -5439,7 +5439,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         g->n = RIDGE_N; g->px = qx; g->py = qy;
                         g->col = RL->has_color && !RL->color_is_fill ? RL->color
                                : cf && !filled ? pal[gg] : C_BLACK;
-                        g->lw = lw_pt(0.5); g->clip = 1; g->keep_alpha = 1;
+                        g->lw = LAYER_LW(RL, 0.5); g->clip = 1; g->keep_alpha = 1;
                     }
                 }
             } else if (gt == GEOM_RIBBON) {
