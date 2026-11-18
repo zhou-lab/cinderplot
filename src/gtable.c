@@ -315,15 +315,16 @@ static cairo_surface_t *surface_create_page(const char *out, double w_pt, double
 cairo_status_t cp_surface_emit(cairo_surface_t *surf, const char *out) {
 #if CAIRO_HAS_TEE_SURFACE
     if (cairo_surface_get_type(surf) == CAIRO_SURFACE_TYPE_TEE && g_tee_page) {
-        /* measure, write the page, and only then let the tee go: finishing
-         * a tee may finish the page under it (cairo version dependent) */
+        /* measure, then write the page; the tee itself (the caller's
+         * surface) is never finished or destroyed here */
         double b[4];
         cairo_surface_flush(surf);
         int ok = tight_box(g_tee_rec, b);
         cairo_surface_t *page = g_tee_page;
         g_tee_page = NULL;
         cairo_status_t st = cp_surface_emit(page, out);
-        cairo_surface_destroy(surf);
+        /* drop only the references taken here; the caller destroys surf */
+        cairo_surface_destroy(page);
         cairo_surface_destroy(g_tee_rec);
         g_tee_rec = NULL;
         if (st == CAIRO_STATUS_SUCCESS && ok && svg_set_viewbox(out, b))
@@ -339,15 +340,16 @@ cairo_status_t cp_surface_emit(cairo_surface_t *surf, const char *out) {
         cairo_t *c = cairo_create(page);
         cairo_set_source_surface(c, surf, -x0, -y0);
         cairo_paint(c);
-        cairo_destroy(c);
-        cairo_surface_destroy(surf);
+        cairo_destroy(c);                       /* surf stays the caller's to destroy */
         for (int i = 0; i < nsvgt; i++) {      /* the labels move with the page */
             SvgTxt *t = &svgt[i];
             if (t->has_m) { t->m[4] -= x0; t->m[5] -= y0; }
             else { t->x -= x0; t->y -= y0; }
         }
         cairo_status_t st = cairo_surface_status(page);
-        return st == CAIRO_STATUS_SUCCESS ? cp_surface_emit(page, out) : st;
+        if (st == CAIRO_STATUS_SUCCESS) st = cp_surface_emit(page, out);
+        cairo_surface_destroy(page);
+        return st;
     }
     if (cairo_surface_get_type(surf) == CAIRO_SURFACE_TYPE_IMAGE) {
         cairo_surface_flush(surf);
