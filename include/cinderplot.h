@@ -69,7 +69,12 @@ extern double cp_base_size;
  * pt if > 0, rel() of base_size if < 0, 0 = ggplot's rel(1.2) / rel(0.8).
  * SZ_TICK is the tick labels only; SZ_AXIS_TEXT stays the 0.8 x base that
  * strips, legends and captions inherit, as ggplot2's `text` does. */
-extern double cp_title_sz, cp_axis_text_sz;
+extern double cp_title_sz, cp_axis_text_sz, cp_axis_title_sz;
+/* theme(axis.title=element_text(size=)): the axis titles, and the heatmap's
+ * annotation titles and group labels and the track's group labels -- each
+ * mode's own default when unset (base in plot mode, 0.8 x base elsewhere) */
+#define SZ_AXTITLE(dflt) (cp_axis_title_sz > 0 ? cp_axis_title_sz \
+                          : cp_axis_title_sz < 0 ? -cp_axis_title_sz * cp_base_size : (dflt))
 #define SZ_TITLE     (cp_title_sz > 0 ? cp_title_sz \
                       : cp_title_sz < 0 ? -cp_title_sz * cp_base_size : 1.2 * cp_base_size)
 #define SZ_TICK      (cp_axis_text_sz > 0 ? cp_axis_text_sz \
@@ -865,7 +870,8 @@ typedef struct {
                                      * pt if > 0, rel() of base_size if < 0,
                                      * 0 = ggplot's rel(0.8) */
     double legend_text_sz;          /* theme(legend.text=element_text(size=)), same coding */
-    double title_sz, axis_text_sz;  /* theme(plot.title= / axis.text=element_text(size=)), same coding */
+    double title_sz, axis_text_sz, axis_title_sz;  /* theme(plot.title= / axis.text= /
+                                     * axis.title=element_text(size=)), same coding */
     /* theme(strip.text=element_text(face=, colour=)): facet strips, and the
      * coord_polar() ring plot's wedge names (the polar analogue of facets) */
     int strip_bold; Col strip_col; int has_strip_col;

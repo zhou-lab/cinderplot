@@ -3570,6 +3570,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     }
     if (spec->axis_text_blank_y) ylab_w = 0;   /* theme(axis.text.y=element_blank()) */
     double labh = font_h(cr, SZ_TICK), baseh = font_h(cr, SZ_BASE);
+    double axth = font_h(cr, SZ_AXTITLE(SZ_BASE));   /* theme(axis.title=) */
     /* strip text: ggplot's rel(0.8) of base, or theme(strip.text=) */
     double stx_sz = spec->strip_x_sz > 0 ? spec->strip_x_sz
                   : spec->strip_x_sz < 0 ? -spec->strip_x_sz * SZ_BASE : SZ_AXIS_TEXT;
@@ -3807,7 +3808,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     if (spec->axis_text_blank_y) vcats = 0;
     double auto_panelw = hcats ? hcats * catpitch : 4.0 * 72;
     double auto_panelh = vcats ? vcats * catpitch : 2.6 * 72;
-    double auto_h_raw = MARGIN * 2 + labh + TICK_LEN + TXT_GAP + baseh
+    double auto_h_raw = MARGIN * 2 + labh + TICK_LEN + TXT_GAP + axth
                       + (spec->lab_title ? font_h(cr, SZ_TITLE) : 0)
                       + nrowp * (auto_panelh + band_h) + nstriprows * striph
                       + (nrowp - 1) * PANEL_SPACE;
@@ -3816,7 +3817,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
      * to the last panel): title block, last band, axis rows and margins */
     double leg_chrome_h = MARGIN + (spec->lab_title ? font_h(cr, SZ_TITLE) : 0)
                         + (spec->lab_subtitle ? baseh : spec->lab_title ? HALF_LINE : 0)
-                        + band_h + TICK_LEN + TXT_GAP + labh + HALF_LINE / 2 + baseh
+                        + band_h + TICK_LEN + TXT_GAP + labh + HALF_LINE / 2 + axth
                         + (spec->lab_caption ? fmax(MARGIN, labh) : MARGIN);
 
     Col *pal = NULL;
@@ -4231,12 +4232,12 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     int rstrip_c = 2 * ncolp + 3;
     T->ncol = 2 * ncolp + 6 + (grid ? 1 : 0);
     T->colw[0] = upt(MARGIN);
-    T->colw[1] = upt(baseh);
+    T->colw[1] = upt(axth);
     T->colw[2] = upt(HALF_LINE / 2);
     /* the dartboard draws no Cartesian axes: reserve none (the radar keeps
      * its historical layout) */
     int polar_tiles = spec->polar && hastile;
-    T->colw[1] = upt(polar_tiles ? 0 : baseh);
+    T->colw[1] = upt(polar_tiles ? 0 : axth);
     T->colw[3] = upt(polar_tiles ? 0 : ylab_w + TXT_GAP + TICK_LEN + band_wl);
     /* Under free scales the gap between panels has to hold an axis, not just
      * whitespace: every panel carries its own ticks and labels. Each gap is
@@ -4287,7 +4288,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     if (spec->coord_ratio > 0 && ps[0].x1 > ps[0].x0 && ps[0].y1 > ps[0].y0)
         fix_aspect = spec->coord_ratio * (ps[0].y1 - ps[0].y0) / (ps[0].x1 - ps[0].x0);
     if (fix_aspect > 0 && (w_pt <= 0 || h_pt <= 0)) {
-        double chrome_w = MARGIN + ylab_w + TICK_LEN + TXT_GAP + baseh + MARGIN
+        double chrome_w = MARGIN + ylab_w + TICK_LEN + TXT_GAP + axth + MARGIN
                         + striph_side + (leg ? gt_fixed_w(leg) + 2 * HALF_LINE : 0)
                         + (ncolp - 1) * PANEL_SPACE;
         double chrome_h = auto_h_raw - nrowp * auto_panelh;
@@ -4320,7 +4321,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
              * column — the block is pinned under the panel and cannot
              * borrow a neighbour's space */
             if (fc_leg_w > panelw) panelw = fc_leg_w;
-            double chrome = MARGIN + ylab_w + TICK_LEN + TXT_GAP + baseh + MARGIN
+            double chrome = MARGIN + ylab_w + TICK_LEN + TXT_GAP + axth + MARGIN
                           + striph_side       /* facet_grid row strips */
                           + (leg ? gt_fixed_w(leg) + 2 * HALF_LINE : 0);
             w_pt = chrome + ncolp * panelw + (ncolp - 1) * PANEL_SPACE;
@@ -4341,7 +4342,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         }
     }
     if (fc_leg_w > 0) {
-        double chrome = MARGIN + ylab_w + TICK_LEN + TXT_GAP + baseh + MARGIN;
+        double chrome = MARGIN + ylab_w + TICK_LEN + TXT_GAP + axth + MARGIN;
         double colw2 = (w_pt - chrome - (ncolp - 1) * PANEL_SPACE) / ncolp;
         if (fc_leg_w > colw2)
             fprintf(stderr, "cinderplot: warning: the `%s` legend block is "
@@ -4382,7 +4383,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             /* Rough panel width: the canvas less the left chrome and any
              * legend, split between the columns. Exact enough to decide
              * whether the labels fit, which is all this has to answer. */
-            double chrome = MARGIN + ylab_w + TICK_LEN + TXT_GAP + baseh + MARGIN
+            double chrome = MARGIN + ylab_w + TICK_LEN + TXT_GAP + axth + MARGIN
                           + striph_side       /* facet_grid row strips */
                           + (leg ? gt_fixed_w(leg) + 2 * HALF_LINE : 0);
             double panel_w = fmax(1, (w_pt - chrome) / ncolp);
@@ -4445,11 +4446,11 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 100 * blab_h / h_pt);
     {
         const char *wide[3] = { spec->lab_title, spec->lab_subtitle, bottom_title };
-        const double wsz[3] = { SZ_TITLE, SZ_BASE, SZ_BASE };
+        const double wsz[3] = { SZ_TITLE, SZ_BASE, SZ_AXTITLE(SZ_BASE) };
         /* the title and subtitle start at the panel's left edge (ggplot's
          * plot.title.position = "panel"), past the y title and tick labels,
          * so that is the room they have -- not the whole canvas */
-        double left = MARGIN + (polar_tiles ? 0 : baseh) + HALF_LINE / 2
+        double left = MARGIN + (polar_tiles ? 0 : axth) + HALF_LINE / 2
                     + (polar_tiles ? 0 : ylab_w + TXT_GAP + TICK_LEN + band_wl);
         for (int i = 0; i < 3; i++)
             if (wide[i] && text_w(cr, wsz[i], wide[i])
@@ -4458,7 +4459,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         "the %.1fin canvas and will be clipped; shorten it or give "
                         "a wider --size\n", i == 0 ? "title" : i == 1 ? "subtitle"
                         : "x axis title", wide[i], w_pt / 72);
-        if (left_title && text_w(cr, SZ_BASE, left_title) > h_pt - 2 * MARGIN)
+        if (left_title && text_w(cr, SZ_AXTITLE(SZ_BASE), left_title) > h_pt - 2 * MARGIN)
             fprintf(stderr, "cinderplot: warning: the y axis title \"%s\" is taller "
                     "than the %.1fin canvas and will be clipped; shorten it or give "
                     "a taller --size\n", left_title, h_pt / 72);
@@ -4479,7 +4480,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     if (bleg) T->rowh[r_bleg] = upt(bleg_h);
     T->rowh[r_axis]     = upt(polar_tiles ? 0 : TICK_LEN + TXT_GAP + blab_h);
     T->rowh[r_axis + 1] = upt(HALF_LINE / 2);
-    T->rowh[r_axis + 2] = upt(polar_tiles ? 0 : baseh);
+    T->rowh[r_axis + 2] = upt(polar_tiles ? 0 : axth);
     if (fc_leg_h > 0) T->rowh[r_axis + 3] = upt(fc_leg_h);
     T->rowh[r_last] = upt(spec->lab_caption ? fmax(MARGIN, font_h(cr, SZ_AXIS_TEXT)) : MARGIN);
 
@@ -4502,10 +4503,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     }
     if (th->axis_title_on && !spec->polar) {
         g = gt_add(T, G_TEXT, r_axis + 2, PC(0), r_axis + 2, PC(ncolp - 1));
-        g->str = bottom_title; g->size = SZ_BASE; g->col = th->axis_title;
+        g->str = bottom_title; g->size = SZ_AXTITLE(SZ_BASE); g->col = th->axis_title;
         g->tx = 0.5; g->ty = 1; g->hj = 0.5; g->va = V_TOP;
         g = gt_add(T, G_TEXT, PR(0), 1, PR(nrowp - 1), 1);
-        g->str = left_title; g->size = SZ_BASE; g->col = th->axis_title;
+        g->str = left_title; g->size = SZ_AXTITLE(SZ_BASE); g->col = th->axis_title;
         g->tx = 0.5; g->ty = 0.5; g->rot90 = 1;
     }
     if (leg) {

@@ -3719,7 +3719,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                 }
             } else if (!strcmp(key, "strip.text") || !strcmp(key, "strip.text.x")
                        || !strcmp(key, "strip.text.y") || !strcmp(key, "legend.text")
-                       || !strcmp(key, "plot.title")) {
+                       || !strcmp(key, "plot.title") || !strcmp(key, "axis.title")) {
                 /* element_text(size=N) in pt, or size=rel(r) of base_size;
                  * ggplot's default is rel(0.8). .x is the top strips, .y
                  * facet_grid's row strips. */
@@ -3788,6 +3788,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                 if (v == 0) { /* face=/colour= only: sizes stay as they were */ }
                 else if (!strcmp(key, "legend.text")) spec->legend_text_sz = v;
                 else if (!strcmp(key, "plot.title")) spec->title_sz = v;
+                else if (!strcmp(key, "axis.title")) spec->axis_title_sz = v;
                 else {
                     if (strcmp(key, "strip.text.y")) spec->strip_x_sz = v;
                     if (strcmp(key, "strip.text.x")) spec->strip_y_sz = v;
@@ -3812,7 +3813,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                                "the rest — supported here: legend.position, "
                                "legend.position.inside, legend.key.size, "
                                "legend.key.height, legend.key.width, "
-                               "legend.key.spacing.y, legend.text, strip.text[.x|.y], axis.text[.x|.y], plot.title", key);
+                               "legend.key.spacing.y, legend.text, strip.text[.x|.y], axis.text[.x|.y], axis.title, plot.title", key);
             skip_ws(p);
             if (*p->s == ',') { p->s++; skip_ws(p); }
         }

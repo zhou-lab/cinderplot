@@ -701,19 +701,19 @@ static double label_band(cairo_t *cr, const RObj *r, Side side) {
                 if (r->o->label_angle == 90) {    /* on end: the longest name */
                     double wmax = 0;
                     for (int k = 0; k < r->ann_f->nlev; k++) {
-                        double tw = text_w(cr, SZ_AXIS_TEXT, r->ann_f->levels[k]);
+                        double tw = text_w(cr, SZ_AXTITLE(SZ_AXIS_TEXT), r->ann_f->levels[k]);
                         if (tw > wmax) wmax = tw;
                     }
                     return ANN_LEAD + TXT_GAP * 0.5 + wmax;
                 }
                 cairo_font_extents_t fe;
-                cairo_set_font_size(cr, SZ_AXIS_TEXT);
+                cairo_set_font_size(cr, SZ_AXTITLE(SZ_AXIS_TEXT));
                 cairo_font_extents(cr, &fe);
                 return ANN_LEAD + TXT_GAP * 0.5 + fe.ascent + fe.descent;
             }
         }
         return r->o->title && r->o->title_side == side
-             ? TXT_GAP + text_w(cr, SZ_AXIS_TEXT, r->o->title) : 0;
+             ? TXT_GAP + text_w(cr, SZ_AXTITLE(SZ_AXIS_TEXT), r->o->title) : 0;
     }
     if (r->o->type != HM_HEATMAP || !r->m) return 0;
     const Matrix *m = r->m;
@@ -724,7 +724,7 @@ static double label_band(cairo_t *cr, const RObj *r, Side side) {
     char **lab = row ? m->rn : m->cn;
     double wmax = 0;
     for (int k = 0; k < n; k++) {
-        double tw = text_w(cr, SZ_AXIS_TEXT, lab[k]);
+        double tw = text_w(cr, SZ_TICK, lab[k]);
         if (tw > wmax) wmax = tw;
     }
     return TXT_GAP + wmax;
@@ -1403,6 +1403,10 @@ int render_heatmap(const PlotSpec *spec, const char *out,
     cairo_font_extents_t fe;
     cairo_set_font_size(cr, SZ_AXIS_TEXT); cairo_font_extents(cr, &fe);
     double axH = fe.ascent + fe.descent;         /* tick/label line height */
+    cairo_set_font_size(cr, SZ_TICK); cairo_font_extents(cr, &fe);
+    double tickH = fe.ascent + fe.descent;       /* a row/column name line */
+    cairo_set_font_size(cr, SZ_LEGEND_TEXT); cairo_font_extents(cr, &fe);
+    double legH = fe.ascent + fe.descent;        /* a colour-bar label line */
     cairo_set_font_size(cr, SZ_BASE); cairo_font_extents(cr, &fe);
     double baseH = fe.ascent + fe.descent;       /* legend title line height */
     cairo_set_font_size(cr, SZ_TITLE); cairo_font_extents(cr, &fe);
@@ -1436,7 +1440,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
         if (r->o->type != HM_ANNOTATION || !r->o->label_data || r->ann_horiz || !r->ann_f) continue;
         double wmax = 0;
         for (int k = 0; k < r->ann_f->nlev; k++) {
-            double tw = text_w(cr, SZ_AXIS_TEXT, r->ann_f->levels[k]);
+            double tw = text_w(cr, SZ_AXTITLE(SZ_AXIS_TEXT), r->ann_f->levels[k]);
             if (tw > wmax) wmax = tw;
         }
         double e = ANN_LEAD + TXT_GAP + wmax;
@@ -1465,7 +1469,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             legend_scale(&ro[r->target], spec, dmin, dmax, &lo, &hi, &fs);
             double barW = cp_colourbar_across_pt_fs(cr, fs, lo, hi);
             across = (pk == PL_BENEATH || pk == PL_TOP_OF)
-                   ? LEG_BAR + TICK_LEN + TXT_GAP + axH
+                   ? LEG_BAR + TICK_LEN + TXT_GAP + legH
                      + (title ? baseH + TXT_GAP : 0)                          /* height */
                    : fmax(barW, titleW);
         }
@@ -1510,8 +1514,8 @@ int render_heatmap(const PlotSpec *spec, const char *out,
         double chrome_w_keep = 0, chrome_h_keep = 0;
         if (hm && hm->w > 0 && hm->h > 0) {
             int rowlab = hm->o->rownames && hm->m->rn, collab = hm->o->colnames && hm->m->cn;
-            double cell_w = collab ? fmax(HM_CELL_BASE, axH * 1.1) : HM_CELL_BASE;
-            double cell_h = rowlab ? fmax(HM_CELL_BASE, axH * 1.1) : HM_CELL_BASE;
+            double cell_w = collab ? fmax(HM_CELL_BASE, tickH * 1.1) : HM_CELL_BASE;
+            double cell_h = rowlab ? fmax(HM_CELL_BASE, tickH * 1.1) : HM_CELL_BASE;
             /* Inter-panel label gutters are a fixed text cost the canvas has
              * to carry. Counting them here, rather than after the canvas is
              * chosen, is what stops auto-fit demanding a --size it was asked to
@@ -1662,7 +1666,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             if (k <= 1) continue;
             double wmax = 0;
             for (int q = 0; q < nl; q++) {
-                double tw = text_w(cr, SZ_AXIS_TEXT, tg->key_lab[q]);
+                double tw = text_w(cr, SZ_LEGEND_TEXT, tg->key_lab[q]);
                 if (tw > wmax) wmax = tw;
             }
             double colw = LEG_GRID + TXT_GAP + wmax;
@@ -1738,7 +1742,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             int nl = tg->key_f->nlev;
             double wmax = 0;
             for (int k = 0; k < nl; k++) {
-                double tw = text_w(cr, SZ_AXIS_TEXT, tg->key_lab[k]);
+                double tw = text_w(cr, SZ_LEGEND_TEXT, tg->key_lab[k]);
                 if (tw > wmax) wmax = tw;
             }
             double cellw = LEG_GRID + TXT_GAP + wmax + 2 * HALF_LINE;
@@ -2038,7 +2042,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                     cy[nrun] = r->b + r->h * (1.0 - (s + e + 1) / 2.0 / r->ann_n);
                     rlev[nrun] = lev; nrun++; s = e + 1;
                 }
-                spread_labels(cy, nrun, PTY(axH * 1.05), r->b, r->b + r->h, ty);
+                spread_labels(cy, nrun, PTY(axH * 1.05 * SZ_AXTITLE(SZ_AXIS_TEXT) / SZ_AXIS_TEXT), r->b, r->b + r->h, ty);
                 for (int k = 0; k < nrun; k++) {
                     if (rlev[k] < 0) continue;                    /* NA run */
                     Col c = r->ann_pal[rlev[k]];
@@ -2055,7 +2059,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                     g = gt_add(T, G_POLYLINE, CR, CC, CR, CC);
                     g->n = NB; g->px = px; g->py = py; g->col = c; g->lw = lw_pt(0.5);
                     g = gt_add(T, G_TEXT, CR, CC, CR, CC);
-                    g->str = r->ann_f->levels[rlev[k]]; g->size = SZ_AXIS_TEXT;
+                    g->str = r->ann_f->levels[rlev[k]]; g->size = SZ_AXTITLE(SZ_AXIS_TEXT);
                     g->col = r->o->has_label_col ? r->o->label_col : c;
                     g->tx = right ? txt_x + PTX(TXT_GAP * 0.5) : txt_x - PTX(TXT_GAP * 0.5);
                     g->ty = ty[k]; g->hj = right ? 0 : 1; g->va = V_INKCENTER;
@@ -2082,7 +2086,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                     s = e + 1;
                     if (lev < 0) continue;                        /* NA run: no label */
                     cx[nrun] = r->l + r->w * (s0 + e + 1) / 2.0 / r->ann_n;
-                    tw[nrun] = PTX(text_w(cr, SZ_AXIS_TEXT, r->ann_f->levels[lev]));
+                    tw[nrun] = PTX(text_w(cr, SZ_AXTITLE(SZ_AXIS_TEXT), r->ann_f->levels[lev]));
                     rlev[nrun] = lev; nrun++;
                 }
                 /* label.angle=90: each label is one text line wide. When the
@@ -2090,7 +2094,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                  * (down to 4pt) before spreading, so forty narrow runs read
                  * as forty labels rather than a fan of leaders */
                 int rot = r->o->label_angle == 90;
-                double fs = SZ_AXIS_TEXT;
+                double fs = SZ_AXTITLE(SZ_AXIS_TEXT);
                 if (rot && nrun > 0) {
                     cairo_font_extents_t fe;
                     cairo_set_font_size(cr, fs);
@@ -2099,7 +2103,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                     double room = r->w * cw_pt / nrun;     /* pt per run, on average */
                     if (lh + TXT_GAP * 0.25 > room)
                         fs = fmax(4.0, fs * room / (lh + TXT_GAP * 0.25));
-                    for (int k = 0; k < nrun; k++) tw[k] = PTX(lh * fs / SZ_AXIS_TEXT);
+                    for (int k = 0; k < nrun; k++) tw[k] = PTX(lh * fs / SZ_AXTITLE(SZ_AXIS_TEXT));
                 }
                 spread_labels_w(cx, tw, nrun, PTX(rot ? TXT_GAP * 0.25 : TXT_GAP), 0, 1, tx);
                 for (int k = 0; k < nrun; k++) {
@@ -2143,7 +2147,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             /* beside the band, at the row-name size, so a stack of thin
              * bars stays as compact as wheatmap's label.side="l" */
             int left = r->o->title_side == SIDE_LEFT;
-            g->size = SZ_AXIS_TEXT;
+            g->size = SZ_AXTITLE(SZ_AXIS_TEXT);
             g->tx = left ? r->l - PTX(TXT_GAP) : r->l + r->w + PTX(TXT_GAP);
             g->ty = r->b + r->h / 2;
             g->hj = left ? 1 : 0; g->va = V_INKCENTER;
@@ -2475,7 +2479,7 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                 double yc = r->b + r->h - (rr + 0.5) * chh;
                 g = gt_add(T, G_TEXT, CR, CC, CR, CC);
                 g->str = m->rn[r->roword[rr]];       /* data name at this slot */
-                g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
+                g->size = SZ_TICK; g->col = C_BLACK;
                 g->tx = right ? r->l + r->w + PTX(TXT_GAP) : r->l - PTX(TXT_GAP);
                 g->ty = yc; g->hj = right ? 0 : 1; g->va = V_INKCENTER;
             }
@@ -2485,10 +2489,10 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             int bottom = r->o->colnames == SIDE_BOTTOM;
             for (int cc = 0; cc < m->nc; cc++) {
                 const char *s = m->cn[r->coword[cc]];
-                double adv = text_w(cr, SZ_AXIS_TEXT, s);
+                double adv = text_w(cr, SZ_TICK, s);
                 double xc = r->l + (cc + 0.5) * cw;
                 g = gt_add(T, G_TEXT, CR, CC, CR, CC);
-                g->str = s; g->size = SZ_AXIS_TEXT; g->col = C_BLACK; g->rot90 = 1;
+                g->str = s; g->size = SZ_TICK; g->col = C_BLACK; g->rot90 = 1;
                 /* rot90 centres the text on ty; push its centre a half-length
                  * plus the gap past the heatmap edge so it hangs clear */
                 g->tx = xc;

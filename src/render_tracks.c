@@ -46,6 +46,14 @@ static double font_h(cairo_t *cr, double size) {
     return fe.ascent + fe.descent;
 }
 
+/* theme(axis.text=element_text(size=)) sets the row names (unfitted: a
+ * given size is what the figure convention asked for) and the axis numbers;
+ * theme(axis.title=) the track names and the row-group labels. Unset, every
+ * label keeps the one flat SZ_TRACK. */
+#define TRK_TICK      (cp_axis_text_sz ? SZ_TICK : SZ_TRACK)
+#define TRK_LEAF(sz)  (cp_axis_text_sz ? SZ_TICK : (sz))
+#define TRK_GROUP(sz) SZ_AXTITLE(sz)
+
 /* auto-fit tuning (pt): matrix sample-row height when rownames are hidden vs
  * shown (a line-height multiplier), the per-weight-unit fallback when no matrix
  * anchors the height, the default region panel width, and overall clamps. */
@@ -815,18 +823,18 @@ static double measure_gutter(cairo_t *cr, double sz, const TrackObj *t,
     for (int r = 0; !meta && r < n; r++) {
         size_t gl = 0;
         const char *leaf = row_leaf(names[r], t->rowgroup, &gl);
-        double lw = text_w(cr, sz, leaf);
+        double lw = text_w(cr, TRK_LEAF(sz), leaf);
         if (lw > leafw) leafw = lw;
         if (gl) {
             char g8[256];
             snprintf(g8, sizeof g8, "%.*s", (int)(gl < sizeof g8 ? gl : sizeof g8 - 1), names[r]);
-            double gw = text_w(cr, sz, g8);
+            double gw = text_w(cr, TRK_GROUP(sz), g8);
             if (gw > grpw) grpw = gw;
         }
     }
     if (ann && ann->nband > 0)                 /* group label = the first band's value */
         for (int s = 0; s < ann->nsamp; s++) {
-            double gw = text_w(cr, sz, ann->val[0][s]);
+            double gw = text_w(cr, TRK_GROUP(sz), ann->val[0][s]);
             if (gw > grpw) grpw = gw;
         }
     w += leafw + (grpw > 0 ? grpw + TXT_GAP * 2 : 0);
@@ -866,7 +874,7 @@ static void draw_row_gutter(GTable *T, cairo_t *cr, int R, int CC, const TrackOb
     for (int rr = 0; !(ann && ann->nband > 0) && rr < n; rr++) {
         size_t gl = 0;
         const char *leaf = row_leaf(names[ord[rr]], t->rowgroup, &gl);
-        double w = text_w(cr, sz, leaf);
+        double w = text_w(cr, TRK_LEAF(sz), leaf);
         if (w > leafw) leafw = w;
     }
     /* per-row leaf labels, shrunk to their row height so a tall label in a
@@ -879,7 +887,8 @@ static void draw_row_gutter(GTable *T, cairo_t *cr, int R, int CC, const TrackOb
             size_t gl = 0;
             const char *leaf = row_leaf(names[ord[rr]], t->rowgroup, &gl);
             g = gt_add(T, G_TEXT, R, 1, R, 1);
-            g->str = (char *)leaf; g->size = fit_height(cr, sz, rowh_pt); g->col = C_BLACK;
+            g->str = (char *)leaf; g->col = C_BLACK;
+            g->size = cp_axis_text_sz ? SZ_TICK : fit_height(cr, sz, rowh_pt);
             g->tx = 1 - bshift; g->ty = top - (rr + 0.5) / n * hh; g->hj = 1; g->va = V_INKCENTER;
         }
     double gx = labw > 0 ? 1 - bshift - (leafw + TXT_GAP * 2) / labw : 0;
@@ -913,7 +922,7 @@ static void draw_row_gutter(GTable *T, cairo_t *cr, int R, int CC, const TrackOb
             if (write_labels) {
                 double gy = top - (rs + re + 1) / 2.0 / n * hh;
                 g = gt_add(T, G_TEXT, R, 1, R, 1);
-                g->str = (char *)gv; g->size = sz; g->col = ann->col[0][ord[rs]];
+                g->str = (char *)gv; g->size = TRK_GROUP(sz); g->col = ann->col[0][ord[rs]];
                 g->tx = gx; g->ty = gy; g->hj = 1; g->va = V_INKCENTER;
             }
             if (re + 1 < n) {                        /* rule below this run */
@@ -959,11 +968,11 @@ static void draw_row_gutter(GTable *T, cairo_t *cr, int R, int CC, const TrackOb
             memcpy(gname, nm, gl); gname[gl] = 0;
             double gy = top - (rs + re + 1) / 2.0 / n * hh;
             g = gt_add(T, G_TEXT, R, 1, R, 1);
-            g->str = gname; g->size = sz; g->col = gc ? *gc : C_BLACK;
+            g->str = gname; g->size = TRK_GROUP(sz); g->col = gc ? *gc : C_BLACK;
             g->tx = gx; g->ty = gy;
             g->hj = 1; g->va = V_INKCENTER;
             if (!bar && gc && labw > 0 && cell_pt > 0) { /* swatch beside the group name */
-                double gw = text_w(cr, sz, gname);
+                double gw = text_w(cr, TRK_GROUP(sz), gname);
                 g = gt_add(T, G_RECT, R, 1, R, 1);
                 g->col = *gc; g->sub = 1;
                 g->x1 = gx - (gw + TXT_GAP) / labw;
@@ -1438,7 +1447,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
      * (The other four modes keep their hierarchy; only track mode flattens.) */
     /* One flat size for every track label -- SZ_TRACK, 9pt at the default base
      * -- so a panel title does not outrank a row label. */
-    double sz_title = SZ_TRACK, sz_samp = SZ_TRACK;
+    double sz_title = cp_title_sz ? SZ_TITLE : SZ_TRACK, sz_samp = SZ_TRACK;
 
     /* widest gene label -> reserved right margin, so transcript names always fit
      * to the right of their model (no left-flip collisions at narrow widths) */
@@ -1503,7 +1512,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
     for (int i = 0; i < ntr; i++) {
         const TrackObj *t = &spec->tobjs[i];
         if (t->name && t->type != TRK_MATRIX && t->type != TRK_SIGNAL) {
-            double w = text_w(cr, SZ_TRACK, t->name);
+            double w = text_w(cr, SZ_AXTITLE(SZ_TRACK), t->name);
             if (w > labw) labw = w;
         }
         if (md[i]) {
@@ -1516,13 +1525,13 @@ int render_tracks(const PlotSpec *spec, const char *out,
              * gutter's left edge, since the strips own the horizontal space */
             double w = measure_gutter(cr, sz_samp, t, ann[i], sd[i]->stripname,
                                       sd[i]->nstrip, 1);
-            if (t->name) w += font_h(cr, SZ_TRACK) + TXT_GAP;
+            if (t->name) w += font_h(cr, SZ_AXTITLE(SZ_TRACK)) + TXT_GAP;
             if (w > labw) labw = w;
         }
     }
     const char *title = spec->lab_title ? spec->lab_title : (spec->region ? spec->region : rgn_disp);
     double titleh = title ? font_h(cr, sz_title) : 0;
-    double axh = font_h(cr, SZ_TRACK);
+    double axh = font_h(cr, TRK_TICK);
     double lab_pad = HALF_LINE * 0.5;      /* row & column label -> heatmap gap (fixed pt) */
 
     /* ---- auto-fit: fill any auto (0) size axis from the measured content.
@@ -1531,15 +1540,15 @@ int render_tracks(const PlotSpec *spec, const char *out,
      * keeps height= a relative weight rather than an absolute size. ---- */
     if (w_pt <= 0 || h_pt <= 0) {
         double aw = MARGIN + labw + (labw > 0 ? lab_pad : 0) + AUTO_PANEL_W + rmargin;
-        double per_u = AUTO_UNIT_H, sumw = 0, samp_line = font_h(cr, sz_samp);
+        double per_u = AUTO_UNIT_H, sumw = 0, samp_line = font_h(cr, TRK_LEAF(sz_samp));
         for (int i = 0; i < ntr; i++)
             sumw += spec->tobjs[i].height > 0 ? spec->tobjs[i].height : 1;
         for (int i = 0; i < ntr; i++)
             if (md[i]) {                                 /* first matrix anchors height */
                 double wgt = spec->tobjs[i].height > 0 ? spec->tobjs[i].height : 1, lbl_pt = 0;
                 for (int c = 0; c < md[i]->nc; c++)
-                    if (md[i]->colid[c]) { double w = text_w(cr, sz_samp, md[i]->colid[c]); if (w > lbl_pt) lbl_pt = w; }
-                double bands = font_h(cr, SZ_TRACK) + TICK_LEN + TXT_GAP + 42 + lbl_pt + lab_pad;
+                    if (md[i]->colid[c]) { double w = text_w(cr, TRK_LEAF(sz_samp), md[i]->colid[c]); if (w > lbl_pt) lbl_pt = w; }
+                double bands = font_h(cr, TRK_TICK) + TICK_LEN + TXT_GAP + 42 + lbl_pt + lab_pad;
                 double row_h = spec->tobjs[i].hide_rownames ? AUTO_MIN_CELL : samp_line * AUTO_ROW_PAD;
                 double rows_pt = md[i]->nr * row_h;
                 if (lg && i == li && rows_pt < leg_h) rows_pt = leg_h;   /* the key beside it fits */
@@ -1717,7 +1726,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
               if (bp < x0 || bp > x1) continue;
               char num[32]; fmt_break(wbr[k], wdec, num, sizeof num);
               char *lab = cp_xmalloc(64); commafy(lab, 64, num);
-              double npc = NPCX(bp), half = text_w(cr, SZ_TRACK, lab) / 2;
+              double npc = NPCX(bp), half = text_w(cr, TRK_TICK, lab) / 2;
               double centre = npc * win_pt;
               /* A tick near the edge would centre its label half outside the
                * panel -- in the gap or the next window, or with one window
@@ -1751,7 +1760,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
             }
         if (spec->tobjs[i].name && tt != TRK_MATRIX && tt != TRK_SIGNAL) {   /* left label */
             g = gt_add(T, G_TEXT, R, 1, R, 1);
-            g->str = spec->tobjs[i].name; g->size = SZ_TRACK; g->col = C_BLACK;
+            g->str = spec->tobjs[i].name; g->size = SZ_AXTITLE(SZ_TRACK); g->col = C_BLACK;
             g->tx = 1; g->ty = 0.5; g->hj = 1; g->va = V_INKCENTER;
         }
 
@@ -1781,7 +1790,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
             if (ymin < 0) snprintf(rd, 32, "[%g - %g]", ymin, ymax);
             else          snprintf(rd, 32, "[0 - %g]", ymax);
             g = gt_add(T, G_TEXT, R, CC, R, CC);
-            g->str = rd; g->size = SZ_TRACK; g->col = C_AXTXT;
+            g->str = rd; g->size = TRK_TICK; g->col = C_AXTXT;
             g->tx = 0.004; g->ty = 0.98; g->hj = 0; g->va = V_TOP;
         } else if (t->type == TRK_GENES) {
             /* gene models (BED12): exon boxes (thin UTR / thick CDS), intron
@@ -2012,12 +2021,12 @@ int render_tracks(const PlotSpec *spec, const char *out,
 #define CELL_COL(v) (dpal ? dpal[(int)(v)] : fill_map_value(&fs, (v), TRK_FLO, TRK_FHI))
             /* bands sized in FIXED points (constant gaps at any figure size). */
             double cell_pt = (spec->tobjs[i].height > 0 ? spec->tobjs[i].height : 1) * per_h;
-            double axtop_pt = font_h(cr, SZ_TRACK) + TICK_LEN + TXT_GAP;   /* kb axis */
+            double axtop_pt = font_h(cr, TRK_TICK) + TICK_LEN + TXT_GAP;   /* kb axis */
             double mapband_pt = 42;                                            /* bezier band */
             double lbl_pt = 0;                                                 /* rotated probe IDs */
             if (!spec->tobjs[i].hide_colnames)
                 for (int c = 0; c < nc; c++)
-                    if (m->colid[c]) { double w = text_w(cr, sz_samp, m->colid[c]); if (w > lbl_pt) lbl_pt = w; }
+                    if (m->colid[c]) { double w = text_w(cr, TRK_LEAF(sz_samp), m->colid[c]); if (w > lbl_pt) lbl_pt = w; }
             /* x=genomic needs no leader fan (the cells are already at their
              * coordinate) and no per-probe label band (there is no column to
              * label), so the heatmap takes the space both would have used. */
@@ -2180,7 +2189,7 @@ int render_tracks(const PlotSpec *spec, const char *out,
                 g->col = C_TICK; g->lw = lw_pt(0.5) * cp_line_scale; g->clip = 1;
                 g->x0 = g->x1 = xpos[b]; g->y0 = axline; g->y1 = axline - tick_npc;
                 g = gt_add(T, G_TEXT, R, CC, R, CC);
-                g->str = xlab[b]; g->size = SZ_TRACK; g->col = C_AXTXT;
+                g->str = xlab[b]; g->size = TRK_TICK; g->col = C_AXTXT;
                 g->tx = xtxt[b]; g->ty = axline + txtoff; g->hj = 0.5; g->va = V_BOTTOM;
             }
             Col mapc = {0.45, 0.45, 0.45, 0};
@@ -2205,9 +2214,9 @@ gx_no_fan:
              * ids over a 20 kb window would be an unreadable band regardless. */
             for (int c = 0; c < nc && !t->hide_colnames && !gx_mode; c++) {   /* probe IDs (rotated) */
                 if (!m->colid[c]) continue;
-                double lwn = cell_pt > 0 ? text_w(cr, sz_samp, m->colid[c]) / cell_pt : 0;
+                double lwn = cell_pt > 0 ? text_w(cr, TRK_LEAF(sz_samp), m->colid[c]) / cell_pt : 0;
                 g = gt_add(T, G_TEXT, R, CC, R, CC);
-                g->str = m->colid[c]; g->size = sz_samp; g->col = C_BLACK;
+                g->str = m->colid[c]; g->size = TRK_LEAF(sz_samp); g->col = C_BLACK;
                 g->tx = (c + 0.5) / nc; g->ty = lbltop - lwn / 2; g->rot90 = 1;
             }
             /* sample labels (left), group names, swatches and rules: the
@@ -2235,9 +2244,9 @@ gx_no_fan:
             double pad = 0.12 * sh + gap_npc / 2;
             double lw = lw_pt(t->line_lw > 0 ? t->line_lw : 0.5);
             if (t->name) {                                    /* rotated, gutter's left edge */
-                double fh = font_h(cr, SZ_TRACK);
+                double fh = font_h(cr, SZ_AXTITLE(SZ_TRACK));
                 g = gt_add(T, G_TEXT, R, 1, R, 1);
-                g->str = t->name; g->size = SZ_TRACK; g->col = C_BLACK;
+                g->str = t->name; g->size = SZ_AXTITLE(SZ_TRACK); g->col = C_BLACK;
                 g->tx = labw > 0 ? fh / 2 / labw : 0; g->ty = 0.5; g->rot90 = 1;
             }
             int *ident = cp_xmalloc((size_t)ns * sizeof(int));
@@ -2373,7 +2382,7 @@ gx_no_fan:
           memcpy(axis_txt, xtxt, nx * sizeof(double));
           memcpy(axis_lab, xlab, nx * sizeof(char *));
           g = gt_add(T, G_AXIS_X, axisrow, CC, axisrow, CC);
-          g->size = SZ_TRACK;            /* one flat size, the axis numbers included */
+          g->size = TRK_TICK;            /* one flat size, the axis numbers included */
           g->n = nx; g->px = axis_pos; g->label_pos = axis_txt;
           g->labels = axis_lab;
       }

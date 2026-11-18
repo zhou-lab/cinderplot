@@ -67,8 +67,17 @@ giving that file's columns; substitute your own file.
   hierarchy (axis title 1.2x, axis text 0.8x of the base) scales from it --
   `theme(axis.text=element_text(size=10), plot.title=element_text(size=12))`
   pins the tick labels and the title in pt (or `size=rel(r)` of the base),
-  as ggplot2 does, for a house style of 12 pt titles over 10 pt ticks; **in
-  track mode every label is one size** (see below).
+  as ggplot2 does, for a house style of 12 pt titles over 10 pt ticks;
+  `axis.title=element_text(size=)` sets the axis titles. The same three
+  reach the other modes: in **heatmap mode** `axis.text=` sizes the row and
+  column names, `axis.title=` the annotation titles and data labels
+  (default 0.8 x base), `legend.text=` the keys and colourbar numbers;
+  in **track mode** (where every label is otherwise one flat size)
+  `axis.text=` sets the row names -- as given, no longer fitted to the row
+  height -- and the axis numbers, `axis.title=` the track names and
+  row-group labels, `plot.title=` the region title. Lab convention for COO
+  figures: `theme_minimal(base_size=12) + theme(axis.text=element_text(size=10),
+  axis.title=element_text(size=12), legend.text=element_text(size=10))`.
 - `--editable-svg` (with an `.svg` output) writes every label as its own
   `<text>` element with a single x/y — svglite-style, retypable in Inkscape/
   Illustrator, never a per-glyph dx/dy list. Superscript axis labels become a
@@ -524,7 +533,9 @@ meanings. A continuous colourbar (one, or one per facet under free_colour)
 takes `guides(colour=guide_colourbar(direction="horizontal", barwidth=6,
 barheight=0.5))`: flat with the labels underneath, the compact bar to put
 under a facet; barwidth=/barheight= are in lines (14.4 pt) or `unit()`, and
-size a vertical bar too (default 12 x 80 pt; horizontal 80 x 10).
+size a vertical bar too (default 12 x 80 pt; horizontal 80 x 10) -- the
+`coord_polar()` ring bars as well: `guides(fill=guide_colourbar(
+barheight=unit(60, "pt"), barwidth=unit(9, "pt")))`.
 `guides(colour=guide_legend(ncol=N))` folds a long discrete legend
 over N columns, column-major; `nrow=N` caps the rows instead;
 `reverse=TRUE` flips the key order without touching the factor (the stacked
@@ -556,8 +567,8 @@ styles a `coord_polar()` ring plot's wedge names (its facets):
 the spoke names; a larger wedge name that would clash with another, a
 column name or a leader line moves into the leader column. `theme(legend.text=element_text(size=10))` (or `rel(r)`) sets the
 legend label text the same way: the discrete keys, the colourbar and size
-legend breaks, and venn()'s glyph key. Heatmap/track legend() blocks keep
-their own size. Only `size=` is implemented in element_text(). A
+legend breaks, venn()'s glyph key, and the heatmap/track legend() keys and
+colourbar numbers. Only `size=` is implemented in element_text(). A
 freed axis is trained per panel; the axis you did not free stays shared. On a
 discrete axis a panel drops the categories it has no rows for and renumbers the
 rest, so column 3 means a different thing in each panel — that is ggplot2's

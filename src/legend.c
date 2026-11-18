@@ -50,7 +50,7 @@ int cp_fill_user_breaks(const FillScale *fs, double lo, double hi, double *br, c
 double cp_key_across_pt(cairo_t *cr, char *const *labels, int nlev) {
     double wmax = 0;
     for (int k = 0; k < nlev; k++) {
-        double tw = text_w(cr, SZ_AXIS_TEXT, labels[k]);
+        double tw = text_w(cr, SZ_LEGEND_TEXT, labels[k]);
         if (tw > wmax) wmax = tw;
     }
     return LEG_GRID + TXT_GAP + wmax;
@@ -67,7 +67,7 @@ double cp_colourbar_across_pt_fs(cairo_t *cr, const FillScale *fs, double lo, do
     for (int k = 0; k < nf; k++) {
         char b[32]; const char *s = nu >= 0 && ul[k] ? ul[k] : b;
         if (s == b) fmt_break(br[k], dec, b, sizeof b);
-        double tw = text_w(cr, SZ_AXIS_TEXT, s);
+        double tw = text_w(cr, SZ_LEGEND_TEXT, s);
         if (tw > wmax) wmax = tw;
     }
     return LEG_BAR + TICK_LEN + TXT_GAP + wmax;
@@ -89,7 +89,7 @@ void cp_key_draw(GTable *T, int r, int c, char *const *labels, const Col *pal,
         g->sub = 1; g->col = pal[k];
         g->x0 = sx; g->x1 = sx + gw; g->y1 = y1; g->y0 = y1 - gh;
         g = gt_add(T, G_TEXT, r, c, r, c);
-        g->str = labels[k]; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
+        g->str = labels[k]; g->size = SZ_LEGEND_TEXT; g->col = C_BLACK;
         g->tx = sx + gw + TXT_GAP / cw_pt; g->ty = y1 - gh / 2; g->hj = 0; g->va = V_INKCENTER;
     }
 }
@@ -112,7 +112,7 @@ void cp_key_draw_grid(GTable *T, int r, int c, char *const *labels, const Col *p
         g->sub = 1; g->col = pal[k];
         g->x0 = x0; g->x1 = x0 + gw; g->y1 = y1; g->y0 = y1 - gh;
         g = gt_add(T, G_TEXT, r, c, r, c);
-        g->str = labels[k]; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
+        g->str = labels[k]; g->size = SZ_LEGEND_TEXT; g->col = C_BLACK;
         g->tx = x0 + gw + TXT_GAP / cw_pt; g->ty = y1 - gh / 2; g->hj = 0; g->va = V_INKCENTER;
     }
 }
@@ -155,7 +155,7 @@ void cp_colourbar_draw(GTable *T, int r, int c, const FillScale *fs,
             double tx = dir > 0 ? bx0 + barT : bx0;
             g->x0 = tx; g->x1 = tx + dir * (TICK_LEN / cw_pt); g->y0 = g->y1 = y;
             g = gt_add(T, G_TEXT, r, c, r, c);
-            g->str = lab; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
+            g->str = lab; g->size = SZ_LEGEND_TEXT; g->col = C_BLACK;
             g->tx = tx + dir * ((TICK_LEN + TXT_GAP) / cw_pt); g->ty = y;
             g->hj = dir > 0 ? 0 : 1; g->va = V_INKCENTER;
         } else {
@@ -163,7 +163,7 @@ void cp_colourbar_draw(GTable *T, int r, int c, const FillScale *fs,
             double ty = dir > 0 ? by0 + barT : by0;
             g->y0 = ty; g->y1 = ty + dir * (TICK_LEN / ch_pt); g->x0 = g->x1 = x;
             g = gt_add(T, G_TEXT, r, c, r, c);
-            g->str = lab; g->size = SZ_AXIS_TEXT; g->col = C_BLACK;
+            g->str = lab; g->size = SZ_LEGEND_TEXT; g->col = C_BLACK;
             g->tx = x; g->ty = ty + dir * ((TICK_LEN + TXT_GAP) / ch_pt);
             g->hj = 0.5; g->va = dir > 0 ? V_BOTTOM : V_TOP;
         }
