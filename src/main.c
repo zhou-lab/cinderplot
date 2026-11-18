@@ -534,6 +534,7 @@ int main(int argc, char **argv) {
         return 0;
     }
     if (spec.nhobjs > 0 && spec.nlayers == 0 && !spec.x.col) {   /* matrix (wheatmap) mode */
+        dsl_auto_heatmap_legend(&spec);           /* no legend(): the default colour bar */
         if (render_heatmap(&spec, out, w_pt, h_pt, err)) {
             fprintf(stderr, "cinderplot: %s\n", err);
             return 1;

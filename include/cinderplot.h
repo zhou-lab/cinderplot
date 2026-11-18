@@ -938,6 +938,7 @@ typedef struct {
 } PlotSpec;
 
 int dsl_parse(const char *src, PlotSpec *spec, char *err);  /* 0 = ok */
+void dsl_auto_heatmap_legend(PlotSpec *spec);  /* heatmap mode: the default colour bar */
 
 /* ---------- render.c ---------- */
 /* hexbin.c: binned geom_hex() replaces *df with its hexagon counts (cell

@@ -4098,6 +4098,29 @@ static int parse_term(P *p, PlotSpec *spec) {
                    "tippoint/nodepoint(); chord(); venn(); upset()", name);
 }
 
+/* heatmap mode with no legend(): key the first heatmap with a colour bar on
+ * its right, as ComplexHeatmap does, titled by its name= (or labs(fill=)).
+ * Called once the CLI flags are in, so --no-legend, guides(fill="none") and
+ * theme(legend.position="none") leave it off. */
+void dsl_auto_heatmap_legend(PlotSpec *spec) {
+    if (spec->no_legend || spec->no_legend_fill) return;
+    int first = -1;
+    for (int i = 0; i < spec->nhobjs; i++) {
+        if (spec->hobjs[i].type == HM_LEGEND) return;
+        if (spec->hobjs[i].type == HM_HEATMAP && first < 0) first = i;
+    }
+    if (first < 0 || spec->nhobjs == MAX_HMOBJS) return;
+    char *nm = cp_xstrdup(spec->hobjs[first].name);
+    int given = spec->hobjs[first].name_given;
+    char err[CP_ERRLEN];
+    P p = {"", err};
+    HMObj *o = hm_new(&p, spec, HM_LEGEND);
+    if (!o) { free(nm); return; }
+    o->place.kind = PL_RIGHT_OF; o->place.given = 1;
+    o->place.anchor = nm;
+    if (given && !spec->lab_fill) o->title = cp_xstrdup(nm);
+}
+
 int dsl_parse(const char *src, PlotSpec *spec, char *err) {
     { int bad = cp_utf8_bad_byte(src);
       if (bad >= 0) { snprintf(err, CP_ERRLEN, "the spec is not valid UTF-8 (byte 0x%02X)", bad); return -1; } }

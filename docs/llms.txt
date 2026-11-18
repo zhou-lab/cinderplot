@@ -699,7 +699,11 @@ the runs are too narrow to hold one line each, so forty runs read as forty
 labels; `label.colour="black"` sets the text ink (default: each level's own
 colour, which is unreadable for light hues), the leader keeping the run's
 colour.
-An annotation may be anchored
+**A heatmap with no `legend()` is keyed automatically**, as in
+ComplexHeatmap: the first `heatmap()` gets a colour bar (or key) on its
+right, titled by its `name=` (or `labs(fill=)`); `--no-legend`,
+`guides(fill="none")` or `theme(legend.position="none")` drop it, and any
+`legend()` replaces it. An annotation may be anchored
 by its data column name, e.g. `legend(right_of("diagnosis"))`. **One object per
 slot**: a second `left_of("m")` errors and says which object holds the slot —
 chain the next one off that object (`dendrogram(left_of("dx"))`), as the
