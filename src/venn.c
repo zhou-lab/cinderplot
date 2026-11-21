@@ -144,7 +144,12 @@ static int venn3(const PlotSpec *spec, VItem *it, int nit, const char **setn,
     double DXS = 0.683 * FS * (spec->venn_dot_step > 0 ? spec->venn_dot_step : 1);
     double ROW = 1.75 * FS, GAP = 0.6 * FS;
     double RGAP = 0.8 * DXS, PAD = 0.5 * FS;
-    double TSZ = 1.33 * FS, SSZ = 0.875 * FS, CSZ = 0.8 * FS;
+    /* set titles: theme(strip.text=element_text(size=, face=)) -- the sets
+     * are the venn's facets -- else bold at 1.33 x base */
+    double TSZ = spec->strip_x_sz > 0 ? spec->strip_x_sz
+               : spec->strip_x_sz < 0 ? -spec->strip_x_sz * FS : 1.33 * FS;
+    int TB = spec->strip_face_given ? spec->strip_bold : 1;
+    double SSZ = 0.875 * FS, CSZ = 0.8 * FS;
     double KSZ = cp_legend_text_sz ? SZ_LEGEND_TEXT : CSZ * 1.1;   /* key labels; theme(legend.text=) */
     Col muted = {0.4, 0.4, 0.4, 0};
 
@@ -170,7 +175,7 @@ static int venn3(const PlotSpec *spec, VItem *it, int nit, const char **setn,
         const char *t = s < spec->n_venn_subtitles ? spec->venn_subtitles[s]
                       : has_n ? "{k} items \xc2\xb7 {n} samples" : "{k} items";
         sub[s] = subst(t, cnt[s], tot[s]);
-        wt[s] = fmax(tw(cr, TSZ, 1, setn[s]), tw(cr, SSZ, 0, sub[s]));
+        wt[s] = fmax(tw(cr, TSZ, TB, setn[s]), tw(cr, SSZ, 0, sub[s]));
     }
     cairo_destroy(cr); cairo_surface_destroy(ms);
 
@@ -258,7 +263,7 @@ static int venn3(const PlotSpec *spec, VItem *it, int nit, const char **setn,
     ellipses(T, spec, 3, epx, epy, scol, 1.6 * sc);
     for (int s = 0; s < 3; s++) {                 /* A, B above; C below */
         double ty = s < 2 ? -R - PAD - th + TSZ * 0.6 : cy[2] + R + PAD + TSZ * 0.6;
-        TEXT3(setn[s], cx[s], ty, TSZ, scol[s], 0.5, 1);
+        TEXT3(setn[s], cx[s], ty, TSZ, scol[s], 0.5, TB);
         if (sub[s][0]) TEXT3(sub[s], cx[s], ty + TSZ * 0.65 + SSZ, SSZ, muted, 0.5, 0);
     }
     for (int m = 1; m < 8; m++) {
@@ -481,7 +486,12 @@ int render_venn(const PlotSpec *spec, const char *data, const char *out,
     double DR = 0.283 * FS * (spec->venn_dot_size > 0 ? spec->venn_dot_size : 1);
     double DXS = 0.683 * FS * (spec->venn_dot_step > 0 ? spec->venn_dot_step : 1);
     double ROW = 1.75 * FS, ROWO = ROW * 1.15, GAP = 0.6 * FS, PAD = 0.5 * FS;
-    double TSZ = 1.33 * FS, SSZ = 0.875 * FS, CSZ = 0.8 * FS;
+    /* set titles: theme(strip.text=element_text(size=, face=)) -- the sets
+     * are the venn's facets -- else bold at 1.33 x base */
+    double TSZ = spec->strip_x_sz > 0 ? spec->strip_x_sz
+               : spec->strip_x_sz < 0 ? -spec->strip_x_sz * FS : 1.33 * FS;
+    int TB = spec->strip_face_given ? spec->strip_bold : 1;
+    double SSZ = 0.875 * FS, CSZ = 0.8 * FS;
     double KSZ = cp_legend_text_sz ? SZ_LEGEND_TEXT : CSZ * 1.1;   /* key labels; theme(legend.text=) */
     double lab[3] = {0, 0, 0}, dmax[3][2] = {{0, 0}, {0, 0}, {0, 0}};
     for (int g = 0; g < 3; g++)
@@ -575,7 +585,7 @@ int render_venn(const PlotSpec *spec, const char *data, const char *out,
     double tx[2] = { xa - 0.2 * rxA, xb + 0.2 * rxB };
     double wt[2];
     for (int s = 0; s < 2; s++)
-        wt[s] = fmax(tw(cr, TSZ, 1, setn[s]), tw(cr, SSZ, 0, sub[s]));
+        wt[s] = fmax(tw(cr, TSZ, TB, setn[s]), tw(cr, SSZ, 0, sub[s]));
     double shift = fmax(0, MARGIN - (tx[0] - wt[0] / 2));   /* keep titles on canvas */
     xa += shift; xb += shift; tx[0] += shift; tx[1] += shift;
     double Wn = fmax(xb + rxB, tx[1] + wt[1] / 2) + MARGIN;
@@ -631,7 +641,7 @@ int render_venn(const PlotSpec *spec, const char *data, const char *out,
     ellipses(T, spec, 2, epx, epy, scol, 1.6 * sc);
     for (int s = 0; s < 2; s++) {
         double ty0 = topy - titleh + TSZ * 0.6;
-        TEXT(setn[s], tx[s], ty0, TSZ, scol[s], 0.5, 1);
+        TEXT(setn[s], tx[s], ty0, TSZ, scol[s], 0.5, TB);
         if (sub[s][0]) TEXT(sub[s], tx[s], ty0 + TSZ * 0.65 + SSZ, SSZ, muted, 0.5, 0);
     }
 

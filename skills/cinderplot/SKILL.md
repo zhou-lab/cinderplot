@@ -562,6 +562,8 @@ size a vertical bar too (default 12 x 80 pt; horizontal 80 x 10) -- the
 colourbar as well: `guides(fill=guide_colourbar(barheight=unit(60, "pt"),
 barwidth=unit(9, "pt")))` (a standing bar is barheight long, a flat one
 barwidth; the heatmap/track default is 28 x 4 mm).
+`guide_colourbar(label.theme=element_text(size=10))` sets the bar's tick
+labels apart from `legend.text=` (grammar mode), ggplot2's spelling.
 `guides(colour=guide_legend(ncol=N))` folds a long discrete legend
 over N columns, column-major; `nrow=N` caps the rows instead;
 `reverse=TRUE` flips the key order without touching the factor (the stacked
@@ -581,20 +583,30 @@ theme() key still errors (presets only) except the legend key cell:
 `theme(legend.key.size=unit(10, "pt"))` (or `legend.key.height=`/
 `legend.key.width=`; units pt, mm, cm, in, lines) and
 `theme(legend.key.spacing.y=unit(0, "pt"))` for the gap between key rows
-(2.2 pt default). The default key is 17.3 pt -- ggplot2's 1.2 lines, which
+(2.2 pt default). A key row is never shorter than its label, as in ggplot2,
+so 9 pt keys under 12 pt labels no longer overlap. The default key is 17.3 pt -- ggplot2's 1.2 lines, which
 does NOT shrink with `base_size` (in ggplot either) -- so a `base_size=7`
 figure with a long legend wants `legend.key.size=unit(10, "pt")`.
 `theme(strip.text=element_text(size=8))` sets the facet strip text in points
 (`size=rel(1)` = base_size; ggplot's default is rel(0.8)), and the strip grows
 to fit; `strip.text.x` is the top strips, `strip.text.y` facet_grid's row
-strips. `face="bold"` and `colour=` style them too, and the same element
+strips. `face="bold"`, `colour=` and `hjust=` (0 = the strip's left edge,
+inset by the strip padding; 0.5, the default, centred) style them too;
+`theme(strip.background=element_blank())` drops the strip box, leaving the
+label over the panel. The same element sets venn()'s set titles (size=,
+face=; bold at 1.33 x base by default), and the same element
 styles a `coord_polar()` ring plot's wedge names (its facets):
 `theme(strip.text=element_text(face="bold", size=11))` sets them apart from
 the spoke names; a larger wedge name that would clash with another, a
 column name or a leader line moves into the leader column. `theme(legend.text=element_text(size=10))` (or `rel(r)`) sets the
 legend label text the same way: the discrete keys, the colourbar and size
 legend breaks, venn()'s glyph key, and the heatmap/track legend() keys and
-colourbar numbers. Only `size=` is implemented in element_text(). A
+colourbar numbers. `theme(legend.title=element_text(size=))` sizes the guide
+titles (default base_size). Only `size=` is implemented in element_text()
+there. Any layer takes `show.legend=FALSE`, which keeps its key glyph out of
+the legend (an errorbar under points keyed by colour); a layer that SETS the
+keyed aesthetic (`geom_text(colour="black")` under `aes(colour=g)`) adds no
+glyph either, as ggplot2 decides. A
 freed axis is trained per panel; the axis you did not free stays shared. On a
 discrete axis a panel drops the categories it has no rows for and renumbers the
 rest, so column 3 means a different thing in each panel — that is ggplot2's

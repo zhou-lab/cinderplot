@@ -96,6 +96,11 @@ extern double cp_key_w, cp_key_h, cp_key_gap;
 /* Legend label text: theme(legend.text=element_text(size=)) -- pt if > 0,
  * rel() of base_size if < 0, 0 = ggplot's rel(0.8) (the axis-text size). */
 extern double cp_legend_text_sz;
+/* theme(legend.title=element_text(size=)): the guide titles, same coding,
+ * 0 = ggplot's rel(1) (the base size) */
+extern double cp_legend_title_sz;
+#define SZ_LEGEND_TITLE (cp_legend_title_sz > 0 ? cp_legend_title_sz \
+                         : cp_legend_title_sz < 0 ? -cp_legend_title_sz * cp_base_size : SZ_BASE)
 #define SZ_LEGEND_TEXT (cp_legend_text_sz > 0 ? cp_legend_text_sz \
                         : cp_legend_text_sz < 0 ? -cp_legend_text_sz * cp_base_size : SZ_AXIS_TEXT)
 #define PT_RADIUS    2.15
@@ -454,6 +459,7 @@ typedef struct {
      * line per row of the layer's data= file (or the main data), drawn only
      * in the facet panel its facet column names (every panel without one) */
     char *icept_col;
+    int no_legend;       /* show.legend=FALSE: the layer adds no key glyph */
 } Layer;
 #define MAX_LAYERS 8
 
@@ -793,6 +799,7 @@ typedef struct {
     int no_legend_linetype;         /* guides(linetype="none") */
     int cbar_horiz;                 /* guides(colour=guide_colourbar(direction="horizontal")) */
     double cbar_w, cbar_h;          /* guide_colourbar(barwidth=, barheight=), pt; 0 = default */
+    double cbar_lab_sz;             /* guide_colourbar(label.theme=element_text(size=)), pt; 0 = legend.text */
     int no_legend_fill, no_legend_colour;   /* guides(fill=/colour="none") separately:
                                      * they differ only when aes(fill=) and colour=
                                      * are two aesthetics (filled points) */
@@ -874,6 +881,9 @@ typedef struct {
                                      * pt if > 0, rel() of base_size if < 0,
                                      * 0 = ggplot's rel(0.8) */
     double legend_text_sz;          /* theme(legend.text=element_text(size=)), same coding */
+    double legend_title_sz;         /* theme(legend.title=element_text(size=)), same coding */
+    int no_strip_bg;                /* theme(strip.background=element_blank()) */
+    double strip_hjust; int has_strip_hjust;   /* theme(strip.text=element_text(hjust=)) */
     double title_sz, axis_text_sz, axis_title_sz;  /* theme(plot.title= / axis.text= /
                                      * axis.title=element_text(size=)), same coding */
     double title_hjust; int has_title_hjust;  /* theme(plot.title=element_text(hjust=)):
@@ -881,6 +891,7 @@ typedef struct {
     /* theme(strip.text=element_text(face=, colour=)): facet strips, and the
      * coord_polar() ring plot's wedge names (the polar analogue of facets) */
     int strip_bold; Col strip_col; int has_strip_col;
+    int strip_face_given;           /* face= was written (venn set titles default bold) */
     /* theme(axis.text=element_text(colour=)) / element_blank(): the axis
      * label colour (and the ring plot's spoke, ring and wedge names) */
     Col axis_text_col; int has_axis_text_col, axis_text_blank, axis_text_show;

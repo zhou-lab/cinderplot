@@ -105,7 +105,7 @@ static GTable *build_legend(cairo_t *cr, const Theme *th, const char *title, con
         }
         total += KEY_W + TXT_GAP + lw[c] + (c < ncol - 1 ? HALF_LINE : 0);
     }
-    double title_w = text_w(cr, SZ_BASE, title);
+    double title_w = text_w(cr, SZ_LEGEND_TITLE, title);
     if (title_w > total) lw[ncol - 1] += title_w - total;
 
     t->ncol = 4 * ncol - 1;
@@ -118,17 +118,21 @@ static GTable *build_legend(cairo_t *cr, const Theme *th, const char *title, con
     free(lw);
     int has_title = title && *title;
     t->nrow = 2 + 2 * rows - 1;
-    t->rowh[0] = upt(has_title ? font_h(cr, SZ_BASE) : 0);
+    t->rowh[0] = upt(has_title ? font_h(cr, SZ_LEGEND_TITLE) : 0);
     t->rowh[1] = upt(has_title ? HALF_LINE : 0);
+    /* a key row is at least its label's height, as ggplot2's legend rows
+     * are: legend.key.size=unit(9, "pt") under 12 pt labels used to pack
+     * the rows so tight that each label's descenders crossed the next */
+    double rowk = fmax(KEY_H, font_h(cr, SZ_LEGEND_TEXT));
     for (int i = 0; i < rows; i++) {
-        t->rowh[2 + 2 * i] = upt(KEY_H);
+        t->rowh[2 + 2 * i] = upt(rowk);
         if (i < rows - 1) t->rowh[3 + 2 * i] = upt(KEY_GAP);
     }
 
     Grob *g;
     if (has_title) {
         g = gt_add(t, G_TEXT, 0, 0, 0, t->ncol - 1);
-        g->str = title; g->size = SZ_BASE; g->col = th->title;
+        g->str = title; g->size = SZ_LEGEND_TITLE; g->col = th->title;
         g->tx = 0; g->ty = 1; g->hj = 0; g->va = V_TOP;
     }
     static const double half = 0.5;
@@ -170,6 +174,8 @@ static GTable *build_legend(cairo_t *cr, const Theme *th, const char *title, con
 /* continuous-colour legend: a vertical colorbar with tick labels */
 /* guide_colourbar(direction=, barwidth=, barheight=): set once per render */
 static int g_cbar_horiz; static double g_cbar_w, g_cbar_h;
+static double g_cbar_lab_sz;          /* label.theme=element_text(size=); 0 = legend.text */
+#define CBAR_LAB_SZ (g_cbar_lab_sz > 0 ? g_cbar_lab_sz : SZ_LEGEND_TEXT)
 static GTable *build_colorbar_horiz(cairo_t *cr, const Theme *th, const char *title,
                                     const FillScale *fs, double lo, double hi);
 static GTable *build_colorbar_legend(cairo_t *cr, const Theme *th, const char *title,
@@ -189,24 +195,24 @@ static GTable *build_colorbar_legend(cairo_t *cr, const Theme *th, const char *t
     for (int i = 0; i < nf; i++) {
         char b[32]; const char *s = nu >= 0 && ul[i] ? ul[i] : b;
         if (s == b) fmt_break(br[i], dec, b, sizeof b);
-        double w = text_w(cr, SZ_LEGEND_TEXT, s);
+        double w = text_w(cr, CBAR_LAB_SZ, s);
         if (w > labw) labw = w;
     }
     double barcol = BARW + TICK_LEN + TXT_GAP + labw;
-    double titlew = title ? text_w(cr, SZ_BASE, title) : 0;
+    double titlew = title ? text_w(cr, SZ_LEGEND_TITLE, title) : 0;
     double w = fmax(barcol, titlew);
 
     GTable *t = cp_xcalloc(1, sizeof(GTable));
     t->ncol = 1; t->colw[0] = upt(w);
     t->nrow = 3;
-    t->rowh[0] = upt(title ? font_h(cr, SZ_BASE) : 0);
+    t->rowh[0] = upt(title ? font_h(cr, SZ_LEGEND_TITLE) : 0);
     t->rowh[1] = upt(title ? HALF_LINE : 0);
     t->rowh[2] = upt(BARH);
 
     Grob *g;
     if (title) {
         g = gt_add(t, G_TEXT, 0, 0, 0, 0);
-        g->str = title; g->size = SZ_BASE; g->col = th->title;
+        g->str = title; g->size = SZ_LEGEND_TITLE; g->col = th->title;
         g->tx = 0; g->ty = 1; g->hj = 0; g->va = V_TOP;
     }
     const int NSTEP = 64;
@@ -226,7 +232,7 @@ static GTable *build_colorbar_legend(cairo_t *cr, const Theme *th, const char *t
         g->col = th->tick; g->lw = lw_pt(0.5);
         g->x0 = barw_npc; g->x1 = barw_npc + TICK_LEN / w; g->y0 = g->y1 = frac;
         g = gt_add(t, G_TEXT, 2, 0, 2, 0);
-        g->str = lab; g->size = SZ_LEGEND_TEXT; g->col = th->title;
+        g->str = lab; g->size = CBAR_LAB_SZ; g->col = th->title;
         g->tx = (BARW + TICK_LEN + TXT_GAP) / w; g->ty = frac; g->hj = 0; g->va = V_INKCENTER;
     }
     return t;
@@ -251,23 +257,23 @@ static GTable *build_colorbar_horiz(cairo_t *cr, const Theme *th, const char *ti
     for (int i = 0; i < nf; i++) {
         char b[32]; const char *s = nu >= 0 && ul[i] ? ul[i] : b;
         if (s == b) fmt_break(br[i], dec, b, sizeof b);
-        double hw = text_w(cr, SZ_LEGEND_TEXT, s) / 2;
+        double hw = text_w(cr, CBAR_LAB_SZ, s) / 2;
         if (hw > over) over = hw;
     }
-    double titlew = title ? text_w(cr, SZ_BASE, title) : 0;
+    double titlew = title ? text_w(cr, SZ_LEGEND_TITLE, title) : 0;
     double w = fmax(BARL + 2 * over, titlew);
     double x0 = (w - BARL) / 2;               /* bar start, pt */
     GTable *t = cp_xcalloc(1, sizeof(GTable));
     t->ncol = 1; t->colw[0] = upt(w);
     t->nrow = 4;
-    t->rowh[0] = upt(title ? font_h(cr, SZ_BASE) : 0);
+    t->rowh[0] = upt(title ? font_h(cr, SZ_LEGEND_TITLE) : 0);
     t->rowh[1] = upt(title ? HALF_LINE / 2 : 0);
     t->rowh[2] = upt(BART);
-    t->rowh[3] = upt(TICK_LEN + TXT_GAP + font_h(cr, SZ_LEGEND_TEXT));
+    t->rowh[3] = upt(TICK_LEN + TXT_GAP + font_h(cr, CBAR_LAB_SZ));
     Grob *g;
     if (title) {
         g = gt_add(t, G_TEXT, 0, 0, 0, 0);
-        g->str = title; g->size = SZ_BASE; g->col = th->title;
+        g->str = title; g->size = SZ_LEGEND_TITLE; g->col = th->title;
         g->tx = 0.5; g->ty = 1; g->hj = 0.5; g->va = V_TOP;
     }
     const int NSTEP = 64;
@@ -278,7 +284,7 @@ static GTable *build_colorbar_horiz(cairo_t *cr, const Theme *th, const char *ti
         g->x0 = (x0 + BARL * k / NSTEP) / w; g->x1 = (x0 + BARL * (k + 1) / NSTEP) / w;
         g->y0 = 0; g->y1 = 1;
     }
-    double rowh3 = TICK_LEN + TXT_GAP + font_h(cr, SZ_LEGEND_TEXT);
+    double rowh3 = TICK_LEN + TXT_GAP + font_h(cr, CBAR_LAB_SZ);
     for (int i = 0; i < nf; i++) {
         double frac = hi > lo ? (br[i] - lo) / (hi - lo) : 0.5;
         double xn = (x0 + BARL * frac) / w;
@@ -288,7 +294,7 @@ static GTable *build_colorbar_horiz(cairo_t *cr, const Theme *th, const char *ti
         g->col = th->tick; g->lw = lw_pt(0.5);
         g->x0 = g->x1 = xn; g->y0 = 1; g->y1 = 1 - TICK_LEN / rowh3;
         g = gt_add(t, G_TEXT, 3, 0, 3, 0);
-        g->str = lab; g->size = SZ_LEGEND_TEXT; g->col = th->title;
+        g->str = lab; g->size = CBAR_LAB_SZ; g->col = th->title;
         g->tx = xn; g->ty = 1 - (TICK_LEN + TXT_GAP) / rowh3; g->hj = 0.5; g->va = V_TOP;
     }
     return t;
@@ -323,7 +329,7 @@ static GTable *build_size_legend(cairo_t *cr, const Theme *th, const char *title
         double w = text_w(cr, SZ_LEGEND_TEXT, labs[i]);
         if (w > label_w) label_w = w;
     }
-    double title_w = title ? text_w(cr, SZ_BASE, title) : 0;
+    double title_w = title ? text_w(cr, SZ_LEGEND_TITLE, title) : 0;
     if (title_w > KEY_W + TXT_GAP + label_w)
         label_w = title_w - KEY_W - TXT_GAP;
 
@@ -332,7 +338,7 @@ static GTable *build_size_legend(cairo_t *cr, const Theme *th, const char *title
     t->colw[1] = upt(TXT_GAP);
     t->colw[2] = upt(label_w);
     t->nrow = 2 + 2 * nb - 1;
-    t->rowh[0] = upt(title ? font_h(cr, SZ_BASE) : 0);
+    t->rowh[0] = upt(title ? font_h(cr, SZ_LEGEND_TITLE) : 0);
     t->rowh[1] = upt(title ? HALF_LINE : 0);
     for (int i = 0; i < nb; i++) {
         t->rowh[2 + 2 * i] = upt(KEY_H);
@@ -342,7 +348,7 @@ static GTable *build_size_legend(cairo_t *cr, const Theme *th, const char *title
     Grob *g;
     if (title) {
         g = gt_add(t, G_TEXT, 0, 0, 0, 2);
-        g->str = title; g->size = SZ_BASE; g->col = th->title;
+        g->str = title; g->size = SZ_LEGEND_TITLE; g->col = th->title;
         g->tx = 0; g->ty = 1; g->hj = 0; g->va = V_TOP;
     }
     static const double half = 0.5;
@@ -1660,7 +1666,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     const Column *eb_lo_c[MAX_LAYERS] = {0}, *eb_hi_c[MAX_LAYERS] = {0};
     g_nextra_x = g_nextra_y = 0;
     g_cbar_horiz = spec->cbar_horiz || spec->legend_bottom;
-    g_cbar_w = spec->cbar_w; g_cbar_h = spec->cbar_h;
+    g_cbar_w = spec->cbar_w; g_cbar_h = spec->cbar_h; g_cbar_lab_sz = spec->cbar_lab_sz;
     for (int i = 0; i < spec->nlayers; i++) {
         const Layer *L = &spec->layers[i];
         if (L->type != GEOM_ERRORBAR || !L->eb_lo) continue;
@@ -1689,6 +1695,28 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                  && spec->layers[i].alpha > 0) g_key_area_alpha = spec->layers[i].alpha;
         else if (spec->layers[i].type == GEOM_RIDGES && spec->layers[i].alpha > 0)
             g_key_area_alpha = spec->layers[i].alpha;
+    /* Which layers key the colour/fill legend, as ggplot2's matched_aes
+     * decides: a layer drawn with show.legend=FALSE, or one that SETS the
+     * keyed aesthetic to a constant (geom_text(colour="black") under a
+     * colour mapping), adds no glyph. kv[type] = some keyed layer has it. */
+    int kv[GEOM_RIDGES + 1] = {0};
+    for (int i = 0; i < spec->nlayers; i++) {
+        const Layer *L = &spec->layers[i];
+        if (L->no_legend) continue;
+        if (L->has_color && L->color_is_fill == spec->colour.is_fill) continue;
+        if (spec->colour.is_fill && L->has_fill_c) continue;
+        kv[L->type] = 1;
+    }
+    int k_point = haspoint && (kv[GEOM_POINT] || kv[GEOM_JITTER]);
+    int k_line = (hasline && (kv[GEOM_LINE] || kv[GEOM_SMOOTH]))
+               || (hasseg && kv[GEOM_SEGMENT])
+               || (hasdens && !dens_filled && kv[GEOM_DENSITY])
+               || (hasrange && (kv[GEOM_ERRORBAR] || kv[GEOM_LINERANGE]));
+    int k_area = (hasbox && kv[GEOM_BOXPLOT]) || (hasbar && kv[GEOM_BAR])
+               || (hascol && kv[GEOM_COL]) || (hasrect && kv[GEOM_RECT])
+               || (hastile && kv[GEOM_TILE]) || (hasribbon && kv[GEOM_RIBBON])
+               || (dens_filled && kv[GEOM_DENSITY]) || (hasridge && kv[GEOM_RIDGES]);
+    int k_text = hastext && (kv[GEOM_TEXT] || kv[GEOM_LABEL]) && !spec->colour.is_fill;
     if (hasribbon && (!yminc || !yec)) {
         snprintf(err, CP_ERRLEN, "geom_ribbon() needs aes(ymin=, ymax=)");
         return -1;
@@ -3589,6 +3617,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     if (spec->has_axis_text_col) thv.axis_text = spec->axis_text_col;   /* theme(axis.text=) */
     if (spec->axis_text_blank) thv.axis_text_on = 0;
     if (spec->axis_text_show) thv.axis_text_on = 1;      /* even over theme_void() */
+    if (spec->no_strip_bg) thv.strip_bg_on = 0;         /* theme(strip.background=element_blank()) */
     const Theme *th = &thv;
 
     /* Under coord_flip the x aesthetic is drawn on the LEFT (vertical) axis and
@@ -4147,9 +4176,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 const char *bt = spec->lab_colour ? spec->lab_colour
                                : ff->levels[p];
                 GTable *lg = build_legend(cr, th, bt, &pf, pc2,
-                                   haspoint, hasline || hasseg || (hasdens && !dens_filled) || hasrange,
-                                   hasbox || hasbar || hascol || hasrect || hastile || hasribbon || dens_filled || hasridge,
-                                   hastext && !spec->colour.is_fill, NULL, nc2, spec->legend_reverse, NULL, err);
+                                   k_point, k_line,
+                                   k_area,
+                                   k_text, NULL, nc2, spec->legend_reverse, NULL, err);
                 if (!lg) return -1;
                 /* inside the panels every block has its own panel to sit
                  * in whatever the grid shape; only the margin placement
@@ -4179,10 +4208,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                     nc2 = (cf->nlev + rows_fit - 1) / rows_fit;
                 }
             }
-            GTable *lg = build_legend(cr, th, col_title, cf, pal, haspoint,
-                               hasline || hasseg || (hasdens && !dens_filled) || hasrange,
-                               hasbox || hasbar || hascol || hasrect || hastile || hasribbon || dens_filled || hasridge,
-                               hastext && !spec->colour.is_fill, NULL, nc2, spec->legend_reverse,
+            GTable *lg = build_legend(cr, th, col_title, cf, pal, k_point,
+                               k_line,
+                               k_area,
+                               k_text, NULL, nc2, spec->legend_reverse,
                                lt_merge ? lt_keys : NULL, err);
             if (!lg) return -1;
             guides[nguide++] = lg;
@@ -4634,6 +4663,13 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         panelw_pt = pw; panelh_pt = ph;
     }
 
+    /* theme(strip.text=element_text(hjust=)): the top strips' label anchor,
+     * inset by the strip padding off the edge it hugs (ggplot2's margin) */
+    double strip_hj = 0.5;
+    if (spec->has_strip_hjust) {
+        double in = panelw_pt > 0 ? STRIP_PAD / panelw_pt : 0;
+        strip_hj = spec->strip_hjust * (1 - 2 * in) + in;
+    }
     /* ---- facet_grid strips ----
      * Column strips run along the top, one per panel column; row strips down
      * the right, rotated -90 so they read top-to-bottom, one per panel row.
@@ -4648,7 +4684,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             g = gt_add(T, G_TEXT, SR(0), PC(c), SR(0), PC(c));
             g->str = colf->levels[c]; g->size = stx_sz; g->bold = spec->strip_bold;
             g->col = spec->has_strip_col ? spec->strip_col : th->strip_text;
-            g->tx = 0.5; g->ty = 0.5; g->hj = 0.5; g->va = V_INKCENTER;
+            g->tx = strip_hj; g->hj = spec->has_strip_hjust ? spec->strip_hjust : 0.5; g->ty = 0.5; g->va = V_INKCENTER;
         }
         for (int r = 0; rowf && r < nrowp; r++) {
             if (th->strip_bg_on) {
@@ -4683,7 +4719,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             g = gt_add(T, G_TEXT, SR(pr), C, SR(pr), C);
             g->str = ff->levels[p]; g->size = stx_sz; g->bold = spec->strip_bold;
             g->col = spec->has_strip_col ? spec->strip_col : th->strip_text;
-            g->tx = 0.5; g->ty = 0.5; g->hj = 0.5; g->va = V_INKCENTER;
+            g->tx = strip_hj; g->hj = spec->has_strip_hjust ? spec->strip_hjust : 0.5; g->ty = 0.5; g->va = V_INKCENTER;
         }
 
         int gstart = T->ngrobs;   /* first panel-content grob (all in cell R,C); */

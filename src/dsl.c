@@ -2321,6 +2321,13 @@ static int parse_term(P *p, PlotSpec *spec) {
                 } else if (l->hex && !strcmp(key, "offset")) {
                     if (parse_bool(p, &l->hex_offset))
                         return fail(p, "geom_hex(offset=) expects TRUE or FALSE%s", "");
+                } else if (!strcmp(key, "show.legend") || !strcmp(key, "show_legend")) {
+                    /* ggplot2: FALSE keeps the layer out of every legend's
+                     * key glyphs (a range bar under a point keyed by colour) */
+                    int on = 1;
+                    if (parse_bool(p, &on))
+                        return fail(p, "show.legend= expects TRUE or FALSE%s", "");
+                    l->no_legend = !on;
                 } else if (!strcmp(key, "alpha")) {
                     /* ggplot2's alpha: the first thing anyone reaches for on a
                      * large scatter, where an opaque overplot hides where the
@@ -3726,6 +3733,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                 }
             } else if (!strcmp(key, "strip.text") || !strcmp(key, "strip.text.x")
                        || !strcmp(key, "strip.text.y") || !strcmp(key, "legend.text")
+                       || !strcmp(key, "legend.title")
                        || !strcmp(key, "plot.title") || !strcmp(key, "axis.title")) {
                 /* element_text(size=N) in pt, or size=rel(r) of base_size;
                  * ggplot's default is rel(0.8). .x is the top strips, .y
@@ -3754,7 +3762,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                         if (!strcmp(f2, "bold") || !strcmp(f2, "bold.italic")) spec->strip_bold = 1;
                         else if (!strcmp(f2, "plain") || !strcmp(f2, "italic")) spec->strip_bold = 0;
                         else return fail(p, "face=\"%s\" invalid; use plain or bold", f2);
-                        got = 1;
+                        got = 1; spec->strip_face_given = 1;
                         skip_ws(p);
                         if (*p->s == ',') { p->s++; skip_ws(p); }
                         continue;
@@ -3765,6 +3773,21 @@ static int parse_term(P *p, PlotSpec *spec) {
                         if (!c2 || parse_color(c2, &spec->strip_col))
                             return fail(p, "strip.text colour= expects a colour%s", "");
                         spec->has_strip_col = 1; got = 1;
+                        skip_ws(p);
+                        if (*p->s == ',') { p->s++; skip_ws(p); }
+                        continue;
+                    }
+                    if (is_strip && !strcmp(k, "hjust")) {
+                        /* ggplot: 0.5 centres the strip label (its default),
+                         * 0 puts it at the strip's left edge */
+                        free(k);
+                        skip_ws(p);
+                        char *end;
+                        double hj = strtod(p->s, &end);
+                        if (end == p->s || hj < 0 || hj > 1)
+                            return fail(p, "strip.text hjust= takes 0..1%s", "");
+                        p->s = end;
+                        spec->strip_hjust = hj; spec->has_strip_hjust = 1; got = 1;
                         skip_ws(p);
                         if (*p->s == ',') { p->s++; skip_ws(p); }
                         continue;
@@ -3787,7 +3810,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                         char msg[CP_ERRLEN];
                         snprintf(msg, sizeof msg, "element_text(%s=) is not implemented "
                                  "for %s; size=%s is", k, key,
-                                 is_strip ? " (and face=, colour=)"
+                                 is_strip ? " (and face=, colour=, hjust=)"
                                  : !strcmp(key, "plot.title") ? " (and hjust=)" : "");
                         free(k);
                         return fail(p, "%s", msg);
@@ -3809,12 +3832,23 @@ static int parse_term(P *p, PlotSpec *spec) {
                 if (v == 0 && !got) return fail(p, "theme(%s=element_text()) needs size=", key);
                 if (v == 0) { /* face=/colour= only: sizes stay as they were */ }
                 else if (!strcmp(key, "legend.text")) spec->legend_text_sz = v;
+                else if (!strcmp(key, "legend.title")) spec->legend_title_sz = v;
                 else if (!strcmp(key, "plot.title")) spec->title_sz = v;
                 else if (!strcmp(key, "axis.title")) spec->axis_title_sz = v;
                 else {
                     if (strcmp(key, "strip.text.y")) spec->strip_x_sz = v;
                     if (strcmp(key, "strip.text.x")) spec->strip_y_sz = v;
                 }
+            } else if (!strcmp(key, "strip.background")) {
+                /* element_blank(): no strip box, the label alone over the
+                 * panel (ggplot2's theme(strip.background = element_blank())) */
+                char *f = ident(p);
+                if (!f || strcmp(f, "element_blank") || expect(p, '(') || expect(p, ')')) {
+                    free(f);
+                    return fail(p, "theme(strip.background=) takes element_blank()%s", "");
+                }
+                free(f);
+                spec->no_strip_bg = 1;
             } else if (!strcmp(key, "legend.key.size") || !strcmp(key, "legend.key.height")
                        || !strcmp(key, "legend.key.width")
                        || !strcmp(key, "legend.key.spacing.y")
@@ -4011,10 +4045,31 @@ static int parse_term(P *p, PlotSpec *spec) {
                         if (!(v2 > 0)) { free(gk); free(key);
                             return fail(p, "barwidth=/barheight= must be > 0%s", ""); }
                         if (gk[3] == 'w') spec->cbar_w = v2; else spec->cbar_h = v2;
+                    } else if (!strcmp(gk, "label.theme")) {
+                        /* ggplot2's guide_colourbar(label.theme=element_text(
+                         * size=)): the bar's tick labels apart from the
+                         * discrete keys' legend.text */
+                        char *f = ident(p);
+                        int bad = !f || strcmp(f, "element_text") || expect(p, '(');
+                        free(f);
+                        char *sk = bad ? NULL : ident(p);
+                        if (bad || !sk || strcmp(sk, "size") || expect(p, '=')) {
+                            free(sk); free(gk); free(key);
+                            return fail(p, "label.theme= takes element_text(size=N)%s", "");
+                        }
+                        free(sk);
+                        skip_ws(p);
+                        char *end;
+                        double v2 = strtod(p->s, &end);
+                        if (end == p->s || !(v2 > 0)) { free(gk); free(key);
+                            return fail(p, "label.theme size= expects a number > 0 (pt)%s", ""); }
+                        p->s = end;
+                        if (expect(p, ')')) { free(gk); free(key); return -1; }
+                        spec->cbar_lab_sz = v2;
                     } else {
                         char msg[CP_ERRLEN];
                         snprintf(msg, sizeof msg, "guide_colourbar option `%s` not "
-                                 "implemented (direction=, barwidth=, barheight=)", gk);
+                                 "implemented (direction=, barwidth=, barheight=, label.theme=)", gk);
                         free(gk); free(key);
                         return fail(p, "%s", msg);
                     }
