@@ -2,7 +2,7 @@
 #ifndef CINDERPLOT_H
 #define CINDERPLOT_H
 
-#define CINDERPLOT_VERSION "0.30.0"
+#define CINDERPLOT_VERSION "0.30.1"
 
 /* Size of the caller-supplied error buffer passed to every *_read / render /
  * dsl_parse entry point (see main.c: char err[CP_ERRLEN]). All error
