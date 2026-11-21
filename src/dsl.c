@@ -1425,6 +1425,8 @@ static int parse_grad_scale(P *p, FillScale *fs, const char *k, const char *fn) 
     else if (!strcmp(k, "gradient")) {
         fs->kind = FILL_GRADIENT;
         parse_color("#132B43", &fs->low); parse_color("#56B1F7", &fs->high);
+    } else if (!strcmp(k, "gradientn")) {
+        fs->kind = FILL_GRADIENTN;            /* colours= is required, below */
     } else if (!strcmp(k, "gradient2")) {
         fs->kind = FILL_GRADIENT2;
         parse_color("#832424", &fs->low); parse_color("white", &fs->mid);
@@ -1433,7 +1435,7 @@ static int parse_grad_scale(P *p, FillScale *fs, const char *k, const char *fn) 
         char msg[256];   /* the supported list is long now */
         snprintf(msg, sizeof msg, "`%s%s()` not implemented; supported: "
                  "viridis, magma, inferno, plasma, cividis, rocket, mako, "
-                 "parula, turbo, coolwarm, bwr, jet, gradient, gradient2", fn, k);
+                 "parula, turbo, coolwarm, bwr, jet, gradient, gradient2, gradientn", fn, k);
         return fail(p, "%s", msg);
     }
     int is_grad = fs->kind == FILL_GRADIENT || fs->kind == FILL_GRADIENT2;
@@ -1452,7 +1454,45 @@ static int parse_grad_scale(P *p, FillScale *fs, const char *k, const char *fn) 
                      "high=, midpoint=)", key, fn, k, fn, fn);
             return fail(p, "%s", msg);
         }
-        if (!strcmp(key, "midpoint")) {
+        if (fs->kind == FILL_GRADIENTN && (!strcmp(key, "colours") || !strcmp(key, "colors"))) {
+            if (!(p->s[0] == 'c' && p->s[1] == '('))
+                return fail(p, "colours= expects c(\"#rrggbb\", ...)%s", "");
+            p->s += 2;
+            fs->ngn = 0;
+            for (;;) {
+                skip_ws(p);
+                if (*p->s == ')') { p->s++; break; }
+                char *v = string_lit(p);
+                if (!v) return fail(p, "colours=c(...) expects quoted colours%s", "");
+                if (fs->ngn >= GRADN_MAX) return fail(p, "colours=c(...) holds at most 64 colours%s", "");
+                if (parse_color(v, &fs->gn[fs->ngn])) return fail(p, "bad colour \"%s\" in colours=", v);
+                fs->ngn++;
+                skip_ws(p);
+                if (*p->s == ',') { p->s++; continue; }
+                if (*p->s == ')') { p->s++; break; }
+                return fail(p, "expected , or ) in colours=c(...)%s", "");
+            }
+        } else if (fs->kind == FILL_GRADIENTN && !strcmp(key, "values")) {
+            if (!(p->s[0] == 'c' && p->s[1] == '('))
+                return fail(p, "values= expects c(0, ..., 1)%s", "");
+            p->s += 2;
+            int nv = 0;
+            for (;;) {
+                skip_ws(p);
+                if (*p->s == ')') { p->s++; break; }
+                char *end;
+                double v = strtod(p->s, &end);
+                if (end == p->s || !isfinite(v)) return fail(p, "values=c(...) expects numbers%s", "");
+                p->s = end;
+                if (nv >= GRADN_MAX) return fail(p, "values=c(...) holds at most 64 numbers%s", "");
+                fs->gnv[nv++] = v;
+                skip_ws(p);
+                if (*p->s == ',') { p->s++; continue; }
+                if (*p->s == ')') { p->s++; break; }
+                return fail(p, "expected , or ) in values=c(...)%s", "");
+            }
+            fs->has_gnv = nv;
+        } else if (!strcmp(key, "midpoint")) {
             if (fs->kind != FILL_GRADIENT2)
                 return fail(p, "midpoint= belongs to %sgradient2()", fn);
             char *end;
@@ -1465,6 +1505,19 @@ static int parse_grad_scale(P *p, FillScale *fs, const char *k, const char *fn) 
             fs->has_limits = 1;
         } else if (!strcmp(key, "breaks") || !strcmp(key, "labels")) {
             if (parse_fill_breaks_labels(p, key, fs)) return -1;
+        } else if (!strcmp(key, "trans") || !strcmp(key, "transform")) {
+            /* ggplot2's trans="log10": colour by log10(value), ticks at the
+             * powers, labelled in data units; a value <= 0 takes na.value */
+            char *v = string_lit(p);
+            if (!v) return fail(p, "trans= expects a quoted name%s", "");
+            if (!strcmp(v, "log10")) fs->log_base = 10;
+            else if (!strcmp(v, "log2")) fs->log_base = 2;
+            else if (!strcmp(v, "identity")) fs->log_base = 0;
+            else { char msg[CP_ERRLEN];
+                snprintf(msg, sizeof msg, "trans=\"%s\" not implemented on a colour scale "
+                         "(log10, log2, identity)", v);
+                free(v); return fail(p, "%s", msg); }
+            free(v);
         } else if (!strcmp(key, "na.value")) {
             /* ggplot2's na.value: what a missing cell is painted. "white"
              * turns NA spacer columns into true gaps. */
@@ -1489,6 +1542,17 @@ static int parse_grad_scale(P *p, FillScale *fs, const char *k, const char *fn) 
         if (*p->s == ',') { p->s++; skip_ws(p); }
     }
     p->s++;
+    if (fs->kind == FILL_GRADIENTN) {
+        if (fs->ngn < 2)
+            return fail(p, "%sgradientn() needs colours=c(...) with at least two colours", fn);
+        if (fs->has_gnv) {
+            if (fs->has_gnv != fs->ngn)
+                return fail(p, "%sgradientn(values=) needs one position per colour", fn);
+            for (int i = 0; i < fs->ngn; i++)
+                if (fs->gnv[i] < 0 || fs->gnv[i] > 1 || (i && fs->gnv[i] < fs->gnv[i - 1]))
+                    return fail(p, "%sgradientn(values=) must rise from 0 to 1", fn);
+        }
+    }
     return check_fill_breaks_labels(p, fs);
 }
 
@@ -1534,6 +1598,19 @@ static int parse_distiller(P *p, FillScale *fs) {
             if (!v || parse_color(v, &fs->na))
                 return fail(p, "na.value= expects a quoted colour", "");
             fs->has_na = 1;
+        } else if (!strcmp(key, "trans") || !strcmp(key, "transform")) {
+            /* ggplot2's trans="log10": colour by log10(value), ticks at the
+             * powers, labelled in data units; a value <= 0 takes na.value */
+            char *v = string_lit(p);
+            if (!v) return fail(p, "trans= expects a quoted name%s", "");
+            if (!strcmp(v, "log10")) fs->log_base = 10;
+            else if (!strcmp(v, "log2")) fs->log_base = 2;
+            else if (!strcmp(v, "identity")) fs->log_base = 0;
+            else { char msg[CP_ERRLEN];
+                snprintf(msg, sizeof msg, "trans=\"%s\" not implemented on a colour scale "
+                         "(log10, log2, identity)", v);
+                free(v); return fail(p, "%s", msg); }
+            free(v);
         } else if (!strcmp(key, "breaks") || !strcmp(key, "labels")) {
             if (parse_fill_breaks_labels(p, key, fs)) return -1;
         } else return fail(p, "scale_*_distiller option `%s` not implemented "
@@ -4507,6 +4584,9 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
         if (spec->layers[i].hex && spec->polar)
             return fail(&p, "geom_hex() draws on Cartesian axes; coord_polar() rings "
                         "are geom_tile()%s", "");
+    if ((spec->fill.log_base || spec->colour_scale.log_base) && (spec->nhobjs || spec->ntracks))
+        return fail(&p, "trans= on a colour scale is implemented for grammar plots; heatmap "
+                    "and track modes map the value linearly%s", "");
     if ((spec->rev_x || spec->rev_y) && spec->polar)
         return fail(&p, "scale_*_reverse() is not implemented under coord_polar()%s", "");
     if ((spec->rev_x || spec->rev_y) && (spec->nhobjs || spec->ntracks))

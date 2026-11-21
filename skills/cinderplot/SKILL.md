@@ -501,7 +501,12 @@ for.
   rainbow without `jet`'s false banding), `coolwarm`/`bwr` (diverging —
   `coolwarm`'s grey midpoint survives print where `bwr`'s white does not), `jet`
   (legacy, banding is an artefact), plus `gradient`/`gradient2` for your own
-  endpoints,
+  endpoints and `gradientn(colours=c("#000033", "#2255aa", "#faf9cf"))` for
+  n of them (evenly spread, or at `values=c(0, 0.8, 1)`; 2 to 64 colours).
+  Every continuous colour scale (and `scale_*_distiller`) takes
+  `trans="log10"` (or `"log2"`): colours by log(value), colourbar ticks at
+  the powers labelled in data units (1, 10, 100, ...), a value <= 0 painted
+  `na.value=` (default grey) -- a per-spot count map. Grammar mode only.
   `scale_x_genome("seqinfo.tsv.gz")`, `ideogram("cytoband.tsv.gz")`.
 - **also**: `facet_wrap(~v[, levels=][, scales=][, space=][, ncol=][, nrow=])`,
   `facet_grid(row ~ col[, scales=][, space=])` (order a side in the formula,

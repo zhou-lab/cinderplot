@@ -178,6 +178,31 @@ static double g_cbar_lab_sz;          /* label.theme=element_text(size=); 0 = le
 #define CBAR_LAB_SZ (g_cbar_lab_sz > 0 ? g_cbar_lab_sz : SZ_LEGEND_TEXT)
 static GTable *build_colorbar_horiz(cairo_t *cr, const Theme *th, const char *title,
                                     const FillScale *fs, double lo, double hi);
+/* a colourbar's axis under trans="log10": ticks at the powers of the base
+ * inside [lo, hi] (falling back to the linear breaks when fewer than two
+ * powers fit), each placed and each strip coloured in log space */
+static int cbar_auto_breaks(const FillScale *fs, double lo, double hi, int want, double *br) {
+    int nf = 0;
+    if (fs->log_base && lo > 0 && hi > lo) {
+        double lb = log((double)fs->log_base);
+        for (int k = (int)ceil(log(lo) / lb - 1e-9); k <= (int)floor(log(hi) / lb + 1e-9) && nf < 16; k++)
+            br[nf++] = pow(fs->log_base, k);
+        if (nf >= 2) return nf;
+        nf = 0;
+    }
+    double tmp[16];
+    int nb = extended_breaks(lo, hi, want, tmp, 16);
+    for (int i = 0; i < nb; i++) if (tmp[i] >= lo && tmp[i] <= hi) br[nf++] = tmp[i];
+    return nf;
+}
+static double cbar_frac(const FillScale *fs, double v, double lo, double hi) {
+    if (fs->log_base && lo > 0 && v > 0) return (log(v) - log(lo)) / (log(hi) - log(lo));
+    return hi > lo ? (v - lo) / (hi - lo) : 0.5;
+}
+static double cbar_val(const FillScale *fs, double u, double lo, double hi) {
+    if (fs->log_base && lo > 0) return exp(log(lo) + u * (log(hi) - log(lo)));
+    return lo + u * (hi - lo);
+}
 static GTable *build_colorbar_legend(cairo_t *cr, const Theme *th, const char *title,
                                      const FillScale *fs, double lo, double hi) {
     if (g_cbar_horiz) return build_colorbar_horiz(cr, th, title, fs, lo, hi);
@@ -186,10 +211,7 @@ static GTable *build_colorbar_legend(cairo_t *cr, const Theme *th, const char *t
     double br[16]; char *ul[16];
     int nu = cp_fill_user_breaks(fs, lo, hi, br, ul), nf = 0;
     if (nu >= 0) nf = nu;               /* scale_fill_*(breaks=, labels=) */
-    else {
-        int nb = extended_breaks(lo, hi, 5, br, 16);
-        for (int i = 0; i < nb; i++) if (br[i] >= lo && br[i] <= hi) br[nf++] = br[i];
-    }
+    else nf = cbar_auto_breaks(fs, lo, hi, 5, br);
     int dec = axis_decimals(br, nf);
     double labw = 0;
     for (int i = 0; i < nf; i++) {
@@ -218,14 +240,14 @@ static GTable *build_colorbar_legend(cairo_t *cr, const Theme *th, const char *t
     const int NSTEP = 64;
     double barw_npc = BARW / w;
     for (int k = 0; k < NSTEP; k++) {       /* colorbar strips (value-correct) */
-        double v = lo + (k + 0.5) / NSTEP * (hi - lo);
+        double v = cbar_val(fs, (k + 0.5) / NSTEP, lo, hi);
         g = gt_add(t, G_RECT, 2, 0, 2, 0);
         g->sub = 1; g->col = fill_map_value(fs, v, lo, hi);
         g->x0 = 0; g->x1 = barw_npc;
         g->y0 = (double)k / NSTEP; g->y1 = (double)(k + 1) / NSTEP;
     }
     for (int i = 0; i < nf; i++) {           /* ticks + labels */
-        double frac = hi > lo ? (br[i] - lo) / (hi - lo) : 0.5;
+        double frac = cbar_frac(fs, br[i], lo, hi);
         char *lab = nu >= 0 && ul[i] ? ul[i] : cp_xmalloc(32);
         if (!(nu >= 0 && ul[i])) fmt_break(br[i], dec, lab, 32);
         g = gt_add(t, G_LINE, 2, 0, 2, 0);
@@ -248,10 +270,7 @@ static GTable *build_colorbar_horiz(cairo_t *cr, const Theme *th, const char *ti
     double br[16]; char *ul[16];
     int nu = cp_fill_user_breaks(fs, lo, hi, br, ul), nf = 0;
     if (nu >= 0) nf = nu;
-    else {
-        int nb = extended_breaks(lo, hi, 4, br, 16);
-        for (int i = 0; i < nb; i++) if (br[i] >= lo && br[i] <= hi) br[nf++] = br[i];
-    }
+    else nf = cbar_auto_breaks(fs, lo, hi, 4, br);
     int dec = axis_decimals(br, nf);
     double over = 0;                          /* labels overhang the bar ends */
     for (int i = 0; i < nf; i++) {
@@ -278,7 +297,7 @@ static GTable *build_colorbar_horiz(cairo_t *cr, const Theme *th, const char *ti
     }
     const int NSTEP = 64;
     for (int k = 0; k < NSTEP; k++) {
-        double v = lo + (k + 0.5) / NSTEP * (hi - lo);
+        double v = cbar_val(fs, (k + 0.5) / NSTEP, lo, hi);
         g = gt_add(t, G_RECT, 2, 0, 2, 0);
         g->sub = 1; g->col = fill_map_value(fs, v, lo, hi);
         g->x0 = (x0 + BARL * k / NSTEP) / w; g->x1 = (x0 + BARL * (k + 1) / NSTEP) / w;
@@ -286,7 +305,7 @@ static GTable *build_colorbar_horiz(cairo_t *cr, const Theme *th, const char *ti
     }
     double rowh3 = TICK_LEN + TXT_GAP + font_h(cr, CBAR_LAB_SZ);
     for (int i = 0; i < nf; i++) {
-        double frac = hi > lo ? (br[i] - lo) / (hi - lo) : 0.5;
+        double frac = cbar_frac(fs, br[i], lo, hi);
         double xn = (x0 + BARL * frac) / w;
         char *lab = nu >= 0 && ul[i] ? ul[i] : cp_xmalloc(32);
         if (!(nu >= 0 && ul[i])) fmt_break(br[i], dec, lab, 32);
@@ -2276,11 +2295,13 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         else {
             cdmin = 1e300; cdmax = -1e300;
             for (int r = 0; r < df->nrow; r++)
-                if (use[r] && !isnan(colc->num[r])) {
+                if (use[r] && !isnan(colc->num[r])
+                    && !(cscale.log_base && !(colc->num[r] > 0))) {  /* log: positives train */
                     if (colc->num[r] < cdmin) cdmin = colc->num[r];
                     if (colc->num[r] > cdmax) cdmax = colc->num[r];
                 }
-            if (cdmax <= cdmin) cdmax = cdmin + 1;
+            if (cdmin > cdmax) { cdmin = cscale.log_base ? 1 : 0; cdmax = cscale.log_base ? 10 : 1; }
+            if (cdmax <= cdmin) cdmax = cscale.log_base ? cdmin * cscale.log_base : cdmin + 1;
         }
     }
 #define CCOL(r) fill_map_value(&cscale, colc->num[r], cdmin, cdmax)
@@ -3837,12 +3858,13 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 if (cscale.has_limits) { lo = cscale.lim_lo; hi = cscale.lim_hi; }
                 else
                     for (int rr = 0; rr < df->nrow; rr++)
-                        if (use[rr] && ff->idx[rr] == p && isfinite(colc->num[rr])) {
+                        if (use[rr] && ff->idx[rr] == p && isfinite(colc->num[rr])
+                            && !(cscale.log_base && !(colc->num[rr] > 0))) {
                             if (colc->num[rr] < lo) lo = colc->num[rr];
                             if (colc->num[rr] > hi) hi = colc->num[rr];
                         }
-                if (lo > hi) { lo = 0; hi = 1; }
-                if (hi <= lo) hi = lo + 1;
+                if (lo > hi) { lo = cscale.log_base ? 1 : 0; hi = cscale.log_base ? 10 : 1; }
+                if (hi <= lo) hi = cscale.log_base ? lo * cscale.log_base : lo + 1;
                 fc_cmin[p] = lo; fc_cmax[p] = hi;
             }
         } else {

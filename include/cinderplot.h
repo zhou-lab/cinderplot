@@ -197,7 +197,7 @@ void hue_palette(int n, Col *out);
 typedef enum { FILL_VIRIDIS, FILL_JET, FILL_BWR, FILL_GRADIENT, FILL_GRADIENT2,
                FILL_PARULA, FILL_TURBO, FILL_COOLWARM, FILL_MAGMA, FILL_INFERNO,
                FILL_PLASMA, FILL_CIVIDIS, FILL_ROCKET, FILL_MAKO,
-               FILL_BREWER } FillKind;
+               FILL_BREWER, FILL_GRADIENTN } FillKind;
 typedef struct {
     FillKind kind;
     Col low, mid, high;      /* gradient / gradient2 */
@@ -211,6 +211,12 @@ typedef struct {
 #define BREWER_MAX_STOPS 12
     Col stops[BREWER_MAX_STOPS]; int nstops;
     Col na; int has_na;      /* na.value=: the missing-cell colour (default grey) */
+    /* scale_*_gradientn(colours=c(...)[, values=c(...)]): n stops, evenly
+     * spaced or at values= (0..1, ascending), as ggplot2's gradientn */
+#define GRADN_MAX 64
+    Col gn[GRADN_MAX]; double gnv[GRADN_MAX]; int ngn, has_gnv;
+    int log_base;            /* trans="log10"/"log2": colour by log(value), a
+                              * non-positive value takes na.value; 0 = linear */
     double brk[16]; int nbrk;          /* breaks=c(...): colourbar ticks (data space) */
     char *blab[16]; int nblab;         /* labels=c(...): their text, one per break */
 } FillScale;

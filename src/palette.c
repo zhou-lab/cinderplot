@@ -188,6 +188,19 @@ Col fill_map(const FillScale *fs, double t) {
     case FILL_CIVIDIS: ramp(cividis, 9, t, &out); break;
     case FILL_ROCKET: ramp(rocket, 9, t, &out); break;
     case FILL_MAKO: ramp(mako, 9, t, &out); break;
+    case FILL_GRADIENTN:
+        if (!fs->has_gnv) { ramp(fs->gn, fs->ngn, t, &out); break; }
+        /* values=: the stops at their own positions (rescaled 0..1) */
+        if (t <= fs->gnv[0]) { out = fs->gn[0]; break; }
+        if (t >= fs->gnv[fs->ngn - 1]) { out = fs->gn[fs->ngn - 1]; break; }
+        for (int i = 0; i + 1 < fs->ngn; i++)
+            if (t <= fs->gnv[i + 1]) {
+                double w = fs->gnv[i + 1] - fs->gnv[i];
+                Col pair[2] = {fs->gn[i], fs->gn[i + 1]};
+                ramp(pair, 2, w > 0 ? (t - fs->gnv[i]) / w : 0, &out);
+                break;
+            }
+        break;
     case FILL_GRADIENT: {
         Col st[2] = {fs->low, fs->high};
         ramp(st, 2, t, &out);
@@ -205,6 +218,15 @@ Col fill_map(const FillScale *fs, double t) {
 
 Col fill_map_value(const FillScale *fs, double v, double dmin, double dmax) {
     double t;
+    if (fs->log_base) {
+        /* trans="log10": the same map in log space; a value with no log
+         * (<= 0) is missing, as ggplot2's transform makes it */
+        if (!(v > 0)) return fs->has_na ? fs->na : C_NA;
+        double lb = log((double)fs->log_base);
+        v = log(v) / lb;
+        dmin = dmin > 0 ? log(dmin) / lb : v;
+        dmax = dmax > 0 ? log(dmax) / lb : v;
+    }
     if (isnan(v) && fs->has_na) return fs->na;
     if (fs->kind == FILL_GRADIENT2) {
         /* midpoint maps to t = 0.5 (ggplot scale_fill_gradient2), each half
