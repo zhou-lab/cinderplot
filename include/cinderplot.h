@@ -317,6 +317,7 @@ typedef struct {
     int axis_styled, hide_ticks, hide_text;    /* 0 = legacy C_TICK/C_AXTXT (heatmap/tracks) */
     GTable *child;
     unsigned char *img; int img_w, img_h;      /* G_IMAGE: ARGB32 buffer */
+    int img_smooth;                            /* G_IMAGE: bilinear, not nearest (a photo) */
 } Grob;
 
 /* Bound on a gtable's rows/columns. It leaks into user-facing limits -- a
@@ -948,6 +949,12 @@ typedef struct {
     CellHighlight hls[MAX_HIGHLIGHTS];
     int nhls;
     Annotate annos[MAX_ANNOTATES];
+    /* annotation_raster("img.png", xmin=, xmax=, ymin=, ymax=): a PNG under
+     * the data layers, its edges at those data coordinates (-Inf/Inf = the
+     * panel edge), drawn upright (top row on top) as in ggplot2; interpolate=, and
+     * greyscale=/alpha= for spots coloured over a greyed tissue photo */
+    char *araster; double ar_x0, ar_x1, ar_y0, ar_y1;
+    int ar_interp, ar_grey; double ar_alpha;
     int nannos;
     FillScale fill;
     int has_fill;                   /* a scale_fill_*() was given (else default) */

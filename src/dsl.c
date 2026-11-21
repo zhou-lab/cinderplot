@@ -2702,6 +2702,59 @@ static int parse_term(P *p, PlotSpec *spec) {
         o->place.kind = PL_LEFT_OF;              /* default: row tree left */
         return parse_hm_args(p, o, 0);
     }
+    if (!strcmp(name, "annotation_raster")) {
+        if (spec->araster) return fail(p, "one annotation_raster() per figure%s", "");
+        skip_ws(p);
+        char *path = string_lit(p);
+        if (!path) return fail(p, "annotation_raster() expects a quoted PNG path first "
+                               "(ggplot2's raster argument)%s", "");
+        spec->araster = path; spec->ar_alpha = 1;
+        int got = 0;
+        skip_ws(p);
+        if (*p->s == ',') { p->s++; skip_ws(p); }
+        while (*p->s != ')') {
+            char *key = ident(p);
+            if (!key || expect(p, '=')) return fail(p, "bad annotation_raster() argument%s", "");
+            skip_ws(p);
+            double *dst = !strcmp(key, "xmin") ? &spec->ar_x0 : !strcmp(key, "xmax") ? &spec->ar_x1
+                        : !strcmp(key, "ymin") ? &spec->ar_y0 : !strcmp(key, "ymax") ? &spec->ar_y1 : NULL;
+            if (dst) {
+                /* a number, or -Inf/Inf: the panel's own edge */
+                int neg = 0;
+                if (*p->s == '-') { neg = 1; p->s++; }
+                if (!strncmp(p->s, "Inf", 3)) { p->s += 3; *dst = neg ? -INFINITY : INFINITY; }
+                else {
+                    char *end;
+                    double v = strtod(p->s, &end);
+                    if (end == p->s || !isfinite(v))
+                        return fail(p, "annotation_raster(%s=) expects a number or Inf", key);
+                    p->s = end; *dst = neg ? -v : v;
+                }
+                got |= dst == &spec->ar_x0 ? 1 : dst == &spec->ar_x1 ? 2 : dst == &spec->ar_y0 ? 4 : 8;
+            } else if (!strcmp(key, "interpolate") || !strcmp(key, "greyscale") || !strcmp(key, "grayscale")) {
+                int on = 0;
+                if (parse_bool(p, &on)) return fail(p, "%s= expects TRUE or FALSE", key);
+                if (key[0] == 'i') spec->ar_interp = on; else spec->ar_grey = on;
+            } else if (!strcmp(key, "alpha")) {
+                char *end;
+                double v = strtod(p->s, &end);
+                if (end == p->s || !(v > 0 && v <= 1))
+                    return fail(p, "annotation_raster(alpha=) must be in (0, 1]%s", "");
+                p->s = end; spec->ar_alpha = v;
+            } else {
+                char msg[CP_ERRLEN];
+                snprintf(msg, sizeof msg, "annotation_raster(%s=) not implemented (xmin=, xmax=, "
+                         "ymin=, ymax=, interpolate=, greyscale=, alpha=)", key);
+                return fail(p, "%s", msg);
+            }
+            skip_ws(p);
+            if (*p->s == ',') { p->s++; skip_ws(p); }
+        }
+        if (got != 15)
+            return fail(p, "annotation_raster() needs xmin=, xmax=, ymin= and ymax= "
+                        "(as ggplot2; -Inf/Inf for the panel edge)%s", "");
+        return expect(p, ')');
+    }
     if (!strcmp(name, "annotate")) {
         /* annotate("text", x=0.78, y=0.925, label="0.9"[, colour=][, size=])
          * / annotate("segment", x=, y=, xend=, yend=) / annotate("rect",
@@ -4587,6 +4640,11 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
     if ((spec->fill.log_base || spec->colour_scale.log_base) && (spec->nhobjs || spec->ntracks))
         return fail(&p, "trans= on a colour scale is implemented for grammar plots; heatmap "
                     "and track modes map the value linearly%s", "");
+    if (spec->araster && (spec->polar || spec->coord_flip))
+        return fail(&p, "annotation_raster() draws on Cartesian x/y; not under %s",
+                    spec->polar ? "coord_polar()" : "coord_flip()");
+    if (spec->araster && (spec->nhobjs || spec->ntracks))
+        return fail(&p, "annotation_raster() sits under a grammar plot's layers%s", "");
     if ((spec->rev_x || spec->rev_y) && spec->polar)
         return fail(&p, "scale_*_reverse() is not implemented under coord_polar()%s", "");
     if ((spec->rev_x || spec->rev_y) && (spec->nhobjs || spec->ntracks))

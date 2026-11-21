@@ -11,6 +11,7 @@
 #include "cinderplot.h"
 #include <cairo-pdf.h>
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -4736,6 +4737,45 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         }
     }
 
+    /* annotation_raster(): decode the PNG once; every panel draws the same
+     * pixels at its own data coordinates. Greyscale and alpha act on the
+     * premultiplied pixels, so a transparent edge stays transparent. */
+    unsigned char *ar_buf = NULL; int ar_w = 0, ar_h = 0;
+    if (spec->araster) {
+        cairo_surface_t *im = cairo_image_surface_create_from_png(spec->araster);
+        if (cairo_surface_status(im) != CAIRO_STATUS_SUCCESS) {
+            snprintf(err, CP_ERRLEN, "annotation_raster(): cannot read `%s` as a PNG (%s)",
+                     spec->araster, cairo_status_to_string(cairo_surface_status(im)));
+            cairo_surface_destroy(im);
+            return -1;
+        }
+        ar_w = cairo_image_surface_get_width(im); ar_h = cairo_image_surface_get_height(im);
+        int st = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, ar_w);
+        cairo_surface_t *argb = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, ar_w, ar_h);
+        cairo_t *ac = cairo_create(argb);
+        cairo_set_source_surface(ac, im, 0, 0);
+        cairo_paint(ac);
+        cairo_destroy(ac);
+        cairo_surface_flush(argb);
+        ar_buf = cp_xmalloc((size_t)st * ar_h);
+        const unsigned char *src = cairo_image_surface_get_data(argb);
+        int sst = cairo_image_surface_get_stride(argb);
+        for (int yy = 0; yy < ar_h; yy++) {
+            const uint32_t *in = (const uint32_t *)(src + (size_t)yy * sst);
+            uint32_t *o = (uint32_t *)(ar_buf + (size_t)yy * st);
+            for (int xx = 0; xx < ar_w; xx++) {
+                uint32_t px = in[xx];
+                double a = (px >> 24) & 255, r = (px >> 16) & 255, gg = (px >> 8) & 255, b = px & 255;
+                if (spec->ar_grey) r = gg = b = 0.299 * r + 0.587 * gg + 0.114 * b;
+                a *= spec->ar_alpha; r *= spec->ar_alpha; gg *= spec->ar_alpha; b *= spec->ar_alpha;
+                o[xx] = ((uint32_t)lround(a) << 24) | ((uint32_t)lround(r) << 16)
+                      | ((uint32_t)lround(gg) << 8) | (uint32_t)lround(b);
+            }
+        }
+        cairo_surface_destroy(argb);
+        cairo_surface_destroy(im);
+    }
+
     /* ---- panels ---- */
     for (int p = 0; p < npan; p++) {
         int pr = p / ncolp, pc = p % ncolp;
@@ -4786,6 +4826,22 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 g->col = th->grid_major; g->lw = lw_pt(th->grid_major_lw); g->clip = 1;
                 g->y0 = g->y1 = S->ynpc[i]; g->x0 = 0; g->x1 = 1;
             }
+        }
+        if (ar_buf) {     /* annotation_raster(): over the grid, under the layers */
+            g = gt_add(T, G_IMAGE, R, C, R, C);
+            g->img = ar_buf; g->img_w = ar_w; g->img_h = ar_h; g->clip = 1;
+            g->img_smooth = spec->ar_interp;
+            #define AR_NX(v) (isinf(v) ? ((v) > 0) != !!spec->rev_x : NPCX(cp_logt(spec->log_x, v)))
+            #define AR_NY(v) (isinf(v) ? ((v) > 0) != !!spec->rev_y : NPCY(cp_logt(spec->log_y, v)))
+            /* ggplot2's GeomRasterAnn draws at min()/abs() of the box: the
+             * image stays upright under a reversed axis, its top row at the
+             * top of the panel -- y = 1 on top for a scale_y_reverse() grid */
+            double ax0 = AR_NX(spec->ar_x0), ax1 = AR_NX(spec->ar_x1);
+            double ay0 = AR_NY(spec->ar_y0), ay1 = AR_NY(spec->ar_y1);
+            g->x0 = fmin(ax0, ax1); g->x1 = fmax(ax0, ax1);
+            g->y0 = fmin(ay0, ay1); g->y1 = fmax(ay0, ay1);
+            #undef AR_NX
+            #undef AR_NY
         }
         if (th->border_on && !spec->polar) {          /* bw / linedraw / light / few */
             g = gt_add(T, G_RECT, R, C, R, C);

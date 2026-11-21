@@ -698,8 +698,9 @@ static void render_range(GTable *t, cairo_t *cr, int from, int to, int in_run) {
             cairo_translate(cr, tx0, ty0);
             cairo_scale(cr, tw / iw, th / ih);
             cairo_set_source_surface(cr, img, 0, 0);
-            cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_NEAREST);
-            svg_note_image(cr, 1);
+            cairo_pattern_set_filter(cairo_get_source(cr),
+                                     g->img_smooth ? CAIRO_FILTER_GOOD : CAIRO_FILTER_NEAREST);
+            svg_note_image(cr, !g->img_smooth);
             cairo_paint(cr);
             cairo_restore(cr);
             cairo_surface_destroy(img);

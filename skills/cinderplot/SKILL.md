@@ -415,6 +415,15 @@ cinderplot 'dart.csv + aes(x=factor(sp), y=factor(ring), fill=v, group=grp)
   and `"rect"` (xmin/xmax/ymin/ymax; colour= sets the fill, default grey85),
   and `"point"` (x/y only; a filled dot, `size=` in geom_point units, default
   1.5 — the operating point on a ROC curve).
+  `annotation_raster("img.png", xmin=, xmax=, ymin=, ymax=)` (ggplot2's,
+  with a PNG path for the raster) embeds an image at those data coordinates,
+  over the grid and under every layer -- spots on a tissue photo, as
+  Seurat's SpatialFeaturePlot. `-Inf`/`Inf` mean the panel edge; the image
+  stays upright under `scale_y_reverse()` (ggplot2 draws it at min/abs of
+  the box), so a grid with y = 1 on top keeps the photo the right way up.
+  `interpolate=TRUE` smooths it (default nearest, as ggplot2);
+  `greyscale=TRUE` and `alpha=` grey and fade it under coloured spots. One
+  per figure; not under coord_flip()/coord_polar() or outside grammar mode.
   `hjust`/`vjust` anchor the text as in ggplot (0.5 default = centred on the
   point; `hjust=0, vjust=0` starts the text at x and rests it above y — the
   reference-line-label placement); vjust takes 0/0.5/1. `angle=` rotates the
