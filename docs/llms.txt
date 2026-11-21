@@ -538,6 +538,11 @@ for.
   y (no free_y) and no coord_flip(). `show.legend=FALSE` drops a band's key,
   e.g. when the band repeats the axis labels and the main legend needs the
   room. Placements (`left_of()` etc.) are heatmap-mode and error here.
+  Beside a heatmap() a band has no key unless a legend() names it, so
+  `show.legend=FALSE` there is accepted and changes nothing; `axis=` and
+  `side=` still error. A one-hot side matrix (an 18-state ChromHMM yes/no
+  table) is one `annotation(column=)` band per state chained with
+  `right_of(prev, width=, pad=0)`.
 
 `ncol=`/`nrow=` fix the grid shape; give both and a grid too small for the
 panels is an error. Worth reaching for whenever the panels cross two factors —
@@ -1377,7 +1382,7 @@ statistical transformations beyond binning, density and loess.
    colours; more errors, and a positional list shorter than the factor (or the
    heatmap's category count) errors naming both counts. A discrete heatmap fill
    caps at 64 levels for the same reason. There is no discrete-category or legend-level cap any
-   more. Still hard limits: 8 layers, 12 tracks, 16 heatmap objects, 256
+   more. Still hard limits: 8 layers, 12 tracks, 32 heatmap objects, 256
    breaks/labels. A legend stack taller than the figure grows the auto-fit
    canvas in grammar mode, and wraps into further columns in heatmap mode;
    under an explicit `--size` a legend that still cannot fit warns before

@@ -4539,9 +4539,12 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
          * heatmap.c beside the data, and still errors rather than ignoring. */
         if (spec->hobjs[0].type != HM_HEATMAP)
             return fail(&p, "the first placed object must be a heatmap()", "");
+        /* show.legend=FALSE passes: beside a heatmap() a band is keyed only
+         * by a legend() that names it, so it already has no key (a script
+         * writing it for every band, as on a grammar plot, still runs) */
         for (int i = 0; i < spec->nhobjs; i++)
-            if (spec->hobjs[i].gr_axis_given || spec->hobjs[i].gr_side || spec->hobjs[i].gr_no_legend)
-                return fail(&p, "annotation(axis=, side=, show.legend=) belong to a band on a grammar "
+            if (spec->hobjs[i].gr_axis_given || spec->hobjs[i].gr_side)
+                return fail(&p, "annotation(axis=, side=) belong to a band on a grammar "
                             "plot's x or y; beside a heatmap() use placements "
                             "(left_of(), beneath(), ...)", "");
         for (int i = 0; i < spec->nhobjs; i++)

@@ -536,7 +536,7 @@ typedef struct {
      * row-major; 0 = as many columns as fit the target's width */
     int leg_ncol, leg_nrow;
 } HMObj;
-#define MAX_HMOBJS 16
+#define MAX_HMOBJS 32   /* a heatmap plus a one-hot side matrix of ~20 bands (Fig. 2d) */
 /* an annotation band's own palette from values=/palette= (palette.c);
  * 0 = ok, -1 = err filled */
 int annotation_palette(const HMObj *o, const Factor *f, Col *pal, char *err);
