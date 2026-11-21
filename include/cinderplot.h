@@ -789,6 +789,8 @@ typedef struct {
      * call sites read it; only the transform and the break/tick generators
      * care which base it is. */
     int log_x, log_y;
+    int rev_x, rev_y;            /* scale_*_reverse() / trans="reverse": the axis
+                                  * runs high to low (ggplot2's reverse_trans) */
     double xlim_lo, xlim_hi, ylim_lo, ylim_hi;   /* user axis limits (data space) */
     int has_xlim, has_ylim;                       /* xlim()/ylim() or scale_*_log10(limits=) */
     int x_pct, y_pct;                             /* scale_*_continuous(labels=percent) */

@@ -1721,6 +1721,7 @@ static int parse_manual_scale(P *p, PlotSpec *spec, const char *fn) {
  * and xlim() all reached the renderer and died there with a message about
  * expand=. R's c(...) wrapper is accepted on xlim() too, since that is the
  * form ggplot2 users type; NA (the one-sided idiom) is refused by name. */
+static int g_lim_any_order;   /* a reversed axis: limits=c(hi, lo), as ggplot2 writes it */
 static int parse_lim_pair(P *p, const char *fn, double *lo, double *hi) {
     skip_ws(p);
     int wrapped = 0;
@@ -1745,6 +1746,7 @@ static int parse_lim_pair(P *p, const char *fn, double *lo, double *hi) {
     if (wrapped && expect(p, ')')) return -1;
     if (na[0] || na[1])
         return fail(p, "%s one-sided limits (NA) are not implemented; give both ends", fn);
+    if (g_lim_any_order && v[0] > v[1]) { double t = v[0]; v[0] = v[1]; v[1] = t; }
     if (!(v[0] < v[1])) {
         char got[96];
         snprintf(got, sizeof got, "%s: lo must be < hi (got %g, %g)", fn, v[0], v[1]);
@@ -2425,7 +2427,12 @@ static int parse_term(P *p, PlotSpec *spec) {
         int base = name[strlen(name) - 1] == '2' ? 2 : 10;
         if (name[6] == 'x') spec->log_x = base; else spec->log_y = base;
     }
-    if (log_scale || !strcmp(name, "scale_x_continuous") || !strcmp(name, "scale_y_continuous")) {
+    int rev_scale = !strcmp(name, "scale_x_reverse") || !strcmp(name, "scale_y_reverse");
+    if (rev_scale) {                     /* ggplot2's reverse_trans: high to low */
+        if (name[6] == 'x') spec->rev_x = 1; else spec->rev_y = 1;
+    }
+    if (log_scale || rev_scale
+        || !strcmp(name, "scale_x_continuous") || !strcmp(name, "scale_y_continuous")) {
         int isx = (name[6] == 'x');
         skip_ws(p);
         while (*p->s != ')') {                        /* labels=percent, limits=c(lo,hi) */
@@ -2469,7 +2476,10 @@ static int parse_term(P *p, PlotSpec *spec) {
             } else if (!strcmp(key, "limits")) {
                 if (!(p->s[0] == 'c' && p->s[1] == '(')) return fail(p, "limits= expects c(lo, hi)", "");
                 double lo, hi;
-                if (parse_lim_pair(p, "limits=", &lo, &hi)) return -1;
+                g_lim_any_order = rev_scale;
+                int lrc = parse_lim_pair(p, "limits=", &lo, &hi);
+                g_lim_any_order = 0;
+                if (lrc) return -1;
                 if (isx) { spec->xlim_lo = lo; spec->xlim_hi = hi; spec->has_xlim = 1; }
                 else     { spec->ylim_lo = lo; spec->ylim_hi = hi; spec->has_ylim = 1; }
             } else if (!strcmp(key, "breaks")) {
@@ -2511,6 +2521,23 @@ static int parse_term(P *p, PlotSpec *spec) {
                     return fail(p, "expand= values must be >= 0", "");
                 if (isx) { spec->x_exp_mult = m2; spec->x_exp_add = a2; spec->has_x_expand = 1; }
                 else     { spec->y_exp_mult = m2; spec->y_exp_add = a2; spec->has_y_expand = 1; }
+            } else if (!strcmp(key, "trans") || !strcmp(key, "transform")) {
+                /* scale_*_continuous(trans="reverse" | "log10" | "log2"),
+                 * the spellings of scale_*_reverse() / scale_*_log10() */
+                char *v = string_lit(p);
+                if (!v) return fail(p, "trans= expects a quoted name%s", "");
+                if (!strcmp(v, "reverse")) { if (isx) spec->rev_x = 1; else spec->rev_y = 1; }
+                else if (!strcmp(v, "log10") || !strcmp(v, "log2")) {
+                    int b = v[3] == '2' ? 2 : 10;
+                    if (isx) spec->log_x = b; else spec->log_y = b;
+                } else {
+                    char msg[CP_ERRLEN];
+                    snprintf(msg, sizeof msg, "trans=\"%s\" not implemented on an axis "
+                             "(reverse, log10, log2)", v);
+                    free(v);
+                    return fail(p, "%s", msg);
+                }
+                free(v);
             } else if (!strcmp(key, "angle")) {
                 /* tilted tick text on a numeric axis: a jittered strip plot
                  * puts category names on a continuous x through labels=c(),
@@ -2521,7 +2548,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                 if (isx) spec->x_angle = v; else spec->y_angle = v;
             } else return fail(p, "scale_*_continuous option `%s` not implemented "
                                "(labels=percent, labels=c(...), limits=, breaks=, expand=, "
-                               "angle=)", key);
+                               "angle=, trans=)", key);
             skip_ws(p);
             if (*p->s == ',') { p->s++; skip_ws(p); }
         }
@@ -2535,6 +2562,10 @@ static int parse_term(P *p, PlotSpec *spec) {
                 return fail(p, "labels=c(...) needs a breaks=c(...) of the same "
                             "length in the same scale_*_continuous()", "");
         }
+        if ((spec->rev_x && spec->log_x) || (spec->rev_y && spec->log_y))
+            return fail(p, "a reversed log axis is not implemented; reverse or log, "
+                        "not both%s", "");
+
         return expect(p, ')');
     }
     if (!strcmp(name, "xlim") || !strcmp(name, "ylim")) {   /* xlim(lo, hi) / ylim(lo, hi) */
@@ -4476,6 +4507,11 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
         if (spec->layers[i].hex && spec->polar)
             return fail(&p, "geom_hex() draws on Cartesian axes; coord_polar() rings "
                         "are geom_tile()%s", "");
+    if ((spec->rev_x || spec->rev_y) && spec->polar)
+        return fail(&p, "scale_*_reverse() is not implemented under coord_polar()%s", "");
+    if ((spec->rev_x || spec->rev_y) && (spec->nhobjs || spec->ntracks))
+        return fail(&p, "scale_*_reverse() reverses a grammar plot's axis; heatmap and "
+                    "track modes have their own layout%s", "");
     if (spec->coord_ratio > 0 && (spec->polar || spec->coord_flip))
         return fail(&p, "coord_fixed() is a coordinate system of its own; it does "
                     "not combine with %s", spec->polar ? "coord_polar()" : "coord_flip()");

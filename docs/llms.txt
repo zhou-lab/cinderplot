@@ -465,6 +465,13 @@ for.
   2..9 log tick marks. Reach for log2 when the variable
   was *sampled* at powers of two — a coverage or subsampling ladder: log10 spaces
   those points correctly but its 10^k ticks land between the rungs you measured.)
+  `scale_x_reverse()` / `scale_y_reverse()` (or `scale_*_continuous(trans=
+  "reverse")`) run a continuous axis high to low -- y = 1 at the top of a
+  spatial grid map, as the tissue image has it -- with the continuous
+  scale's arguments; `limits=c(12, 0)` (ggplot2's order) or `c(0, 12)` both
+  work. `trans="log10"`/`"log2"` are the log scales' other spelling. A
+  discrete axis, a reversed log axis, coord_polar(), and heatmap/track
+  modes refuse it.
   `scale_*_continuous(labels=percent,
   labels=c("..."), limits=, breaks=c(...))` — `labels=c(...)` is explicit tick
   text paired 1:1 with `breaks=c(...)` (mismatched lengths error), so a

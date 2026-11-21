@@ -1509,6 +1509,11 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     if (!xc) { col_missing(err, df, spec->x.col); return -1; }
     /* discrete x when the column is a string or wrapped in factor() */
     int disc_x = (xc->type == COL_STR) || spec->x.is_factor;
+    if (disc_x && spec->rev_x) {        /* ggplot2: a discrete value on a continuous scale */
+        snprintf(err, CP_ERRLEN, "scale_x_reverse() is a continuous scale; `%s` is discrete "
+                 "(reverse a discrete axis by its factor(levels=) order)", spec->x.col);
+        return -1;
+    }
     Factor *xf = disc_x ? factor_make(df, xc) : NULL;
     int ring_files = 0;                    /* ring-plot layers with their own file */
     for (int li = 0; li < spec->nlayers; li++)
@@ -1563,6 +1568,11 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
          * a category has no arithmetic. So discrete y is accepted with
          * geom_tile() and refused elsewhere, naming the alternative. */
         disc_y = (yc->type == COL_STR) || spec->y.is_factor;
+        if (disc_y && spec->rev_y) {
+            snprintf(err, CP_ERRLEN, "scale_y_reverse() is a continuous scale; `%s` is discrete "
+                     "(reverse a discrete axis by its factor(levels=) order)", spec->y.col);
+            return -1;
+        }
         if (hasridge && !disc_y) {
             snprintf(err, CP_ERRLEN, "geom_density_ridges() needs a discrete y (one "
                      "ridge per level); `%s` is numeric -- use factor()", spec->y.col);
@@ -3167,8 +3177,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         snprintf(err, CP_ERRLEN, "coord_flip() is not supported with ideogram()"); return -1;
     }
     if (ideo_npc > 0) y0 -= (y1 - y0) * ideo_npc / (1 - ideo_npc);
-#define NPCX(t) (((t) - x0) / (x1 - x0))
-#define NPCY(t) (((t) - y0) / (y1 - y0))
+/* scale_*_reverse(): the same range, read from the other end -- every mark,
+ * break and grid line goes through these, so flipping here flips them all */
+#define NPCX(t) (spec->rev_x ? (x1 - (t)) / (x1 - x0) : ((t) - x0) / (x1 - x0))
+#define NPCY(t) (spec->rev_y ? (y1 - (t)) / (y1 - y0) : ((t) - y0) / (y1 - y0))
 
     /* Sized to the axis: a discrete axis draws one break per category, and
      * capping these at a fixed 40 was the only reason a discrete axis could not
@@ -3473,7 +3485,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 }
                 S->xnpc = cp_xmalloc((S->nxbr + 1) * sizeof(double));
                 for (int i = 0; i < S->nxbr; i++)
-                    S->xnpc[i] = (S->xbr[i] - S->x0) / (S->x1 - S->x0);
+                    S->xnpc[i] = spec->rev_x ? (S->x1 - S->xbr[i]) / (S->x1 - S->x0)
+                                          : (S->xbr[i] - S->x0) / (S->x1 - S->x0);
                 S->xmin_br = cp_xmalloc((MAX_BREAKS + 1) * sizeof(double));
                 S->nxmin = disc_x ? 0
                          : spec->log_x ? log_minors(spec->log_x, S->x0, S->x1, S->xmin_br, 32)
@@ -3508,7 +3521,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 }
                 S->ynpc = cp_xmalloc((S->nybr + 1) * sizeof(double));
                 for (int i = 0; i < S->nybr; i++)
-                    S->ynpc[i] = (S->ybr[i] - S->y0) / (S->y1 - S->y0);
+                    S->ynpc[i] = spec->rev_y ? (S->y1 - S->ybr[i]) / (S->y1 - S->y0)
+                                          : (S->ybr[i] - S->y0) / (S->y1 - S->y0);
                 S->ymin_br = cp_xmalloc((MAX_BREAKS + 1) * sizeof(double));
                 S->nymin = disc_y ? 0
                          : spec->log_y ? log_minors(spec->log_y, S->y0, S->y1, S->ymin_br, 32)
@@ -6224,6 +6238,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                 double fs = (L->txt_size > 0 ? L->txt_size : 3.88) * 2.845276; /* mm -> pt */
                 double ndx = x1 > x0 ? L->nudge_x / (x1 - x0) : 0;   /* data -> npc */
                 double ndy = y1 > y0 ? L->nudge_y / (y1 - y0) : 0;
+                if (spec->rev_x) ndx = -ndx;              /* a nudge is in data units */
+                if (spec->rev_y) ndy = -ndy;
                 /* y goes through the same discrete mapping the tile and
                  * point layers use: with a string y there is no num[] to
                  * read at all, and with factor(y) the label belongs at the
@@ -6279,8 +6295,10 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         px[m] = axp; py[m] = ayp;
                         rl[m].hw = text_w(cr, fs, s) / 2 + bpad;
                         rl[m].hh = font_h(cr, fs) / 2 + bpad;
-                        double rdx = L->n_nudge_xv && x1 > x0 ? L->nudge_xv[r] / (x1 - x0) : ndx;
-                        double rdy = L->n_nudge_yv && y1 > y0 ? L->nudge_yv[r] / (y1 - y0) : ndy;
+                        double rdx = L->n_nudge_xv && x1 > x0
+                                   ? (spec->rev_x ? -1 : 1) * L->nudge_xv[r] / (x1 - x0) : ndx;
+                        double rdy = L->n_nudge_yv && y1 > y0
+                                   ? (spec->rev_y ? -1 : 1) * L->nudge_yv[r] / (y1 - y0) : ndy;
                         rl[m].ax = axp + rdx * panelw_pt; rl[m].ay = ayp + rdy * panelh_pt;
                         /* vjust=: move the text's centre (0.5 - vjust) text
                          * heights off y, ggplot2's anchoring, so vjust=0 rests
