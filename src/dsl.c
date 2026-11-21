@@ -2294,12 +2294,39 @@ static int parse_term(P *p, PlotSpec *spec) {
                                     "1 = hangs below, negative lifts it)", "");
                     p->s = end;
                     l->txt_vjust = v; l->has_txt_vjust = 1;
-                } else if ((gt == GEOM_TEXT || gt == GEOM_LABEL) && !strcmp(key, "nudge_x")) {
-                    l->nudge_x = strtod(p->s, (char **)&p->s);
-                    if (!isfinite(l->nudge_x)) return fail(p, "nudge_x= must be finite", "");
-                } else if ((gt == GEOM_TEXT || gt == GEOM_LABEL) && !strcmp(key, "nudge_y")) {
-                    l->nudge_y = strtod(p->s, (char **)&p->s);
-                    if (!isfinite(l->nudge_y)) return fail(p, "nudge_y= must be finite", "");
+                } else if ((gt == GEOM_TEXT || gt == GEOM_LABEL)
+                           && (!strcmp(key, "nudge_x") || !strcmp(key, "nudge_y"))) {
+                    /* a number, or c(...) with one offset per data row (as
+                     * ggplot2 takes a vector): moves single labels off a
+                     * point or an arrow they would sit on */
+                    int isx = key[6] == 'x';
+                    if (p->s[0] == 'c' && p->s[1] == '(') {
+                        p->s += 2;
+                        int cap = 16, nv = 0;
+                        double *vv = cp_xmalloc(cap * sizeof(double));
+                        for (;;) {
+                            skip_ws(p);
+                            if (*p->s == ')') { p->s++; break; }
+                            char *end;
+                            double v = strtod(p->s, &end);
+                            if (end == p->s || !isfinite(v)) { free(vv);
+                                return fail(p, "%s=c(...) expects finite numbers", key); }
+                            p->s = end;
+                            if (nv == cap) { cap *= 2; vv = cp_xrealloc(vv, cap * sizeof(double)); }
+                            vv[nv++] = v;
+                            skip_ws(p);
+                            if (*p->s == ',') { p->s++; continue; }
+                            if (*p->s == ')') { p->s++; break; }
+                            free(vv); return fail(p, "expected , or ) in %s=c(...)", key);
+                        }
+                        if (nv == 0) { free(vv); return fail(p, "%s=c() is empty", key); }
+                        if (isx) { l->nudge_xv = vv; l->n_nudge_xv = nv; }
+                        else { l->nudge_yv = vv; l->n_nudge_yv = nv; }
+                    } else {
+                        double v = strtod(p->s, (char **)&p->s);
+                        if (!isfinite(v)) return fail(p, "%s= must be finite", key);
+                        if (isx) l->nudge_x = v; else l->nudge_y = v;
+                    }
                 } else if (l->hex && !strcmp(key, "stat")) {
                     skip_ws(p);
                     char *v = *p->s == '"' ? string_lit(p) : ident(p);

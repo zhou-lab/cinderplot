@@ -6241,6 +6241,18 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                          : cp_logt(spec->log_x, F->xc->num[r])) : TXR(r))
 #define TYF(r) (F ? TY(F->yc->num[r]) : TYR(r))
                 const Column *tlab = F ? F->lab : labc;
+                /* nudge_x=c(...)/nudge_y=c(...): one per row of the
+                 * layer's data, ggplot2's rule (length 1 or the data) */
+                if ((L->n_nudge_xv && L->n_nudge_xv != nsrc)
+                    || (L->n_nudge_yv && L->n_nudge_yv != nsrc)) {
+                    snprintf(err, CP_ERRLEN, "%s(nudge_%s=c(...)) has %d values; its "
+                             "data has %d rows (one offset per row, or a single number)",
+                             gt == GEOM_LABEL ? "geom_label" : "geom_text",
+                             L->n_nudge_xv && L->n_nudge_xv != nsrc ? "x" : "y",
+                             L->n_nudge_xv && L->n_nudge_xv != nsrc ? L->n_nudge_xv
+                             : L->n_nudge_yv, nsrc);
+                    return -1;
+                }
                 int cap = 0;
                 for (int r = 0; r < nsrc; r++)
                     if (TOK(r)) cap++;
@@ -6267,7 +6279,9 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
                         px[m] = axp; py[m] = ayp;
                         rl[m].hw = text_w(cr, fs, s) / 2 + bpad;
                         rl[m].hh = font_h(cr, fs) / 2 + bpad;
-                        rl[m].ax = axp + ndx * panelw_pt; rl[m].ay = ayp + ndy * panelh_pt;
+                        double rdx = L->n_nudge_xv && x1 > x0 ? L->nudge_xv[r] / (x1 - x0) : ndx;
+                        double rdy = L->n_nudge_yv && y1 > y0 ? L->nudge_yv[r] / (y1 - y0) : ndy;
+                        rl[m].ax = axp + rdx * panelw_pt; rl[m].ay = ayp + rdy * panelh_pt;
                         /* vjust=: move the text's centre (0.5 - vjust) text
                          * heights off y, ggplot2's anchoring, so vjust=0 rests
                          * the label on y and -0.6 lifts it clear of a dot

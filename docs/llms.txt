@@ -288,7 +288,9 @@ and ignored (the output path is a command-line argument here).
   `bw=`/`adjust=` (density, R's `bw.nrd0` scaled by `adjust`; the curve spans
   the x scale's data range as in ggplot2, and `trim=TRUE` stops each group's
   curve at that group's own range),
-  `nudge_x=`/`nudge_y=` (text),
+  `nudge_x=`/`nudge_y=` (text; one number, or `c(...)` with one offset
+  per row of the layer's data, as ggplot2 takes a vector, to move single
+  labels off a point or arrow; any other length errors),
   `geom_point(raster=TRUE)` — see trap 9 — and
   `geom_boxplot(outlier.shape=NA)` to hide the outlier marks when a jitter
   layer already draws those points.

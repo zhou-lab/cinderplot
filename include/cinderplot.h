@@ -394,6 +394,10 @@ typedef struct {
     double point_size;          /* geom_point size (ggplot units; 0 = default 1.5) */
     int repel;                  /* geom_text_repel/geom_label_repel: force placement */
     double nudge_x, nudge_y;    /* geom_text/label: constant offset (data units) */
+    double *nudge_xv, *nudge_yv;   /* nudge_x=c(...)/nudge_y=c(...): one offset per
+                                   * row of the layer's data (ggplot2's vector
+                                   * position_nudge); NULL = the constant */
+    int n_nudge_xv, n_nudge_yv;
     int dash;                   /* linetype=: 0 solid, 1 dashed, 2 dotted */
     double alpha;               /* alpha=: 0 = unset (opaque), else 0..1 */
     /* geom_jitter: half-range of the random offset, in DATA units, so on a
