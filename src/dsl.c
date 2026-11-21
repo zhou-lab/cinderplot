@@ -988,6 +988,7 @@ static int hm_opt_ok(HMType t, const char *key) {
     if (!strcmp(key, "name")) return 1;
     if (!strcmp(key, "title")) return t != HM_DENDROGRAM;
     if (!strcmp(key, "data")) return t == HM_HEATMAP || t == HM_ANNOTATION;
+    if (!strcmp(key, "columns")) return t == HM_ANNOTATION;
     if (!strcmp(key, "column") || !strcmp(key, "values") || !strcmp(key, "palette")
         || !strcmp(key, "limits") || !strcmp(key, "label.angle")
         || !strcmp(key, "label_angle") || !strcmp(key, "label.colour")
@@ -1097,6 +1098,20 @@ static int parse_hm_args(P *p, HMObj *o, int want_data) {
                 char *v = string_lit(p);
                 if (!v) return fail(p, "column= expects a quoted column name", "");
                 o->column = v;
+            } else if (!strcmp(key, "columns")) {
+                /* a side matrix: c("EnhA1", ...) or "all" (every column after
+                 * the key), one band each -- wheatmap's WHeatmap(anno,
+                 * RightOf()), ComplexHeatmap's multi-column annotation */
+                skip_ws(p);
+                if (p->s[0] == 'c' && p->s[1] == '(') {
+                    if (parse_levels(p, &o->columns, &o->ncolumns)) return -1;
+                    if (o->ncolumns == 0) return fail(p, "columns=c() is empty%s", "");
+                } else {
+                    char *v = string_lit(p);
+                    if (!v || strcmp(v, "all"))
+                        return fail(p, "columns= expects c(\"a\", \"b\", ...) or \"all\"%s", "");
+                    o->columns_all = 1;
+                }
             } else if (!strcmp(key, "label.angle") || !strcmp(key, "label_angle")) {
                 /* run labels stood on end, ComplexHeatmap's column_title_rot:
                  * forty narrow runs fit side by side only at 90 degrees */
@@ -1831,6 +1846,73 @@ static int parse_lim_pair(P *p, const char *fn, double *lo, double *hi) {
                     : "%s; a reversed range is not implemented", got);
     }
     *lo = v[0]; *hi = v[1];
+    return 0;
+}
+
+/* annotation(columns=c(...) | "all"): one band per column, chained edge to
+ * edge. Bands go out from the anchor, so right_of/beneath chain in the
+ * listed order and left_of/top_of in reverse: the block always reads in the
+ * listed order left to right (or top to bottom). Each
+ * band is titled by its column (on end under a vertical band, beside a
+ * horizontal one); the block's name= goes to the band farthest out, so a
+ * later right_of("name") sits after the whole block. */
+static int expand_annotation_columns(P *p, PlotSpec *spec, int i0) {
+    HMObj base = spec->hobjs[i0];
+    char autonm[16]; snprintf(autonm, sizeof autonm, "h%d", i0 + 1);
+    int named = base.name && strcmp(base.name, autonm);   /* name= was given */
+    if (base.column)
+        return fail(p, "annotation(): give column= or columns=, not both%s", "");
+    if (base.title)
+        return fail(p, "annotation(columns=) titles each band by its column; drop title=%s", "");
+    if (base.place.kind == PL_FULL)
+        return fail(p, "annotation(columns=) needs a placement (right_of(), beneath(), ...)%s", "");
+    char **cols = base.columns; int nc = base.ncolumns;
+    if (base.columns_all) {                   /* the header, after its key column */
+        char err[CP_ERRLEN] = "";
+        size_t L = strlen(base.data);
+        char *buf = NULL;
+        if (L > 3 && !strcmp(base.data + L - 3, ".gz")) buf = gz_read_all(base.data, err);
+        else {
+            FILE *f = fopen(base.data, "r");
+            if (f) {
+                buf = cp_xmalloc(65536);
+                if (!fgets(buf, 65536, f)) buf[0] = 0;
+                fclose(f);
+            }
+        }
+        if (!buf) return fail(p, "annotation(columns=\"all\"): cannot read `%s`", base.data);
+        char *nl = strpbrk(buf, "\r\n"); if (nl) *nl = 0;
+        char sep = strchr(buf, '\t') ? '\t' : ',';
+        cols = cp_xcalloc(MAX_HMOBJS + 2, sizeof(char *)); nc = 0;
+        char *q = strchr(buf, sep);           /* skip the key column */
+        while (q && nc <= MAX_HMOBJS) {
+            char *b = q + 1; q = strchr(b, sep);
+            size_t n = q ? (size_t)(q - b) : strlen(b);
+            if (n >= 2 && b[0] == '"' && b[n - 1] == '"') { b++; n -= 2; }
+            cols[nc] = cp_xmalloc(n + 1); memcpy(cols[nc], b, n); cols[nc][n] = 0;
+            nc++;
+        }
+        if (nc == 0) return fail(p, "annotation(columns=\"all\"): `%s` has no column after its key", base.data);
+    }
+    if (spec->nhobjs - 1 + nc > MAX_HMOBJS)
+        return fail(p, "annotation(columns=) would make too many heatmap objects (at most 32)%s", "");
+    int rev = base.place.kind == PL_LEFT_OF || base.place.kind == PL_TOP_OF;
+    int vert = base.place.kind == PL_LEFT_OF || base.place.kind == PL_RIGHT_OF;
+    spec->nhobjs = i0;                        /* rebuild from the first slot */
+    const char *prev = NULL;
+    for (int k = 0; k < nc; k++) {
+        HMObj *o = hm_new(p, spec, HM_ANNOTATION);
+        if (!o) return -1;
+        char *auto_name = o->name;
+        *o = base;
+        o->columns = NULL; o->ncolumns = 0; o->columns_all = 0;
+        o->column = cols[rev ? nc - 1 - k : k];
+        o->title = o->column;
+        if (!base.title_side) o->title_side = vert ? SIDE_BOTTOM : SIDE_RIGHT;
+        o->name = (k == nc - 1 && named) ? base.name : auto_name;
+        if (k > 0) { o->place.anchor = cp_xstrdup(prev); o->place.pad = 0; }
+        prev = o->name;
+    }
     return 0;
 }
 
@@ -2688,7 +2770,9 @@ static int parse_term(P *p, PlotSpec *spec) {
     if (!strcmp(name, "annotation")) {
         HMObj *o = hm_new(p, spec, HM_ANNOTATION);
         if (!o) return -1;
-        return parse_hm_args(p, o, 1);
+        int rc = parse_hm_args(p, o, 1);
+        if (rc || !(o->ncolumns || o->columns_all)) return rc;
+        return expand_annotation_columns(p, spec, (int)(o - spec->hobjs));
     }
     if (!strcmp(name, "legend")) {
         HMObj *o = hm_new(p, spec, HM_LEGEND);

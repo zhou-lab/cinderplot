@@ -496,6 +496,9 @@ typedef struct {
     char *name;                    /* auto-assigned if absent */
     char *data;                    /* heatmap/annotation: csv path */
     char *title;                   /* legend title (NULL = default/none) */
+    char **columns; int ncolumns;  /* annotation(columns=c(...)): one band per column,
+                                    * expanded at parse time (dsl.c) */
+    int columns_all;               /* columns="all": every column after the key */
     char *column;                  /* annotation: which column to colour by
                                     * (NULL = the last, the historical default) */
     /* annotation: its OWN discrete palette, ComplexHeatmap's col=list(...)

@@ -565,8 +565,14 @@ for.
   Beside a heatmap() a band has no key unless a legend() names it, so
   `show.legend=FALSE` there keeps a bare legend() off it; `axis=` and
   `side=` still error. A one-hot side matrix (an 18-state ChromHMM yes/no
-  table) is one `annotation(column=)` band per state chained with
-  `right_of(prev, width=, pad=0)`.
+  table) is one call: `annotation("states.tsv", columns="all", right_of("m",
+  width=0.02), values=c(yes="#000000", no="#F2F2F2"), name="hmm")` draws a
+  band per column after the key (or `columns=c("EnhA1", "TssA")` for a
+  subset), edge to edge, sharing values= and the width, each titled by its
+  column -- on end under a vertical band, beside a horizontal one -- and
+  read in the listed order on any side. `name=` goes to the outermost band,
+  so `right_of("hmm")` places the next object after the block. Not with
+  `column=` or `title=`; each band counts toward the 32-object cap.
 
 `ncol=`/`nrow=` fix the grid shape; give both and a grid too small for the
 panels is an error. Worth reaching for whenever the panels cross two factors —
