@@ -721,6 +721,7 @@ typedef struct {
     AesEntry alpha;                 /* aes(alpha=): numeric -> opacity over
                                      * scale_alpha(range=), default c(0.1, 1) */
     double alpha_lo, alpha_hi;      /* scale_alpha(range=c(lo, hi)) */
+    int alpha_log;                  /* scale_alpha(trans="log10"/"log2"): the base; 0 = linear */
     int has_alpha_range;            /* else ggplot2's c(0.1, 1) */
     AesEntry group;                 /* geom_line/geom_smooth series key: discrete,
                                      * no legend; crossed with a discrete colour */

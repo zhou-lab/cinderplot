@@ -3402,9 +3402,24 @@ static int parse_term(P *p, PlotSpec *spec) {
         while (*p->s != ')') {
             char *key = ident(p);
             if (!key || expect(p, '=')) return fail(p, "bad %s() argument", name);
+            if (!strcmp(key, "trans") || !strcmp(key, "transform")) {
+                /* as the colour scales: opacity by log(value), the legend
+                 * at the powers, a value <= 0 not drawn (no log) */
+                skip_ws(p);
+                char *v = string_lit(p);
+                if (!v) return fail(p, "trans= expects a quoted name%s", "");
+                if (!strcmp(v, "log10")) spec->alpha_log = 10;
+                else if (!strcmp(v, "log2")) spec->alpha_log = 2;
+                else if (!strcmp(v, "identity")) spec->alpha_log = 0;
+                else { free(v); return fail(p, "scale_alpha(trans=) takes log10, log2 or identity%s", ""); }
+                free(v);
+                skip_ws(p);
+                if (*p->s == ',') { p->s++; skip_ws(p); }
+                continue;
+            }
             if (strcmp(key, "range"))
                 return fail(p, "scale_alpha option `%s` not implemented; supported: "
-                            "range=c(lo, hi) (opacities in 0..1)", key);
+                            "range=c(lo, hi) (opacities in 0..1), trans=", key);
             skip_ws(p);
             if (p->s[0] == 'c' && p->s[1] == '(') p->s += 2;
             else return fail(p, "range= expects c(lo, hi)%s", "");

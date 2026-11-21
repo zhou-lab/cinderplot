@@ -2089,9 +2089,13 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
             }
         }
     }
-#define ALPHA_SKIP(r) (alc && !isfinite(alc->num[r]))
-#define ALPHA_OF(r) (almax > almin ? alo + (alc->num[r] - almin) / (almax - almin) \
-                                     * (ahi - alo) : ahi)
+/* scale_alpha(trans="log10"): the same map on log(value); a value with no
+ * log is missing, as ggplot2's transform makes it, so the mark is skipped */
+#define ALPHA_T(v) (spec->alpha_log ? log(v) : (v))
+#define ALPHA_SKIP(r) (alc && (!isfinite(alc->num[r]) \
+                               || (spec->alpha_log && !(alc->num[r] > 0))))
+#define ALPHA_OF(r) (almax > almin ? alo + (ALPHA_T(alc->num[r]) - ALPHA_T(almin)) \
+                                     / (ALPHA_T(almax) - ALPHA_T(almin)) * (ahi - alo) : ahi)
 #define WITH_ALPHA(c, r) (alc ? col_alpha((c), ALPHA_OF(r)) : (c))
 
     /* One level per PANEL. facet_wrap gets the facet column's factor straight;
@@ -2308,7 +2312,7 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
 #define CCOL(r) fill_map_value(&cscale, colc->num[r], cdmin, cdmax)
     for (int r = 0; alc && r < df->nrow; r++) {   /* the alpha scale's range */
         double v = alc->num[r];
-        if (!use[r] || !isfinite(v)) continue;
+        if (!use[r] || !isfinite(v) || (spec->alpha_log && !(v > 0))) continue;
         if (v < almin) almin = v;
         if (v > almax) almax = v;
     }
@@ -4277,12 +4281,23 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
         guides[nguide++] = build_size_legend(cr, th, sz_title, sbr, srad, nf, sdec);
     }
     if (alc && !spec->no_legend_alpha && almax >= almin) {   /* alpha legend */
-        double abr[16]; int nab = extended_breaks(almin, almax, 5, abr, 16), na2 = 0;
-        for (int i = 0; i < nab; i++) if (abr[i] >= almin && abr[i] <= almax) abr[na2++] = abr[i];
+        double abr[16]; int na2 = 0;
+        if (spec->alpha_log && almax > almin) {       /* keys at the powers */
+            double lb = log((double)spec->alpha_log);
+            for (int k = (int)ceil(log(almin) / lb - 1e-9);
+                 k <= (int)floor(log(almax) / lb + 1e-9) && na2 < 16; k++)
+                abr[na2++] = pow(spec->alpha_log, k);
+            if (na2 < 2) na2 = 0;
+        }
+        if (na2 == 0) {
+            int nab = extended_breaks(almin, almax, 5, abr, 16);
+            for (int i = 0; i < nab; i++) if (abr[i] >= almin && abr[i] <= almax) abr[na2++] = abr[i];
+        }
         if (na2 == 0) { abr[0] = almin; abr[1] = almax; na2 = almax > almin ? 2 : 1; }
         double aop[16];
         for (int i = 0; i < na2; i++)
-            aop[i] = almax > almin ? alo + (abr[i] - almin) / (almax - almin) * (ahi - alo) : ahi;
+            aop[i] = almax > almin ? alo + (ALPHA_T(abr[i]) - ALPHA_T(almin))
+                                        / (ALPHA_T(almax) - ALPHA_T(almin)) * (ahi - alo) : ahi;
         const char *al_title = spec->lab_alpha ? spec->lab_alpha : spec->alpha.expr;
         guides[nguide++] = build_alpha_legend(cr, th, al_title, abr, aop, na2,
                                               axis_decimals(abr, na2), haspoint);

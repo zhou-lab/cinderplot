@@ -264,7 +264,9 @@ and ignored (the output path is a command-line argument here).
   `scale_alpha(range=c(lo, hi))` (ggplot2's default `c(0.1, 1)`; `c(0, 1)`
   makes the lowest value invisible, the expression-overlay idiom), with its
   own legend (`labs(alpha=)`, `guides(alpha="none")`). Rows with no value
-  are not drawn. Implemented on `geom_point/jitter/tile/raster/hex/rect`; a
+  are not drawn. `scale_alpha(trans="log10")` (or `"log2"`) maps opacity on
+  log(value), the legend keys at the powers (10, 100, 1000, ...); a value
+  <= 0 is not drawn -- depth as opacity when counts span decades. Implemented on `geom_point/jitter/tile/raster/hex/rect`; a
   discrete alpha column errors. Colours also take R's `"transparent"` and
   `#RRGGBBAA` / `#RGBA` wherever a colour is accepted (`scale_*_manual`
   values, layer constants, gradients).
