@@ -876,6 +876,8 @@ typedef struct {
     double legend_text_sz;          /* theme(legend.text=element_text(size=)), same coding */
     double title_sz, axis_text_sz, axis_title_sz;  /* theme(plot.title= / axis.text= /
                                      * axis.title=element_text(size=)), same coding */
+    double title_hjust; int has_title_hjust;  /* theme(plot.title=element_text(hjust=)):
+                                     * 0 = panel's left edge (ggplot's default), 1 = right */
     /* theme(strip.text=element_text(face=, colour=)): facet strips, and the
      * coord_polar() ring plot's wedge names (the polar analogue of facets) */
     int strip_bold; Col strip_col; int has_strip_col;

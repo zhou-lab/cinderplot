@@ -3769,11 +3769,26 @@ static int parse_term(P *p, PlotSpec *spec) {
                         if (*p->s == ',') { p->s++; skip_ws(p); }
                         continue;
                     }
+                    if (!strcmp(key, "plot.title") && !strcmp(k, "hjust")) {
+                        /* ggplot: 0 = left (its default), 0.5 = centred */
+                        free(k);
+                        skip_ws(p);
+                        char *end;
+                        double hj = strtod(p->s, &end);
+                        if (end == p->s || hj < 0 || hj > 1)
+                            return fail(p, "plot.title hjust= takes 0..1%s", "");
+                        p->s = end;
+                        spec->title_hjust = hj; spec->has_title_hjust = 1; got = 1;
+                        skip_ws(p);
+                        if (*p->s == ',') { p->s++; skip_ws(p); }
+                        continue;
+                    }
                     if (strcmp(k, "size")) {
                         char msg[CP_ERRLEN];
                         snprintf(msg, sizeof msg, "element_text(%s=) is not implemented "
                                  "for %s; size=%s is", k, key,
-                                 is_strip ? " (and face=, colour=)" : "");
+                                 is_strip ? " (and face=, colour=)"
+                                 : !strcmp(key, "plot.title") ? " (and hjust=)" : "");
                         free(k);
                         return fail(p, "%s", msg);
                     }

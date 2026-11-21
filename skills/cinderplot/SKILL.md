@@ -67,6 +67,8 @@ giving that file's columns; substitute your own file.
   `theme(axis.text=element_text(size=10), plot.title=element_text(size=12))`
   pins the tick labels and the title in pt (or `size=rel(r)` of the base),
   as ggplot2 does, for a house style of 12 pt titles over 10 pt ticks;
+  `plot.title=element_text(hjust=)` places the grammar-mode title (0 = the
+  panel's left edge, ggplot2's default; 0.5 centred; 1 right-aligned);
   `axis.title=element_text(size=)` sets the axis titles. The same three
   reach the other modes: in **heatmap mode** `axis.text=` sizes the row and
   column names, `axis.title=` the annotation titles and data labels

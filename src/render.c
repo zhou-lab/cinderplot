@@ -4570,7 +4570,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     if (spec->lab_title) {
         g = gt_add(T, G_TEXT, 1, PC(0), 1, PC(ncolp - 1));
         g->str = spec->lab_title; g->size = SZ_TITLE; g->col = th->title;
-        g->tx = 0; g->ty = 1; g->hj = 0; g->va = V_TOP;
+        g->tx = g->hj = spec->has_title_hjust ? spec->title_hjust : 0;
+        g->ty = 1; g->va = V_TOP;
     }
     if (spec->lab_subtitle) {
         g = gt_add(T, G_TEXT, 2, PC(0), 2, PC(ncolp - 1));
