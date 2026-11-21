@@ -586,11 +586,75 @@ static void arrow_head(cairo_t *cr, const Grob *g, double x0, double y0,
     cairo_restore(cr);
 }
 
-void gt_render(GTable *t, cairo_t *cr) {
-    for (int gi = 0; gi < t->ngrobs; gi++) {
+/* A run of consecutive raster-flagged rect/line/polyline grobs sharing one
+ * cell (the bars of a dense signal() track, matrix()'s leader fan) is drawn
+ * into ONE offscreen image at 300 dpi and embedded, as geom_point(raster=)
+ * does for points: tens of thousands of vector marks become a fixed-size
+ * picture, while the frames, axes and text around them stay vector. */
+static int raster_run_grob(const Grob *g) {
+    return g->raster && (g->type == G_RECT || g->type == G_LINE || g->type == G_POLYLINE);
+}
+static void render_range(GTable *t, cairo_t *cr, int from, int to, int in_run);
+void gt_render(GTable *t, cairo_t *cr) { render_range(t, cr, 0, t->ngrobs, 0); }
+static void render_range(GTable *t, cairo_t *cr, int from, int to, int in_run) {
+    for (int gi = from; gi < to; gi++) {
         Grob *g = &t->grobs[gi];
         double rx = t->colx[g->c0], rw = t->colx[g->c1 + 1] - rx;
         double ry = t->rowy[g->r0], rh = t->rowy[g->r1 + 1] - ry;
+        if (!in_run && raster_run_grob(g)) {
+            int j = gi + 1;
+            while (j < to && raster_run_grob(&t->grobs[j])
+                   && t->grobs[j].r0 == g->r0 && t->grobs[j].r1 == g->r1
+                   && t->grobs[j].c0 == g->c0 && t->grobs[j].c1 == g->c1) j++;
+            /* the image covers only the run's marks (npc bbox, padded by
+             * the widest stroke), so a track of 40 strips is 40 strip-high
+             * images, not 40 cell-high mostly-transparent ones */
+            double bx0 = 1e300, by0 = 1e300, bx1 = -1e300, by1 = -1e300, lwm = 0;
+            for (int k = gi; k < j; k++) {
+                const Grob *q = &t->grobs[k];
+                if (q->type == G_POLYLINE) {
+                    for (int m = 0; m < q->n; m++) {
+                        bx0 = fmin(bx0, q->px[m]); bx1 = fmax(bx1, q->px[m]);
+                        by0 = fmin(by0, q->py[m]); by1 = fmax(by1, q->py[m]);
+                    }
+                } else if (q->type == G_RECT && !q->sub) {
+                    bx0 = by0 = 0; bx1 = by1 = 1;
+                } else {
+                    bx0 = fmin(bx0, fmin(q->x0, q->x1)); bx1 = fmax(bx1, fmax(q->x0, q->x1));
+                    by0 = fmin(by0, fmin(q->y0, q->y1)); by1 = fmax(by1, fmax(q->y0, q->y1));
+                }
+                if (q->type != G_RECT || q->stroke) lwm = fmax(lwm, q->lw);
+            }
+            bx0 = fmax(bx0, 0); by0 = fmax(by0, 0); bx1 = fmin(bx1, 1); by1 = fmin(by1, 1);
+            double ox = rx + bx0 * rw - lwm, oy = ry + (1 - by1) * rh - lwm;
+            double ow = (bx1 - bx0) * rw + 2 * lwm, oh = (by1 - by0) * rh + 2 * lwm;
+            const double sc = 300.0 / 72.0;
+            int iw = (int)ceil(ow * sc), ih = (int)ceil(oh * sc);
+            if (bx1 > bx0 && by1 >= by0 && iw > 0 && ih > 0) {
+                cairo_surface_t *im = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, iw, ih);
+                cairo_t *ic = cairo_create(im);
+                cairo_scale(ic, sc, sc);
+                cairo_translate(ic, -ox, -oy);
+                render_range(t, ic, gi, j, 1);
+                cairo_destroy(ic);
+                cairo_surface_flush(im);
+                cairo_save(cr);
+                if (g->clip) {                 /* the marks' own cell clip */
+                    cairo_rectangle(cr, rx, ry, rw, rh);
+                    cairo_clip(cr);
+                }
+                cairo_translate(cr, ox, oy);
+                cairo_scale(cr, 1.0 / sc, 1.0 / sc);
+                cairo_set_source_surface(cr, im, 0, 0);
+                cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_GOOD);
+                svg_note_image(cr, 0);
+                cairo_paint(cr);
+                cairo_restore(cr);
+                cairo_surface_destroy(im);
+            }
+            gi = j - 1;
+            continue;
+        }
         /* npc -> device (npc y=0 is the cell bottom) */
 #define DX(v) (rx + (v) * rw)
 #define DY(v) (ry + rh - (v) * rh)

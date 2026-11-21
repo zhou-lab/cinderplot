@@ -969,7 +969,7 @@ lists the ones it does): `coverage()` adds `color= max=`, `interval()`
 `cytoband()` nothing further, `matrix()` `cluster= rownames= colnames= x= bar=
 background= rowgroup= rowmeta= rowcolour= rowbar= discrete= raster=`, and `signal()`
 `rowgroup= rowmeta= rowcolour= rowbar= style= bar= smooth= points= colour=c(...)
-ylim=c(lo, hi) linewidth= gap=`. Inputs are BED/bedGraph/BEDPE/BED12/matrix TSV, plain or gzipped, and
+ylim=c(lo, hi) linewidth= gap= raster=`. Inputs are BED/bedGraph/BEDPE/BED12/matrix TSV, plain or gzipped, and
 tabix-indexed when a `.tbi` sits beside the file.
 
 `coverage()` fills a bedGraph (`chrom start end value`) as a depth profile.
@@ -998,7 +998,13 @@ shows through. Above 2,000 cells (the heatmap's raster threshold) the cells
 are painted into one embedded image per panel, ~300 dpi across the window,
 while text and axes stay vector: 42 samples × 2,911 CpGs went from a 26 MB
 SVG to 0.4 MB. `raster=FALSE` keeps every cell a vector rect; `raster=TRUE`
-rasterizes a small matrix too.
+rasterizes a small matrix too. The same switch covers the `x=index` leader
+fan: `raster=TRUE`, or more than 2,000 columns, draws the fan curves as one
+image (a 4,269-curve fan took a DMR panel from 2.28 MB to 0.86 MB).
+`signal(raster=)` does the same for a signal track's bars, points and lines
+(auto above 2,000 data rows): one image per strip, cropped to its marks,
+while the baselines, frame, axis and row labels stay vector. A
+`style="bars"` panel of 28k bars went from 6.0 MB to 0.67 MB.
 
 **`matrix(discrete=TRUE)` reads the cell values as category codes** — a 0/1
 call matrix is indistinguishable from betas without being told — and is

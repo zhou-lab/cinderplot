@@ -2208,6 +2208,10 @@ int render_tracks(const PlotSpec *spec, const char *out,
                 }
                 g = gt_add(T, G_POLYLINE, R, CC, R, CC);
                 g->n = NB; g->px = px; g->py = py; g->col = mapc; g->lw = lw_pt(0.4); g->clip = 1;
+                /* raster=TRUE, or auto past RASTER_MIN_CELLS leaders: the
+                 * fan is one image (gt_render's raster run) */
+                g->raster = spec->tobjs[i].raster == 1
+                         || (spec->tobjs[i].raster == 0 && nc > RASTER_MIN_CELLS);
             }
 gx_no_fan:
             /* Probe IDs label COLUMNS; in genomic space there are none -- 550
@@ -2233,6 +2237,10 @@ gx_no_fan:
              * low end, and a clip so an overshoot stays in its lane. */
             const SigData *d = sd[i];
             int ns = d->nstrip;
+            /* raster=TRUE, or auto past RASTER_MIN_CELLS rows: the bars,
+             * points and lines go into embedded images (one per run of
+             * marks); baselines, labels and axes stay vector */
+            int sig_ras = t->raster == 1 || (t->raster == 0 && d->n > RASTER_MIN_CELLS);
             double cell_pt = (t->height > 0 ? t->height : 1) * per_h;
             double sh = 1.0 / ns;
             /* A proportional inner pad keeps a trace off its own lane's edges;
@@ -2295,6 +2303,7 @@ gx_no_fan:
                             g->col = d->sercol[si]; g->sub = 1; g->clip = 1;
                             g->x0 = NPCX(pb); g->x1 = NPCX(pe);
                             g->y0 = SIG_Y(lo); g->y1 = SIG_Y(v);
+                            g->raster = sig_ras;
                         }
                         continue;
                     }
@@ -2324,6 +2333,7 @@ gx_no_fan:
                         g->n = np; g->px = px; g->py = py; g->pcol = pc;
                         g->radius = PT_RADIUS * 0.4; g->alpha = 0.35; g->clip = 1;
                         g->band_clip = 1; g->band_y0 = ybot; g->band_y1 = ybot + sh;
+                        g->raster = sig_ras;
                     }
                     double *lx, *ly; int nl;
                     if (t->smooth > 0) {
@@ -2359,6 +2369,7 @@ gx_no_fan:
                     g = gt_add(T, G_POLYLINE, R, CC, R, CC);
                     g->n = nl; g->px = lx; g->py = ly; g->col = col; g->lw = lw; g->clip = 1;
                     g->band_clip = 1; g->band_y0 = ybot; g->band_y1 = ybot + sh;
+                    g->raster = sig_ras;
                 }
 #undef SIG_Y
             }

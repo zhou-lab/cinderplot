@@ -681,7 +681,10 @@ typedef struct {
     int discrete;
     /* matrix(x=genomic, raster=): paint the cells into ONE embedded image
      * instead of a vector rect each (heatmap mode's RASTER_MIN_CELLS rule).
-     * 0 = auto (raster above RASTER_MIN_CELLS cells), 1 = TRUE, 2 = FALSE. */
+     * 0 = auto (raster above RASTER_MIN_CELLS cells), 1 = TRUE, 2 = FALSE.
+     * The same switch rasterizes a matrix()'s leader fan (auto: more than
+     * RASTER_MIN_CELLS columns) and a signal()'s bars, points and lines
+     * (auto: more than RASTER_MIN_CELLS data rows). */
     int raster;
 } TrackObj;
 #define MAX_TRACKS 12

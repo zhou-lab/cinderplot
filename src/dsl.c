@@ -627,8 +627,9 @@ static int trk_opt_ok(TrackType t, const char *key) {
         return t == TRK_MATRIX || t == TRK_SIGNAL;
     if (!strcmp(key, "cluster") || !strcmp(key, "rownames") || !strcmp(key, "colnames")
         || !strcmp(key, "x") || !strcmp(key, "background")
-        || !strcmp(key, "discrete") || !strcmp(key, "raster"))
+        || !strcmp(key, "discrete"))
         return t == TRK_MATRIX;
+    if (!strcmp(key, "raster")) return t == TRK_MATRIX || t == TRK_SIGNAL;
     if (!strcmp(key, "bar")) return t == TRK_MATRIX || t == TRK_SIGNAL;
     if (!strcmp(key, "style")) return t == TRK_SIGNAL;
     if (!strcmp(key, "transcripts")) return t == TRK_GENES;
