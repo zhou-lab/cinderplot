@@ -4373,6 +4373,8 @@ int render_plot(const PlotSpec *spec, const DataFrame *df, const char *out,
     double fix_aspect = 0;          /* panel height / width; 0 = free */
     if (spec->coord_ratio > 0 && ps[0].x1 > ps[0].x0 && ps[0].y1 > ps[0].y0)
         fix_aspect = spec->coord_ratio * (ps[0].y1 - ps[0].y0) / (ps[0].x1 - ps[0].x0);
+    else if (spec->aspect_ratio > 0 && !spec->coord_ratio)
+        fix_aspect = spec->aspect_ratio;            /* theme(aspect.ratio=) */
     if (fix_aspect > 0 && (w_pt <= 0 || h_pt <= 0)) {
         double chrome_w = MARGIN + ylab_w + TICK_LEN + TXT_GAP + axth + MARGIN
                         + striph_side + (leg ? gt_fixed_w(leg) + 2 * HALF_LINE : 0)

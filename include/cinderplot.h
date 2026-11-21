@@ -718,6 +718,10 @@ typedef struct {
      * aspect inside any --size (slack centred, as ggplot2 centres it) and
      * the auto canvas is sized around it. */
     double coord_ratio;
+    /* theme(aspect.ratio=r): every panel's box is r times as tall as it is
+     * wide, whatever the data ranges (free facet scales too); coord_fixed()
+     * wins when both are given, as in ggplot2 */
+    double aspect_ratio;
     /* chord mode: chord("links.csv") — a circlize-style chord diagram from a
      * (from, to, value) table; its own mode, like the tree */
     int chord_mode;

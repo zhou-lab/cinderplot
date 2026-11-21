@@ -501,6 +501,9 @@ for.
   `coord_fixed([ratio=1][, expand=FALSE])` / `coord_equal()` (one y unit =
   ratio x units on the page, e.g. square spatial-map tiles; the auto canvas
   fits the panel, a `--size` of another shape centres it; fixed scales only),
+  `theme(aspect.ratio=r)` (every panel box r times as tall as wide whatever
+  the data ranges, so it works under `scales="free"` -- the square tSNE/UMAP
+  facet; coord_fixed() wins when both are given; grammar mode only),
   `guides(colour="none")`
   (per aesthetic: `guides(size="none")` keeps the colour key; `--no-legend`
   and `theme(legend.position="none")` drop them all), `labs()`/`xlab()`/`ylab()`/`ggtitle()` — `labs()` also

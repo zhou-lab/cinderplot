@@ -3649,6 +3649,14 @@ static int parse_term(P *p, PlotSpec *spec) {
                 if (spec->leg_ix == 0 && spec->leg_iy == 0) {
                     spec->leg_ix = 0.85; spec->leg_iy = 0.15;   /* lower right */
                 }
+            } else if (!strcmp(key, "aspect.ratio")) {
+                /* a bare positive number: panel height / width */
+                char *end;
+                double v = strtod(p->s, &end);
+                if (end == p->s || !(v > 0) || !isfinite(v))
+                    return fail(p, "theme(aspect.ratio=) expects a number > 0 (height / width)%s", "");
+                p->s = end;
+                spec->aspect_ratio = v;
             } else if (!strcmp(key, "legend.position.inside")) {
                 if (p->s[0] == 'c' && p->s[1] == '(') p->s += 2;
                 else return fail(p, "legend.position.inside= expects c(x, y)", "");
@@ -3869,7 +3877,7 @@ static int parse_term(P *p, PlotSpec *spec) {
                                "the rest — supported here: legend.position, "
                                "legend.position.inside, legend.key.size, "
                                "legend.key.height, legend.key.width, "
-                               "legend.key.spacing.y, legend.text, strip.text[.x|.y], axis.text[.x|.y], axis.title, plot.title", key);
+                               "legend.key.spacing.y, legend.text, legend.title, strip.text[.x|.y], strip.background, axis.text[.x|.y], axis.title, plot.title, aspect.ratio", key);
             skip_ws(p);
             if (*p->s == ',') { p->s++; skip_ws(p); }
         }
@@ -4473,6 +4481,8 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
             return fail(&p, "track functions cannot be mixed with grammar/heatmap", "");
         if (spec->polar || spec->coord_flip || spec->coord_ratio > 0)
             return fail(&p, "coord_polar()/coord_flip()/coord_fixed() do not apply to the track browser", "");
+        if (spec->aspect_ratio > 0)
+            return fail(&p, "theme(aspect.ratio=) does not apply to the track browser%s", "");
         /* the preset itself (panel, grid, strips) has nothing to act on here,
          * but base_line_size= does: it scales the track frames and ticks
          * through cp_line_scale, so theme_*(base_line_size=) is honoured */
@@ -4538,6 +4548,9 @@ int dsl_parse(const char *src, PlotSpec *spec, char *err) {
                 && (spec->hobjs[i].missing || spec->hobjs[i].missing_off))
                 return fail(&p, "legend(missing=) labels the background swatch a matrix() "
                             "track's key adds; a heatmap() key draws no NA swatch", "");
+        if (spec->aspect_ratio > 0)
+            return fail(&p, "theme(aspect.ratio=) does not apply to heatmap mode; heatmap(aspect=) "
+                        "sets the cell shape%s", "");
         if (spec->polar || spec->coord_flip || spec->coord_ratio > 0)
             return fail(&p, "coord_polar()/coord_flip()/coord_fixed() do not apply to heatmap mode "
                         "(cluster=diagonal/symmetric and placements set the layout)", "");
