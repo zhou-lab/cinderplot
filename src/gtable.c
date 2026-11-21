@@ -635,6 +635,14 @@ static void render_range(GTable *t, cairo_t *cr, int from, int to, int in_run) {
                 cairo_t *ic = cairo_create(im);
                 cairo_scale(ic, sc, sc);
                 cairo_translate(ic, -ox, -oy);
+                /* bars at 300 dpi need no antialiasing, and crisp edges
+                 * keep the PNG to a few colours, a fraction of the bytes */
+                int crisp = 1;     /* only rects and level lines: curves keep AA */
+                for (int k = gi; k < j && crisp; k++)
+                    if (t->grobs[k].type == G_POLYLINE
+                        || (t->grobs[k].type == G_LINE && t->grobs[k].y0 != t->grobs[k].y1
+                            && t->grobs[k].x0 != t->grobs[k].x1)) crisp = 0;
+                if (crisp) cairo_set_antialias(ic, CAIRO_ANTIALIAS_NONE);
                 render_range(t, ic, gi, j, 1);
                 cairo_destroy(ic);
                 cairo_surface_flush(im);

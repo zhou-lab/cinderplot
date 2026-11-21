@@ -2263,6 +2263,10 @@ gx_no_fan:
             const int NS = 200;                                /* loess output resolution */
             double *sx = cp_xmalloc((size_t)(d->n ? d->n : 1) * sizeof(double));
             double *sy = cp_xmalloc((size_t)(d->n ? d->n : 1) * sizeof(double));
+            /* under raster the baselines join the marks' run, so a whole
+             * track (every strip) is ONE image per window, not one per
+             * strip (27 strips x 11 windows was 297 images and 297
+             * clipped baseline paths) */
             for (int k = 0; k < ns; k++) {
                 double ybot = 1 - (k + 1) * sh, lo, hi;
                 if (t->has_ylim) { lo = t->ylim_lo; hi = t->ylim_hi; }
@@ -2272,6 +2276,7 @@ gx_no_fan:
                 g = gt_add(T, G_LINE, R, CC, R, CC);           /* faint baseline */
                 g->col = C_TGRID; g->lw = lw_pt(0.5) * cp_line_scale; g->clip = 1;
                 g->x0 = 0; g->x1 = 1; g->y0 = g->y1 = SIG_Y(lo);
+                g->raster = sig_ras;
                 for (int oi = d->nser - 1; oi >= 0; oi--) {   /* draworder[0] lands on top */
                     int si = d->draworder[oi];
                     if (t->bars) {

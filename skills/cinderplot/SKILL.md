@@ -1002,9 +1002,11 @@ rasterizes a small matrix too. The same switch covers the `x=index` leader
 fan: `raster=TRUE`, or more than 2,000 columns, draws the fan curves as one
 image (a 4,269-curve fan took a DMR panel from 2.28 MB to 0.86 MB).
 `signal(raster=)` does the same for a signal track's bars, points and lines
-(auto above 2,000 data rows): one image per strip, cropped to its marks,
-while the baselines, frame, axis and row labels stay vector. A
-`style="bars"` panel of 28k bars went from 6.0 MB to 0.67 MB.
+(auto above 2,000 data rows): every strip and its baseline go into ONE
+image per track and window, cropped to the marks and drawn without
+antialiasing (crisp bars compress to a fraction), while the frame, axis and
+row labels stay vector. A `style="bars"` panel of 28k bars went from 6.0 MB
+to 0.13 MB; 27 libraries x 11 windows from 1.39 MB to 0.49 MB.
 
 **`matrix(discrete=TRUE)` reads the cell values as category codes** — a 0/1
 call matrix is indistinguishable from betas without being told — and is
