@@ -801,10 +801,11 @@ __SECTIONS__
 # landing uses this; the gallery keeps STYLE/header() above.
 GEOMS = ["point", "jitter", "line", "smooth", "col", "bar", "histogram", "boxplot", "density",
          "rect", "segment", "tile", "raster", "text", "label", "text_repel", "label_repel",
-         "errorbar", "linerange", "hline", "vline", "abline",
+         "errorbar", "linerange", "ribbon", "hex", "density_ridges", "hline", "vline", "abline",
          "tree", "tiplab", "nodelab", "nodepoint", "tippoint"]
-SCALES = ["x / y log10 / log2", "breaks / labels / percent", "limits + expand", "genome x",
-          "colour hue", "12 continuous palettes", "gradient / gradient2",
+SCALES = ["x / y log10 / log2 / reverse", "breaks / labels / percent", "limits + expand", "genome x",
+          "colour hue", "12 continuous palettes", "gradient / gradient2 / gradientn",
+          "log colour (trans=)", "alpha",
           "ColorBrewer / distiller", "manual / identity colours",
           "discrete x / y", "free facet scales", "discrete label angle"]
 POSITIONS = ["stack"]          # dodging is not implemented; do not list it
