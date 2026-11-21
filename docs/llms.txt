@@ -539,7 +539,7 @@ for.
   e.g. when the band repeats the axis labels and the main legend needs the
   room. Placements (`left_of()` etc.) are heatmap-mode and error here.
   Beside a heatmap() a band has no key unless a legend() names it, so
-  `show.legend=FALSE` there is accepted and changes nothing; `axis=` and
+  `show.legend=FALSE` there keeps a bare legend() off it; `axis=` and
   `side=` still error. A one-hot side matrix (an 18-state ChromHMM yes/no
   table) is one `annotation(column=)` band per state chained with
   `right_of(prev, width=, pad=0)`.
@@ -716,7 +716,14 @@ numeric band, or a ramp (or `limits=`) on a categorical one, is an error
 naming the mismatch.
 `title.side=left` (or `right`) puts a horizontal band's `title=` beside it at
 the row-name size, wheatmap's `label.side="l"`, so a stack of thin bars stays
-compact; the default sits it above. A long band drawn as vectors emits one
+compact; the default sits it above. On a thin vertical band (`right_of`/
+`left_of`, a one-hot side matrix) `title.side="bottom"` stands the title on
+end under it, reading upward with its end at the band, and `title.angle=90`
+does the same above it (ComplexHeatmap's `annotation_name_rot=90`); flat
+titles over 18 such bands ran together. Size them with
+`theme(axis.title=element_text(size=))`. An unanchored `legend()` keys the
+object before it unless that band says `show.legend=FALSE`; then it keys
+the heatmap. A long band drawn as vectors emits one
 rect per run of equal colour, not one per cell, so a 2000-row bar in two
 blocks is two shapes in the SVG. A side title sits in its band's own row:
 a `left_of` row annotation still hugs the matrix (the title shares no rows

@@ -993,6 +993,7 @@ static int hm_opt_ok(HMType t, const char *key) {
         || !strcmp(key, "label_angle") || !strcmp(key, "label.colour")
         || !strcmp(key, "label.color") || !strcmp(key, "label_colour")
         || !strcmp(key, "title.side") || !strcmp(key, "title_side")
+        || !strcmp(key, "title.angle") || !strcmp(key, "title_angle")
         || !strcmp(key, "axis") || !strcmp(key, "side")
         || !strcmp(key, "show.legend") || !strcmp(key, "show_legend"))
         return t == HM_ANNOTATION;
@@ -1011,7 +1012,7 @@ static const char *hm_opt_menu(HMType t) {
     case HM_HEATMAP: return "name=, data=, title=, cluster=, rownames=, colnames=, "
                             "labels=, discrete=, aspect=, box=, grid=, colsplit=, "
                             "rowsplit=, gap=, placements";
-    case HM_ANNOTATION: return "name=, data=, title=, title.side=, column=, values=, "
+    case HM_ANNOTATION: return "name=, data=, title=, title.side=, title.angle=, column=, values=, "
                                "palette=, limits=, labels=, label.angle=, label.colour=, box=, grid=, "
                                "placements; under a grammar plot axis=, side=, show.legend=";
     case HM_LEGEND: return "name=, title=, missing=, ncol=, nrow=, placements (e.g. right_of(\"m\"))";
@@ -1155,7 +1156,18 @@ static int parse_hm_args(P *p, HMObj *o, int want_data) {
                 if (v && !strcmp(v, "left")) o->title_side = SIDE_LEFT;
                 else if (v && !strcmp(v, "right")) o->title_side = SIDE_RIGHT;
                 else if (v && !strcmp(v, "top")) o->title_side = SIDE_NONE;
-                else return fail(p, "title.side= takes left, right or top", "");
+                else if (v && !strcmp(v, "bottom")) o->title_side = SIDE_BOTTOM;
+                else return fail(p, "title.side= takes left, right, top or bottom", "");
+            } else if (!strcmp(key, "title.angle") || !strcmp(key, "title_angle")) {
+                /* ComplexHeatmap's annotation_name_rot: 90 stands a thin
+                 * vertical band's title on end so a run of them stays apart */
+                skip_ws(p);
+                char *end;
+                double v = strtod(p->s, &end);
+                if (end == p->s || (v != 0 && v != 90))
+                    return fail(p, "title.angle= takes 0 or 90%s", "");
+                p->s = end;
+                o->title_angle = v;
             } else if (!strcmp(key, "values")) {
                 /* this band's own colours, spelled as scale_fill_manual's */
                 skip_ws(p);

@@ -511,6 +511,8 @@ typedef struct {
     Side title_side;               /* annotation: where title= sits -- SIDE_NONE =
                                     * above (the default), or SIDE_LEFT/RIGHT of a
                                     * horizontal band, wheatmap's label.side */
+    double title_angle;            /* annotation(title.angle=90): a vertical band's
+                                    * title stands on end, reading upward */
     char *palette;
     ClusterMode cluster;           /* heatmap only */
     int discrete;                  /* heatmap: fill trigger. 0 = decide from the

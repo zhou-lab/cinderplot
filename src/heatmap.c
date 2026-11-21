@@ -714,6 +714,8 @@ static double label_band(cairo_t *cr, const RObj *r, Side side) {
         }
         return r->o->title && r->o->title_side == side
              ? TXT_GAP + text_w(cr, SZ_AXTITLE(SZ_BASE), r->o->title) : 0;
+        /* (title.side="bottom" on a vertical band stands the title on end
+         * below it: the same text-width band, on SIDE_BOTTOM) */
     }
     if (r->o->type != HM_HEATMAP || !r->m) return 0;
     const Matrix *m = r->m;
@@ -734,6 +736,8 @@ static double label_band(cairo_t *cr, const RObj *r, Side side) {
  * labels do and has to be reserved the same way. */
 static double title_band(cairo_t *cr, const RObj *r) {
     if (!r->o->title || r->o->type == HM_LEGEND || r->o->title_side) return 0;
+    if (r->o->title_angle == 90)            /* on end above a vertical band */
+        return TXT_GAP + text_w(cr, SZ_AXTITLE(SZ_BASE), r->o->title);
     cairo_font_extents_t fe;
     cairo_set_font_size(cr, SZ_BASE);
     cairo_font_extents(cr, &fe);
@@ -1031,10 +1035,18 @@ int render_heatmap(const PlotSpec *spec, const char *out,
                          "labels already run across", o->data);
                 return -1;
             }
-            if (o->title_side && !ro[i].ann_horiz) {
+            if ((o->title_side == SIDE_LEFT || o->title_side == SIDE_RIGHT)
+                && !ro[i].ann_horiz) {
                 snprintf(err, CP_ERRLEN, "annotation `%s`: title.side=left/right "
                          "puts the title beside a horizontal band (top_of/beneath); "
-                         "a vertical band keeps it on top", o->data);
+                         "a vertical band takes top or bottom", o->data);
+                return -1;
+            }
+            if ((o->title_side == SIDE_BOTTOM || o->title_angle == 90) && ro[i].ann_horiz) {
+                snprintf(err, CP_ERRLEN, "annotation `%s`: title.side=\"bottom\" and "
+                         "title.angle=90 stand a vertical band's title on end "
+                         "(right_of/left_of); a horizontal band takes left or right",
+                         o->data);
                 return -1;
             }
             int need = ro[i].ann_horiz ? a->nc : a->nr;
@@ -1186,6 +1198,10 @@ int render_heatmap(const PlotSpec *spec, const char *out,
             /* anchor decides what the legend describes: a categorical
              * annotation -> discrete key; a numeric annotation -> its own
              * colorbar; a heatmap -> the shared fill colorbar */
+            /* a bare legend() (no anchor named) does not key a band drawn
+             * with show.legend=FALSE; it falls through to the heatmap */
+            if (a && a->o->type == HM_ANNOTATION && a->o->gr_no_legend && !pl->anchor)
+                a = NULL;
             if (a && a->o->type == HM_ANNOTATION && a->ann_f) {
                 ro[i].target = (int)(a - ro); ro[i].leg_discrete = 1;
             } else if (a && a->o->type == HM_ANNOTATION && a->ann_continuous) {
@@ -2148,6 +2164,17 @@ int render_heatmap(const PlotSpec *spec, const char *out,
         if (!r->o->title || r->o->type == HM_LEGEND) continue;
         g = gt_add(T, G_TEXT, CR, CC, CR, CC);
         g->str = r->o->title; g->size = SZ_BASE; g->col = C_BLACK;
+        if (r->o->title_side == SIDE_BOTTOM || r->o->title_angle == 90) {
+            /* on end, reading upward, centred on the thin vertical band: under
+             * it its end meets the band's bottom edge, above it its start the
+             * top edge (ComplexHeatmap's annotation_name_rot = 90) */
+            int below = r->o->title_side == SIDE_BOTTOM;
+            g->size = SZ_AXTITLE(SZ_BASE);
+            g->tx = r->l + r->w / 2;
+            g->ty = below ? r->b - PTY(TXT_GAP) : r->b + r->h + PTY(TXT_GAP);
+            g->hj = below ? 1 : 0; g->va = V_INKCENTER; g->rot = 90;
+            continue;
+        }
         if (r->o->title_side) {
             /* beside the band, at the row-name size, so a stack of thin
              * bars stays as compact as wheatmap's label.side="l" */
